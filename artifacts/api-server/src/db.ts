@@ -71,6 +71,22 @@ export function initDb(): void {
 
         CREATE INDEX IF NOT EXISTS idx_wwe_address ON whale_waitlist_events(address);
         CREATE INDEX IF NOT EXISTS idx_wwe_time    ON whale_waitlist_events(recorded_at);
+
+        CREATE TABLE IF NOT EXISTS monitored_wallets (
+            address          TEXT    PRIMARY KEY,
+            name             TEXT    NOT NULL,
+            monitored_since  INTEGER NOT NULL,
+            trades_observed  INTEGER NOT NULL DEFAULT 0,
+            wins_observed    INTEGER NOT NULL DEFAULT 0,
+            losses_observed  INTEGER NOT NULL DEFAULT 0,
+            total_pnl_pct    REAL    NOT NULL DEFAULT 0,
+            trades_per_day   REAL    NOT NULL DEFAULT 0,
+            last_trade_ms    INTEGER NOT NULL DEFAULT 0,
+            ai_verdict       TEXT    NOT NULL DEFAULT 'pending',
+            ai_reason        TEXT,
+            ai_score         INTEGER,
+            promoted_at      INTEGER
+        );
     `);
     console.log(`💾 SQLite DB ready: ${DB_PATH}`);
 }
@@ -87,7 +103,7 @@ export interface WhaleRow {
     discoveredAt:     number;
     score:            number;
     tokens:           string[];
-    status:           'pending' | 'approved' | 'rejected';
+    status:           'pending' | 'approved' | 'rejected' | 'monitoring';
     approvedAt?:      number;
 }
 
@@ -315,6 +331,102 @@ export function dbGetWaitlistSummary(address: string): {
     const losses = trades.filter(e => (e.profitPct ?? 0) < 0).length;
     const avg    = trades.length > 0 ? trades.reduce((s, e) => s + (e.profitPct ?? 0), 0) / trades.length : 0;
     return { totalEvents: events.length, wins, losses, avgProfitPct: parseFloat(avg.toFixed(1)) };
+}
+
+// ── Whale Candidates — monitoring status ──────────────────────────────────────
+
+export function dbMonitorWhale(address: string): void {
+    db.prepare("UPDATE whale_candidates SET status = 'monitoring' WHERE address = ?")
+        .run(address.toLowerCase());
+}
+
+// ── Monitored Wallets ──────────────────────────────────────────────────────────
+
+export interface MonitoredWalletRow {
+    address:        string;
+    name:           string;
+    monitoredSince: number;
+    tradesObserved: number;
+    winsObserved:   number;
+    lossesObserved: number;
+    totalPnlPct:    number;
+    tradesPerDay:   number;
+    lastTradeMs:    number;
+    aiVerdict:      'pending' | 'approved' | 'rejected';
+    aiReason?:      string;
+    aiScore?:       number;
+    promotedAt?:    number;
+}
+
+function rowToMonitored(row: any): MonitoredWalletRow {
+    return {
+        address:        row.address,
+        name:           row.name,
+        monitoredSince: row.monitored_since,
+        tradesObserved: row.trades_observed,
+        winsObserved:   row.wins_observed,
+        lossesObserved: row.losses_observed,
+        totalPnlPct:    row.total_pnl_pct,
+        tradesPerDay:   row.trades_per_day,
+        lastTradeMs:    row.last_trade_ms,
+        aiVerdict:      row.ai_verdict as 'pending' | 'approved' | 'rejected',
+        aiReason:       row.ai_reason  ?? undefined,
+        aiScore:        row.ai_score   ?? undefined,
+        promotedAt:     row.promoted_at ?? undefined,
+    };
+}
+
+export function dbAddMonitoredWallet(address: string, name: string): void {
+    db.prepare(`
+        INSERT OR IGNORE INTO monitored_wallets
+            (address, name, monitored_since, trades_observed, wins_observed,
+             losses_observed, total_pnl_pct, trades_per_day, last_trade_ms, ai_verdict)
+        VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 'pending')
+    `).run(address.toLowerCase(), name, Date.now());
+}
+
+export function dbRemoveMonitoredWallet(address: string): void {
+    db.prepare('DELETE FROM monitored_wallets WHERE address = ?').run(address.toLowerCase());
+}
+
+export function dbGetMonitoredWallets(): MonitoredWalletRow[] {
+    return (db.prepare('SELECT * FROM monitored_wallets ORDER BY monitored_since DESC').all() as any[]).map(rowToMonitored);
+}
+
+export function dbGetMonitoredWallet(address: string): MonitoredWalletRow | null {
+    const row = db.prepare('SELECT * FROM monitored_wallets WHERE address = ?').get(address.toLowerCase());
+    return row ? rowToMonitored(row as any) : null;
+}
+
+export function dbIsMonitored(address: string): boolean {
+    return !!db.prepare('SELECT 1 FROM monitored_wallets WHERE address = ?').get(address.toLowerCase());
+}
+
+export function dbUpdateMonitoredStats(address: string, stats: {
+    tradesObserved?: number;
+    winsObserved?:   number;
+    lossesObserved?: number;
+    totalPnlPct?:    number;
+    tradesPerDay?:   number;
+    lastTradeMs?:    number;
+}): void {
+    const sets: string[]  = [];
+    const values: any[]   = [];
+    if (stats.tradesObserved !== undefined) { sets.push('trades_observed = ?');  values.push(stats.tradesObserved); }
+    if (stats.winsObserved   !== undefined) { sets.push('wins_observed = ?');    values.push(stats.winsObserved);   }
+    if (stats.lossesObserved !== undefined) { sets.push('losses_observed = ?');  values.push(stats.lossesObserved); }
+    if (stats.totalPnlPct    !== undefined) { sets.push('total_pnl_pct = ?');    values.push(stats.totalPnlPct);    }
+    if (stats.tradesPerDay   !== undefined) { sets.push('trades_per_day = ?');   values.push(stats.tradesPerDay);   }
+    if (stats.lastTradeMs    !== undefined) { sets.push('last_trade_ms = ?');    values.push(stats.lastTradeMs);    }
+    if (sets.length === 0) return;
+    values.push(address.toLowerCase());
+    db.prepare(`UPDATE monitored_wallets SET ${sets.join(', ')} WHERE address = ?`).run(...values);
+}
+
+export function dbSetMonitoredVerdict(address: string, verdict: 'approved' | 'rejected', score: number, reason: string): void {
+    db.prepare(`
+        UPDATE monitored_wallets SET ai_verdict = ?, ai_score = ?, ai_reason = ? WHERE address = ?
+    `).run(verdict, score, reason, address.toLowerCase());
 }
 
 export default db;

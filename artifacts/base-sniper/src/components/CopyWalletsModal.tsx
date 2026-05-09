@@ -190,14 +190,13 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
     const handleApprove = async (address: string) => {
         setActionLoading(address);
         try {
-            const res = await authFetch(`${apiUrl}/api/whale/approve`, {
+            const res = await authFetch(`${apiUrl}/api/whale/monitor`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ address })
             });
             if (res.ok) {
                 await fetchCandidates();
-                await fetchWallets();
             }
         } catch { }
         setActionLoading(null);
@@ -489,7 +488,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                         disabled={isLoading}
                                                         className="flex-1 bg-green-700 hover:bg-green-600 disabled:bg-gray-700 text-white text-xs py-2 rounded-lg font-semibold transition-all"
                                                     >
-                                                        {isLoading ? '...' : '✅ Setujui & Copy'}
+                                                        {isLoading ? '...' : '🔬 Setujui untuk Monitor'}
                                                     </button>
                                                     <button
                                                         onClick={() => handleReject(c.address)}

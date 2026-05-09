@@ -17,7 +17,7 @@ import { getGeckoTrendingPools, getGeckoNewPools, getBestDexPair } from './price
 import {
     initDb,
     dbUpsertWhale, dbGetWhale, dbGetPendingWhales, dbGetAllWhales,
-    dbApproveWhale, dbRejectWhale, dbWhaleExists, dbIsRejected,
+    dbApproveWhale, dbRejectWhale, dbWhaleExists, dbIsRejected, dbMonitorWhale,
     type WhaleRow,
 } from './db';
 
@@ -331,6 +331,12 @@ export function getAllCandidates(): WhaleCandidate[] {
 
 export function approveCandidate(address: string): WhaleCandidate | null {
     const row = dbApproveWhale(address);
+    return row ? rowToCandidate(row) : null;
+}
+
+export function monitorCandidate(address: string): WhaleCandidate | null {
+    dbMonitorWhale(address);
+    const row = dbGetWhale(address.toLowerCase());
     return row ? rowToCandidate(row) : null;
 }
 

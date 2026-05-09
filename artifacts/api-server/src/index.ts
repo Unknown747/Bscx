@@ -480,6 +480,63 @@ app.get('/api/cache', (_req: Request, res: Response) => {
     res.json({ ...bot.getPerfCacheStats(), timestamp: Date.now() });
 });
 
+// ============ WHALE MONITORING FLOW ============
+
+// POST /api/whale/monitor — move pending candidate to monitoring (not copied yet)
+app.post('/api/whale/monitor', (req: Request, res: Response) => {
+    const { address, name } = req.body;
+    if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+    }
+    const ok = bot.addToMonitoring(address, name);
+    if (!ok) {
+        res.status(404).json({ error: 'Kandidat tidak ditemukan atau sudah diproses' }); return;
+    }
+    res.json({ ok: true, message: 'Wallet masuk monitoring — bot akan mengamati trade-nya' });
+});
+
+// GET /api/whale/monitored — list all monitored wallets with stats
+app.get('/api/whale/monitored', (_req: Request, res: Response) => {
+    res.json({ wallets: bot.getMonitoredWallets(), timestamp: Date.now() });
+});
+
+// DELETE /api/whale/monitored/:address — remove from monitoring
+app.delete('/api/whale/monitored/:address', (req: Request, res: Response) => {
+    const { address } = req.params;
+    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+    }
+    bot.removeFromMonitoring(address);
+    res.json({ ok: true });
+});
+
+// POST /api/whale/evaluate/:address — trigger AI evaluation
+app.post('/api/whale/evaluate/:address', async (req: Request, res: Response) => {
+    const { address } = req.params;
+    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+    }
+    try {
+        const result = await bot.evaluateMonitoredWallet(address);
+        res.json({ ok: true, ...result });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/whale/promote/:address — promote AI-approved wallet to active copy
+app.post('/api/whale/promote/:address', (req: Request, res: Response) => {
+    const { address } = req.params;
+    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+    }
+    const ok = bot.promoteToActiveCopy(address);
+    if (!ok) {
+        res.status(400).json({ error: 'Wallet belum disetujui AI atau tidak ditemukan di monitoring' }); return;
+    }
+    res.json({ ok: true, message: 'Wallet berhasil dipromosikan ke copy wallet aktif!' });
+});
+
 // ============ START SERVER ============
 app.listen(PORT, () => {
     console.log(`🌐 API Server running on port ${PORT}`);

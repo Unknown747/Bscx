@@ -6,17 +6,20 @@ import { GeckoTokenScanner, type TokenOpportunity } from './gecko-token-scanner'
 import { checkSerialDeployer, getTokenDeployer } from './deployer-checker';
 import { getDeployerReputation } from './deployer-reputation';
 import {
-    runWhaleScan, approveCandidate, rejectCandidate,
+    runWhaleScan, approveCandidate, rejectCandidate, monitorCandidate,
     getPendingCandidates, getAllCandidates, simulateCopyTrade,
     formatWhaleTelegramMsg, type WhaleCandidate, type SimulationResult
 } from './whale-finder';
+import { whaleMonitor } from './whale-monitor';
 import { getEthPriceUsd } from './price-oracle';
 import {
     dbInsertTrade, dbGetTrades,
     dbAddToBlacklist, dbRemoveFromBlacklist, dbGetBlacklist, dbIsBlacklisted,
     dbAddCopyWallet, dbRemoveCopyWallet, dbGetCopyWallets, dbUpdateCopyWallet,
     dbGetPendingWhales, dbInsertWaitlistEvent,
-    type TradeRow,
+    dbAddMonitoredWallet, dbRemoveMonitoredWallet, dbGetMonitoredWallets,
+    dbGetMonitoredWallet, dbSetMonitoredVerdict, dbApproveWhale,
+    type TradeRow, type MonitoredWalletRow,
 } from './db';
 import { startTelegramBot, type TelegramBot } from './telegram-bot';
 import { MicroCapRiskManager } from './microcap-risk-manager';
@@ -760,6 +763,104 @@ export class AISniperBot extends EventEmitter {
         this.sendTelegram(`❌ <b>Whale Ditolak</b>\n<code>${address}</code>`);
     }
 
+    // ============ MONITORING FLOW ============
+
+    addToMonitoring(address: string, name?: string): boolean {
+        const c = monitorCandidate(address);
+        if (!c) return false;
+        const label = name || `Whale ${address.slice(0, 8)}`;
+        dbAddMonitoredWallet(address, label);
+        this.addLog('info', `🔬 Whale masuk Monitoring`, `Score: ${c.score}/100 | WR: ${c.estimatedWinRate}%`);
+        dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'monitoring', recordedAt: Date.now() });
+        this.sendTelegram(
+            `🔬 <b>Whale Masuk Monitoring!</b>\n<code>${address}</code>\n` +
+            `Skor: ${c.score}/100 | Est. WR: ${c.estimatedWinRate}%\n` +
+            `Bot akan mengamati trade-nya sebelum copy.`
+        );
+        return true;
+    }
+
+    getMonitoredWallets(): MonitoredWalletRow[] {
+        return dbGetMonitoredWallets();
+    }
+
+    removeFromMonitoring(address: string): void {
+        dbRemoveMonitoredWallet(address);
+        this.addLog('info', `🔬 Wallet dihapus dari Monitoring`, address);
+    }
+
+    async evaluateMonitoredWallet(address: string): Promise<{ verdict: 'approved' | 'rejected'; score: number; reason: string }> {
+        const wallet = dbGetMonitoredWallet(address.toLowerCase());
+        if (!wallet) throw new Error('Wallet tidak ditemukan di monitoring');
+
+        const totalPairs  = wallet.winsObserved + wallet.lossesObserved;
+        const winRate     = totalPairs > 0 ? Math.round((wallet.winsObserved / totalPairs) * 100) : 0;
+        const monitorDays = ((Date.now() - wallet.monitoredSince) / 86_400_000).toFixed(1);
+
+        const prompt =
+            `Evaluasi wallet crypto untuk copy trade. Berikan JSON saja tanpa penjelasan lain.\n` +
+            `Wallet: ${address}\n` +
+            `Dimonitor: ${monitorDays} hari\n` +
+            `Trade terobservasi: ${wallet.tradesObserved}\n` +
+            `Pasang buy-sell tercatat: ${totalPairs} (${wallet.winsObserved} profit, ${wallet.lossesObserved} rugi)\n` +
+            `Win rate aktual: ${winRate}%\n` +
+            `Rata-rata PnL: ${wallet.totalPnlPct >= 0 ? '+' : ''}${wallet.totalPnlPct.toFixed(1)}%\n` +
+            `Trade per hari: ${wallet.tradesPerDay}\n\n` +
+            `Format respons: {"verdict":"APPROVE","score":75,"reason":"penjelasan singkat bahasa Indonesia"}\n` +
+            `Kriteria APPROVE: win rate ≥50%, PnL positif, aktif trading, data cukup valid.`;
+
+        try {
+            const response = await this.ai.query(prompt);
+            if (response.success) {
+                const jsonMatch = response.content.match(/\{[\s\S]*?\}/);
+                if (jsonMatch) {
+                    const parsed  = JSON.parse(jsonMatch[0]);
+                    const verdict = parsed.verdict === 'APPROVE' ? 'approved' : 'rejected';
+                    const score   = Math.max(0, Math.min(100, parseInt(parsed.score) || 50));
+                    const reason  = parsed.reason || 'Evaluasi AI selesai';
+                    dbSetMonitoredVerdict(address, verdict, score, reason);
+                    this.addLog('info', `🤖 AI evaluasi: ${verdict === 'approved' ? 'SETUJUI' : 'TOLAK'} ${address.slice(0, 10)}…`, reason);
+                    return { verdict, score, reason };
+                }
+            }
+        } catch { /* fall through */ }
+
+        // Rule-based fallback
+        const score   = Math.round(Math.min(100,
+            (winRate * 0.5) +
+            (wallet.totalPnlPct > 0 ? Math.min(25, wallet.totalPnlPct) : 0) +
+            (wallet.tradesPerDay >= 1 ? 15 : 5) +
+            (totalPairs >= 3 ? 10 : 0)
+        ));
+        const verdict = score >= 50 && winRate >= 40 ? 'approved' : 'rejected';
+        const reason  = verdict === 'approved'
+            ? `Win rate ${winRate}%, PnL rata-rata ${wallet.totalPnlPct >= 0 ? '+' : ''}${wallet.totalPnlPct.toFixed(1)}%, ${wallet.tradesPerDay} trade/hari. Layak dicopy.`
+            : `Win rate ${winRate}% belum cukup atau data trade terbatas (${wallet.tradesObserved} terobservasi). Terus monitor.`;
+        dbSetMonitoredVerdict(address, verdict, score, reason);
+        this.addLog('info', `🤖 Evaluasi rule-based: ${verdict === 'approved' ? 'SETUJUI' : 'TOLAK'} ${address.slice(0, 10)}…`, reason);
+        return { verdict, score, reason };
+    }
+
+    promoteToActiveCopy(address: string): boolean {
+        const wallet = dbGetMonitoredWallet(address.toLowerCase());
+        if (!wallet || wallet.aiVerdict !== 'approved') return false;
+
+        dbApproveWhale(address);
+        dbAddCopyWallet(address, wallet.name);
+        this.copyMonitor.addWallet(address, wallet.name, false);
+        dbRemoveMonitoredWallet(address);
+
+        this.addLog('info', `🚀 Whale dipromosikan ke Copy!`, `${wallet.name} | AI Score: ${wallet.aiScore ?? '?'}/100`);
+        dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'approved', recordedAt: Date.now() });
+        this.sendTelegram(
+            `🚀 <b>Whale Dipromosikan ke Copy!</b>\n<code>${address}</code>\n` +
+            `AI Score: ${wallet.aiScore ?? '?'}/100\n` +
+            `Alasan: ${wallet.aiReason ?? '-'}\n` +
+            `Sekarang aktif di-copy secara otomatis.`
+        );
+        return true;
+    }
+
     async simulateCopyTrade(walletAddress: string, tokenAddress: string): Promise<SimulationResult> {
         return simulateCopyTrade(walletAddress, tokenAddress);
     }
@@ -807,6 +908,9 @@ export class AISniperBot extends EventEmitter {
         // ── Start Telegram command bot ──
         this.tgBot = startTelegramBot(this);
 
+        // ── Start whale monitoring service ──
+        whaleMonitor.start();
+
         setInterval(() => this.printPerformanceReport(), 3_600_000);
         console.log('✅ AI SNIPER RUNNING\n');
     }
@@ -830,6 +934,7 @@ export class AISniperBot extends EventEmitter {
         this.copyMonitor.stop();
         this.geckoScanner.stop();
         this.executor?.stop();
+        whaleMonitor.stop();
         console.log('🛑 AI Sniper stopped');
     }
 

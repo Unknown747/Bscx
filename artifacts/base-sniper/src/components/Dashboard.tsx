@@ -5,6 +5,7 @@ import Portfolio from './Portfolio';
 import Modal100k, { ModalSettings } from './Modal100k';
 import WalletConfigModal from './WalletConfigModal';
 import CopyWalletsModal from './CopyWalletsModal';
+import WalletMonitorPage from './WalletMonitorPage';
 import BlacklistModal from './BlacklistModal';
 import TradeHistory from './TradeHistory';
 import WhaleLeaderboard from './WhaleLeaderboard';
@@ -74,7 +75,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const [showSettings, setShowSettings]       = useState(false);
     const [showWalletConfig, setShowWalletConfig]   = useState(false);
     const [showCopyWallets, setShowCopyWallets]     = useState(false);
+    const [showMonitor, setShowMonitor]             = useState(false);
     const [showBlacklist, setShowBlacklist]         = useState(false);
+    const [monitorCount, setMonitorCount]           = useState(0);
     const [saveStatus, setSaveStatus]           = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
     const fetchData = useCallback(async () => {
@@ -100,6 +103,14 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         } catch { /* silent */ }
     }, [apiUrl]);
 
+    const fetchMonitorCount = useCallback(async () => {
+        try {
+            const res  = await authFetch(`${apiUrl}/api/whale/monitored`);
+            const data = await res.json();
+            setMonitorCount((data.wallets || []).length);
+        } catch { /* silent */ }
+    }, [apiUrl]);
+
     useEffect(() => {
         fetchData();
         const interval = setInterval(fetchData, 3000);
@@ -111,6 +122,12 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         const interval = setInterval(fetchBalance, 30000);
         return () => clearInterval(interval);
     }, [fetchBalance]);
+
+    useEffect(() => {
+        fetchMonitorCount();
+        const interval = setInterval(fetchMonitorCount, 15000);
+        return () => clearInterval(interval);
+    }, [fetchMonitorCount]);
 
     const handleSaveSettings = useCallback(async (settings: ModalSettings) => {
         setSaveStatus('saving');
@@ -175,6 +192,20 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         {(status?.pendingWhales ?? 0) > 0 && (
                             <span className="absolute -top-1.5 -right-1.5 bg-blue-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
                                 {status!.pendingWhales}
+                            </span>
+                        )}
+                    </button>
+
+                    {/* Monitor button */}
+                    <button
+                        onClick={() => setShowMonitor(true)}
+                        className="relative flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                    >
+                        <span>🔬</span>
+                        <span>Monitor</span>
+                        {monitorCount > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 bg-purple-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
+                                {monitorCount}
                             </span>
                         )}
                     </button>
@@ -363,6 +394,14 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 <BlacklistModal
                     apiUrl={apiUrl}
                     onClose={() => setShowBlacklist(false)}
+                />
+            )}
+
+            {/* Wallet Monitor Manager */}
+            {showMonitor && (
+                <WalletMonitorPage
+                    apiUrl={apiUrl}
+                    onClose={() => { setShowMonitor(false); fetchMonitorCount(); }}
                 />
             )}
 
