@@ -15,6 +15,7 @@ import {
     dbInsertTrade, dbGetTrades,
     dbAddToBlacklist, dbRemoveFromBlacklist, dbGetBlacklist, dbIsBlacklisted,
     dbAddCopyWallet, dbRemoveCopyWallet, dbGetCopyWallets, dbUpdateCopyWallet,
+    dbGetPendingWhales,
     type TradeRow,
 } from './db';
 import { startTelegramBot, type TelegramBot } from './telegram-bot';
@@ -987,9 +988,10 @@ export class AISniperBot extends EventEmitter {
             openPositions: this.executor?.getOpenPositions() ?? [],
             wallet:        this.executor?.getWalletAddress() ?? null,
             geckoScanner:  {
-                enabled:   this.runtimeConfig.geckoScannerEnabled,
+                enabled:    this.runtimeConfig.geckoScannerEnabled,
                 seenTokens: this.geckoScanner.getSeenCount(),
             },
+            pendingWhales: dbGetPendingWhales().length,
             timestamp:     Date.now()
         };
     }

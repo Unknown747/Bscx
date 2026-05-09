@@ -24,6 +24,7 @@ interface Status {
         SCAN_INTERVAL_MS: number;
     };
     openPositions: any[];
+    pendingWhales: number;
     timestamp: number;
 }
 
@@ -167,10 +168,15 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     {/* Copy wallets button */}
                     <button
                         onClick={() => setShowCopyWallets(true)}
-                        className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                        className="relative flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
                     >
                         <span>🐋</span>
                         <span>Whale</span>
+                        {(status?.pendingWhales ?? 0) > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 bg-blue-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
+                                {status!.pendingWhales}
+                            </span>
+                        )}
                     </button>
 
                     {/* Wallet config button */}
@@ -239,6 +245,24 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 {/* ─── OVERVIEW ─── */}
                 {activeTab === 'overview' && (
                     <div className="space-y-4">
+
+                        {/* Pending whale candidates alert */}
+                        {(status?.pendingWhales ?? 0) > 0 && (
+                            <button
+                                onClick={() => setShowCopyWallets(true)}
+                                className="w-full flex items-center gap-3 bg-blue-900/30 border border-blue-700/60 rounded-xl px-4 py-3 text-left hover:bg-blue-900/50 transition-colors"
+                            >
+                                <span className="text-xl">🐋</span>
+                                <div className="flex-1">
+                                    <p className="text-sm font-semibold text-blue-300">
+                                        {status!.pendingWhales} Whale Kandidat Menunggu
+                                    </p>
+                                    <p className="text-xs text-blue-400/70 mt-0.5">Buka Whale Manager → Auto Finder untuk setujui atau tolak</p>
+                                </div>
+                                <span className="text-blue-400 text-xs">→</span>
+                            </button>
+                        )}
+
                         <div className="grid grid-cols-2 gap-3">
                             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                                 <p className="text-xs text-gray-500 mb-1">Copy Hari Ini</p>

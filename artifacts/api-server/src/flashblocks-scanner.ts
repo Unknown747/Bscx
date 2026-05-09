@@ -40,9 +40,9 @@ export class FlashblocksScanner extends EventEmitter {
     private pendingTransactions: Map<string, number> = new Map();
     private keepAliveInterval: NodeJS.Timeout | null = null; // FIX: store interval ref
     private readonly RPC_ENDPOINTS = [
-        { url: 'wss://mainnet-preconf.base.org', type: 'flashblocks', priority: 1 },
-        { url: 'wss://base.llamarpc.com', type: 'public', priority: 2 },
-        { url: 'wss://base-mainnet.g.alchemy.com/v2/demo', type: 'alchemy', priority: 3 },
+        { url: 'wss://base-rpc.publicnode.com', type: 'publicnode', priority: 1 },
+        { url: 'wss://base.llamarpc.com',        type: 'llamarpc',   priority: 2 },
+        { url: 'wss://base.drpc.org',            type: 'drpc',       priority: 3 },
     ];
     
     // Konfigurasi modal 100rb (0.006 ETH)
