@@ -5,11 +5,10 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-class AISniperBot {
+export class AISniperBot {
     private scanner: FlashblocksScanner;
     private copyMonitor: CopyTradeMonitor;
     private ai: MultiAIProvider;
-    private activeAnalyses: Map<string, any> = new Map();
 
     // Konfigurasi modal 100rb
     private readonly CONFIG = {
@@ -174,10 +173,16 @@ class AISniperBot {
         this.copyMonitor.stop();
         console.log('🛑 AI Sniper stopped');
     }
+
+    getStatus() {
+        return {
+            connected: this.scanner.isConnectedToBase(),
+            copyStats: this.copyMonitor.getStats(),
+            config: this.scanner.getConfig(),
+            aiStats: this.ai.getStats(),
+            timestamp: Date.now()
+        };
+    }
 }
 
-// Start bot
-const bot = new AISniperBot();
-bot.start().catch(console.error);
-
-export default bot;
+export default AISniperBot;

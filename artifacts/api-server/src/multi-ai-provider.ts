@@ -132,15 +132,33 @@ export class MultiAIProvider {
         return this.currentProvider;
     }
 
+    // Call private provider methods directly to avoid infinite recursion
     private async fallbackQuery(originalPrompt: string, failedProvider: AIProvider): Promise<AIResponse> {
+        const providerMap: Record<AIProvider, () => Promise<AIResponse>> = {
+            groq:         () => this.queryGroq(originalPrompt),
+            gemini:       () => this.queryGemini(originalPrompt),
+            huggingface:  () => this.queryHuggingFace(originalPrompt)
+        };
+
         const fallbacks = (['groq', 'gemini', 'huggingface'] as AIProvider[]).filter(p => p !== failedProvider);
 
         for (const fallback of fallbacks) {
             try {
                 console.log(`🔄 Falling back to ${fallback}...`);
-                const result = await this.query(originalPrompt, fallback);
-                if (result.success) return result;
+                const startTime = Date.now();
+                const result = await providerMap[fallback]();
+                result.latency = Date.now() - startTime;
+
+                const stat = this.stats.get(fallback)!;
+                stat.success++;
+                stat.avgLatency = (stat.avgLatency * (stat.success - 1) + result.latency) / stat.success;
+                this.stats.set(fallback, stat);
+
+                return result;
             } catch {
+                const stat = this.stats.get(fallback)!;
+                stat.fail++;
+                this.stats.set(fallback, stat);
                 continue;
             }
         }

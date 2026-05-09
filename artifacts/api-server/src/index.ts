@@ -1,6 +1,5 @@
 import express, { Request, Response, NextFunction } from 'express';
-import { FlashblocksScanner } from './flashblocks-scanner';
-import { CopyTradeMonitor } from './copy-trade-monitor';
+import { AISniperBot } from './ai-sniper-integration';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 
@@ -19,38 +18,21 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     next();
 });
 
-// ============ INITIALIZE COMPONENTS ============
-const scanner = new FlashblocksScanner();
-const copyMonitor = new CopyTradeMonitor();
+// ============ INITIALIZE BOT ============
+// AISniperBot internally owns scanner + copyMonitor — single source of truth
+const bot = new AISniperBot();
 
 // ============ START BOT ============
 async function startBot() {
     console.log('\n🚀 STARTING BASE SNIPER ULTIMATE...');
     console.log(`💰 Capital Mode: ${process.env.TOTAL_CAPITAL_ETH || 0.006} ETH (100rb)`);
     console.log(`🐋 Copy Trading: ${process.env.COPY_TRADING_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
+    console.log(`🤖 AI Mode: ${process.env.AI_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
 
-    scanner.on('pool-ready', async (pool) => {
-        console.log(`\n🎯 POOL READY: ${pool.poolAddress}`);
-    });
-
-    copyMonitor.on('execute-copy', async (data) => {
-        console.log(`\n🔄 EXECUTING COPY TRADE:`);
-        console.log(`   Token: ${data.tokenSymbol}`);
-        console.log(`   Amount: ${data.amount} ETH`);
-    });
-
-    await scanner.connect();
-
-    if (process.env.COPY_TRADING_ENABLED === 'true') {
-        copyMonitor.start();
-    }
-
-    console.log('\n✅ Bot is RUNNING!');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    await bot.start();
 }
 
-// ============ AUTH ENDPOINT ============
-// Frontend calls this once on open to verify password before showing UI
+// ============ AUTH ENDPOINT (public) ============
 app.post('/api/auth/verify', (req: Request, res: Response) => {
     const { password } = req.body;
     const expected = process.env.APP_PASSWORD || '';
@@ -65,7 +47,6 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
         return;
     }
 
-    // Constant-time comparison to prevent timing attacks
     const match =
         password.length === expected.length &&
         crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expected));
@@ -75,17 +56,12 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
     );
 });
 
-// ============ API ENDPOINTS (no password required) ============
-app.get('/api/status', (req: Request, res: Response) => {
-    res.json({
-        connected: scanner.isConnectedToBase(),
-        copyStats: copyMonitor.getStats(),
-        config: scanner.getConfig(),
-        timestamp: Date.now()
-    });
+// ============ API ENDPOINTS ============
+app.get('/api/status', (_req: Request, res: Response) => {
+    res.json(bot.getStatus());
 });
 
-app.get('/api/config', (req: Request, res: Response) => {
+app.get('/api/config', (_req: Request, res: Response) => {
     res.json({
         capital: process.env.TOTAL_CAPITAL_ETH,
         maxTrade: process.env.MAX_TRADE_AMOUNT,
@@ -94,7 +70,8 @@ app.get('/api/config', (req: Request, res: Response) => {
         copyDelaySeconds: process.env.COPY_TRADING_DELAY_SECONDS,
         copyMaxPerDay: process.env.COPY_TRADING_MAX_PER_DAY,
         minSafetyScore: process.env.MIN_SAFETY_SCORE,
-        maxPoolAgeSeconds: process.env.MAX_POOL_AGE_SECONDS
+        maxPoolAgeSeconds: process.env.MAX_POOL_AGE_SECONDS,
+        aiEnabled: process.env.AI_ENABLED === 'true'
     });
 });
 
@@ -106,9 +83,7 @@ app.listen(PORT, () => {
 
 function gracefulShutdown() {
     console.log('\n🛑 Shutting down...');
-    scanner.disconnect();
-    copyMonitor.stop();
-    process.exit(0);
+    bot.stop().finally(() => process.exit(0));
 }
 
 process.on('SIGINT', gracefulShutdown);

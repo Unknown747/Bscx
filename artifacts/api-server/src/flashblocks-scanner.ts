@@ -8,6 +8,7 @@ interface PoolData {
     token0: string;
     token1: string;
     liquidity: number;
+    volume24h: number;
     createdAt: number;
     txHash: string;
     blockNumber: number;
@@ -265,6 +266,7 @@ export class FlashblocksScanner extends EventEmitter {
             token0: '0x' + logData.topics[1].slice(-40),
             token1: '0x' + logData.topics[2].slice(-40),
             liquidity: 0,
+            volume24h: 0,
             createdAt: Date.now(),
             txHash: logData.transactionHash,
             blockNumber: parseInt(logData.blockNumber, 16)
@@ -420,7 +422,10 @@ export class FlashblocksScanner extends EventEmitter {
 
     // ============ PUBLIC METHODS ============
     getConfig() {
-        return this.CONFIG;
+        return {
+            ...this.CONFIG,
+            flashblocksEnabled: process.env.ENABLE_FLASHBLOCKS === 'true'
+        };
     }
     
     isConnectedToBase(): boolean {
