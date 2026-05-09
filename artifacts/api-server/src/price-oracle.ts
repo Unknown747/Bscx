@@ -1,11 +1,13 @@
 /**
  * price-oracle.ts
- * Shared price data layer for all modules.
+ * Shared price data layer — powered by GeckoTerminal (replaces DexScreener).
  *
- * Fixes 3 DexScreener problems:
- *  1. Rate limiting  — in-memory cache (5s TTL) + request deduplication + 429 backoff
- *  2. Latency        — ETH price & token price fetched in parallel via Promise.all
- *  3. New tokens     — on-chain fallback via Uniswap V3 Factory + pool slot0
+ * GeckoTerminal Base network:
+ *   Pool info:  GET /api/v2/networks/base/pools/{address}
+ *   Token info: GET /api/v2/networks/base/tokens/{address}
+ *   Token pools: GET /api/v2/networks/base/tokens/{address}/pools
+ *   New pools:   GET /api/v2/networks/base/new_pools
+ *   Trending:    GET /api/v2/networks/base/trending_pools
  */
 
 import axios from 'axios';
@@ -13,11 +15,11 @@ import { type PublicClient } from 'viem';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const WETH              = '0x4200000000000000000000000000000000000006';
-const UNI_V3_FACTORY    = '0x33128a8fC17869897dcE68Ed026d694621f6FDfD';
-const FEE_TIERS         = [500, 3000, 10000] as const;
-const ZERO_ADDR         = '0x0000000000000000000000000000000000000000';
-const DEX_BASE_URL      = 'https://api.dexscreener.com/latest/dex/search?q=';
-const COINGECKO_URL     = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd';
+const UNI_V3_FACTORY   = '0x33128a8fC17869897dcE68Ed026d694621f6FDfD';
+const FEE_TIERS        = [500, 3000, 10000] as const;
+const ZERO_ADDR        = '0x0000000000000000000000000000000000000000';
+const GT_BASE          = 'https://api.geckoterminal.com/api/v2';
+const COINGECKO_URL    = 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd';
 
 // ─── ABIs ────────────────────────────────────────────────────────────────────
 const FACTORY_ABI = [{
@@ -46,26 +48,38 @@ const POOL_SLOT0_ABI = [{
     stateMutability: 'view'
 }] as const;
 
-// ─── DexScreener Cache ────────────────────────────────────────────────────────
+// ─── Pair format (compatible with previous DexScreener callers) ────────────
+export interface NormalizedPair {
+    pairAddress:  string;
+    baseToken:    { address: string; name: string; symbol: string };
+    quoteToken:   { address: string; name: string; symbol: string };
+    priceUsd:     string;
+    priceNative:  string;
+    liquidity:    { usd: number };
+    volume:       { h24: number };
+    pairCreatedAt?: number;   // ms timestamp
+    chainId:      string;
+    dexId:        string;
+}
+
+// ─── GeckoTerminal Cache ─────────────────────────────────────────────────────
 interface CacheEntry { data: any; expiresAt: number; }
 
-class DexScreenerCache {
+class GeckoTerminalCache {
     private cache   = new Map<string, CacheEntry>();
     private pending = new Map<string, Promise<any>>();
     private lastReq = 0;
 
-    private readonly TTL_MS       = 5_000;  // reuse response for 5 s
-    private readonly MIN_DELAY_MS = 250;    // max ~4 req/s to avoid rate limit
+    private readonly TTL_MS       = 6_000;   // 6 s TTL — GT updates every ~5 s
+    private readonly MIN_DELAY_MS = 300;     // ~3 req/s to stay within free tier
 
-    async fetch(query: string): Promise<any | null> {
-        const url = DEX_BASE_URL + query;
+    async get(path: string): Promise<any | null> {
+        const url = `${GT_BASE}${path}`;
         const now = Date.now();
 
-        // 1. Cache hit
         const cached = this.cache.get(url);
         if (cached && cached.expiresAt > now) return cached.data;
 
-        // 2. Deduplicate in-flight requests for same URL
         const inflight = this.pending.get(url);
         if (inflight) return inflight;
 
@@ -76,19 +90,20 @@ class DexScreenerCache {
     }
 
     private async _doFetch(url: string, retries = 2): Promise<any | null> {
-        // Rate limiting
         const gap = this.lastReq + this.MIN_DELAY_MS - Date.now();
         if (gap > 0) await sleep(gap);
         this.lastReq = Date.now();
 
         try {
-            const res = await axios.get(url, { timeout: 5_000 });
+            const res = await axios.get(url, {
+                timeout: 6_000,
+                headers: { 'Accept': 'application/json;version=20230302' }
+            });
             this.cache.set(url, { data: res.data, expiresAt: Date.now() + this.TTL_MS });
             return res.data;
         } catch (err: any) {
             if (err?.response?.status === 429 && retries > 0) {
-                // Exponential backoff on rate-limit
-                await sleep(1_000 * (3 - retries));
+                await sleep(1_200 * (3 - retries));
                 return this._doFetch(url, retries - 1);
             }
             return null;
@@ -96,9 +111,9 @@ class DexScreenerCache {
     }
 }
 
-export const dexCache = new DexScreenerCache();
+export const gtCache = new GeckoTerminalCache();
 
-// ─── ETH Price (cached 60 s) ──────────────────────────────────────────────────
+// ─── ETH Price (cached 60 s, CoinGecko) ─────────────────────────────────────
 let _ethCache: { value: number; expiresAt: number } = { value: 3000, expiresAt: 0 };
 
 export async function getEthPriceUsd(): Promise<number> {
@@ -109,28 +124,94 @@ export async function getEthPriceUsd(): Promise<number> {
         _ethCache   = { value: price, expiresAt: Date.now() + 60_000 };
         return price;
     } catch {
-        return _ethCache.value;     // return last known value on failure
+        return _ethCache.value;
     }
 }
 
-// ─── DexScreener helpers ──────────────────────────────────────────────────────
+// ─── GeckoTerminal → NormalizedPair adapter ──────────────────────────────────
 
-/** Fetch all pairs for a token/pool address. Returns [] on miss. */
-export async function getDexPairs(query: string): Promise<any[]> {
-    const data = await dexCache.fetch(query);
-    return data?.pairs ?? [];
+function adaptPoolData(gtData: any, included: any[] = []): NormalizedPair | null {
+    if (!gtData?.attributes) return null;
+    const attr = gtData.attributes;
+
+    // Resolve token info from "included" array (GT embeds tokens in multi-pool response)
+    const relBase  = gtData.relationships?.base_token?.data?.id;
+    const relQuote = gtData.relationships?.quote_token?.data?.id;
+    const baseInc  = included.find((x: any) => x.id === relBase)?.attributes  ?? {};
+    const quoteInc = included.find((x: any) => x.id === relQuote)?.attributes ?? {};
+
+    const baseAddr  = baseInc.address  || relBase?.split('_')[1]  || '';
+    const quoteAddr = quoteInc.address || relQuote?.split('_')[1] || '';
+
+    const pairCreatedAt = attr.pool_created_at
+        ? new Date(attr.pool_created_at).getTime()
+        : undefined;
+
+    return {
+        pairAddress:  attr.address || '',
+        baseToken: {
+            address: baseAddr,
+            name:    baseInc.name   || attr.name?.split(' / ')[0] || 'Unknown',
+            symbol:  baseInc.symbol || attr.name?.split(' / ')[0] || 'UNKNOWN',
+        },
+        quoteToken: {
+            address: quoteAddr,
+            name:    quoteInc.name   || 'Wrapped Ether',
+            symbol:  quoteInc.symbol || 'WETH',
+        },
+        priceUsd:    String(attr.base_token_price_usd     || '0'),
+        priceNative: String(attr.base_token_price_native_currency || '0'),
+        liquidity:   { usd: parseFloat(attr.reserve_in_usd || '0') || 0 },
+        volume:      { h24: parseFloat(attr.volume_usd?.h24 || '0') || 0 },
+        pairCreatedAt,
+        chainId: 'base',
+        dexId:   'uniswap_v3',
+    };
 }
 
-/** Best pair (first result) for a query. Returns null on miss. */
-export async function getBestDexPair(query: string): Promise<any | null> {
-    const pairs = await getDexPairs(query);
-    return pairs[0] ?? null;
+// ─── Get pools for a token address ───────────────────────────────────────────
+
+export async function getGeckoPairsForToken(tokenAddress: string): Promise<NormalizedPair[]> {
+    const addr  = tokenAddress.toLowerCase();
+    const data  = await gtCache.get(`/networks/base/tokens/${addr}/pools?include=base_token,quote_token&page=1`);
+    if (!data?.data || !Array.isArray(data.data)) return [];
+
+    const included = data.included ?? [];
+    return data.data
+        .map((d: any) => adaptPoolData(d, included))
+        .filter((p: NormalizedPair | null): p is NormalizedPair => p !== null);
 }
+
+/** Best pair (highest liquidity) for a token address. Returns null on miss. */
+export async function getBestDexPair(tokenAddress: string): Promise<NormalizedPair | null> {
+    // Try token's pools first (most reliable)
+    const pairs = await getGeckoPairsForToken(tokenAddress);
+    if (pairs.length > 0) {
+        return pairs.sort((a, b) => b.liquidity.usd - a.liquidity.usd)[0];
+    }
+
+    // Fallback: query the pool address directly (used when tokenAddress is actually a pool addr)
+    const addr = tokenAddress.toLowerCase();
+    const data = await gtCache.get(`/networks/base/pools/${addr}?include=base_token,quote_token`);
+    if (!data?.data) return null;
+    return adaptPoolData(data.data, data.included ?? []);
+}
+
+/** Get all Base UniV3 pairs for a token (for fee-tier detection). */
+export async function getDexUniV3Pairs(tokenAddress: string): Promise<NormalizedPair[]> {
+    return getGeckoPairsForToken(tokenAddress);
+}
+
+/** Legacy compatibility — returns array of normalized pairs. */
+export async function getDexPairs(tokenAddress: string): Promise<NormalizedPair[]> {
+    return getGeckoPairsForToken(tokenAddress);
+}
+
+// ─── Price helpers ────────────────────────────────────────────────────────────
 
 /**
- * Get token price in ETH from DexScreener (cached).
+ * Get token price in ETH from GeckoTerminal (cached).
  * Returns null if pair not yet indexed.
- * ETH price is fetched in parallel to minimise latency.
  */
 export async function getDexPriceEth(tokenAddress: string): Promise<number | null> {
     const [pair, ethPrice] = await Promise.all([
@@ -143,42 +224,101 @@ export async function getDexPriceEth(tokenAddress: string): Promise<number | nul
     return priceUsd / ethPrice;
 }
 
-/**
- * Get pool liquidity in ETH from DexScreener.
- * Returns null when not yet indexed.
- */
-export async function getDexLiquidityEth(query: string): Promise<number | null> {
+/** Get pool liquidity in ETH. Returns null when not yet indexed. */
+export async function getDexLiquidityEth(tokenOrPoolAddress: string): Promise<number | null> {
     const [pair, ethPrice] = await Promise.all([
-        getBestDexPair(query),
+        getBestDexPair(tokenOrPoolAddress),
         getEthPriceUsd(),
     ]);
     if (!pair || !ethPrice) return null;
-    const liqUsd = parseFloat(pair.liquidity?.usd || '0');
+    const liqUsd = pair.liquidity.usd;
     return liqUsd > 0 ? liqUsd / ethPrice : null;
 }
 
-/**
- * Get ALL Uniswap-V3 pairs on Base for a token (for fee-tier detection).
- */
-export async function getDexUniV3Pairs(tokenAddress: string): Promise<any[]> {
-    const pairs = await getDexPairs(tokenAddress);
-    return pairs.filter(
-        (p: any) => p.chainId === 'base' && p.dexId?.toLowerCase().includes('uniswap')
-    );
+// ─── New pools from GeckoTerminal ─────────────────────────────────────────────
+
+export interface GeckoNewPool {
+    pairAddress:  string;
+    tokenAddress: string;
+    tokenSymbol:  string;
+    tokenName:    string;
+    liquidityUsd: number;
+    volumeH24:    number;
+    priceUsd:     string;
+    priceChangeH1: number;
+    pairCreatedAt: number;
+    buyTxH1:      number;
+    sellTxH1:     number;
+    fdvUsd:       number;
 }
 
-// ─── On-chain Price Fallback ──────────────────────────────────────────────────
+export async function getGeckoNewPools(): Promise<GeckoNewPool[]> {
+    const data = await gtCache.get('/networks/base/new_pools?include=base_token,quote_token&page=1');
+    if (!data?.data || !Array.isArray(data.data)) return [];
 
-/**
- * Read the current price of `tokenAddress` (in ETH) directly from the
- * Uniswap V3 pool's slot0 — works immediately after pool creation,
- * before DexScreener has indexed the pair.
- *
- * @param publicClient  viem PublicClient
- * @param tokenAddress  address of the new token
- * @param tokenDecimals decimals of the new token (usually 18)
- * @returns price in ETH, or null if no pool found
- */
+    const included = data.included ?? [];
+    const results: GeckoNewPool[] = [];
+
+    for (const d of data.data) {
+        const pair = adaptPoolData(d, included);
+        if (!pair) continue;
+
+        // Only WETH-paired tokens
+        const isWethPair = pair.quoteToken.symbol?.toUpperCase().includes('WETH') ||
+                           pair.quoteToken.address?.toLowerCase() === WETH.toLowerCase();
+        if (!isWethPair && !pair.baseToken.symbol?.toUpperCase().includes('WETH')) continue;
+
+        const attr = d.attributes;
+        results.push({
+            pairAddress:   pair.pairAddress,
+            tokenAddress:  pair.baseToken.address,
+            tokenSymbol:   pair.baseToken.symbol,
+            tokenName:     pair.baseToken.name,
+            liquidityUsd:  pair.liquidity.usd,
+            volumeH24:     pair.volume.h24,
+            priceUsd:      pair.priceUsd,
+            priceChangeH1: parseFloat(attr?.price_change_percentage?.h1 || '0'),
+            pairCreatedAt: pair.pairCreatedAt ?? Date.now(),
+            buyTxH1:       attr?.transactions?.h1?.buys  ?? 0,
+            sellTxH1:      attr?.transactions?.h1?.sells ?? 0,
+            fdvUsd:        parseFloat(attr?.fdv_usd || '0'),
+        });
+    }
+    return results;
+}
+
+export async function getGeckoTrendingPools(): Promise<GeckoNewPool[]> {
+    const data = await gtCache.get('/networks/base/trending_pools?include=base_token,quote_token&page=1');
+    if (!data?.data || !Array.isArray(data.data)) return [];
+
+    const included = data.included ?? [];
+    const results: GeckoNewPool[] = [];
+
+    for (const d of data.data) {
+        const pair = adaptPoolData(d, included);
+        if (!pair) continue;
+
+        const attr = d.attributes;
+        results.push({
+            pairAddress:   pair.pairAddress,
+            tokenAddress:  pair.baseToken.address,
+            tokenSymbol:   pair.baseToken.symbol,
+            tokenName:     pair.baseToken.name,
+            liquidityUsd:  pair.liquidity.usd,
+            volumeH24:     pair.volume.h24,
+            priceUsd:      pair.priceUsd,
+            priceChangeH1: parseFloat(attr?.price_change_percentage?.h1 || '0'),
+            pairCreatedAt: pair.pairCreatedAt ?? Date.now(),
+            buyTxH1:       attr?.transactions?.h1?.buys  ?? 0,
+            sellTxH1:      attr?.transactions?.h1?.sells ?? 0,
+            fdvUsd:        parseFloat(attr?.fdv_usd || '0'),
+        });
+    }
+    return results;
+}
+
+// ─── On-chain Price Fallback (Uniswap V3 slot0) ──────────────────────────────
+
 export async function getOnChainPriceEth(
     publicClient: PublicClient,
     tokenAddress: string,
@@ -204,28 +344,18 @@ export async function getOnChainPriceEth(
             const sqrtPriceX96 = slot0[0];
             if (sqrtPriceX96 === 0n) continue;
 
-            // sqrtPriceX96 = sqrt(token1 / token0) * 2^96  (in raw units)
-            // token0 is whichever address sorts lower
             const token0IsNewToken = tokenAddress.toLowerCase() < WETH.toLowerCase();
-
-            // Use Number division — acceptable precision for price monitoring
             const sqrtPrice = Number(sqrtPriceX96) / Number(2n ** 96n);
-            const rawRatio  = sqrtPrice * sqrtPrice; // token1_raw / token0_raw
+            const rawRatio  = sqrtPrice * sqrtPrice;
 
             let priceInWeth: number;
             if (token0IsNewToken) {
-                // rawRatio = WETH_raw / newToken_raw
-                // 1 newToken_human = rawRatio * 10^(decimals-18) WETH
                 priceInWeth = rawRatio * Math.pow(10, tokenDecimals - 18);
             } else {
-                // rawRatio = newToken_raw / WETH_raw
-                // 1 newToken_human = 10^(decimals-18) / rawRatio WETH
                 priceInWeth = Math.pow(10, tokenDecimals - 18) / rawRatio;
             }
 
-            if (priceInWeth > 0 && isFinite(priceInWeth)) {
-                return priceInWeth;
-            }
+            if (priceInWeth > 0 && isFinite(priceInWeth)) return priceInWeth;
         }
         return null;
     } catch {
@@ -235,8 +365,7 @@ export async function getOnChainPriceEth(
 
 /**
  * Best-effort token price in ETH.
- * Strategy:
- *   1. DexScreener (cached, parallel ETH price fetch)
+ *   1. GeckoTerminal (cached, parallel ETH price fetch)
  *   2. On-chain slot0 fallback (works for brand-new tokens)
  */
 export async function getTokenPriceEth(
@@ -244,12 +373,10 @@ export async function getTokenPriceEth(
     tokenAddress: string,
     tokenDecimals: number
 ): Promise<number | null> {
-    // Try DexScreener first (fast, cached)
     const dexPrice = await getDexPriceEth(tokenAddress);
     if (dexPrice !== null) return dexPrice;
 
-    // DexScreener hasn't indexed yet — fall back to on-chain
-    console.log(`   ⛓️  DexScreener miss — reading on-chain price for ${tokenAddress.slice(0,10)}...`);
+    console.log(`   ⛓️  GeckoTerminal miss — reading on-chain price for ${tokenAddress.slice(0, 10)}...`);
     return getOnChainPriceEth(publicClient, tokenAddress, tokenDecimals);
 }
 

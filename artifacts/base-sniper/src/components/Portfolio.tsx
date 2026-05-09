@@ -78,7 +78,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
     const [lastUpdate, setLastUpdate] = useState('');
     const [sendState, setSendState]   = useState<SendState | null>(null);
     const [swapState, setSwapState]   = useState<SwapState | null>(null);
-    const countdownRef            = useRef<NodeJS.Timeout | null>(null);
+    const countdownRef            = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [nextRefresh, setNextRefresh] = useState(15);
 
     const fetchPortfolio = useCallback(async () => {

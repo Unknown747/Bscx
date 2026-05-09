@@ -42,6 +42,11 @@ interface Config {
     serialRuggerWindowHours: string;
     reputationEnabled:  boolean;
     reputationMinScore: string;
+    dynamicSizingEnabled: boolean;
+    tradeBalancePct: string;
+    geckoScannerEnabled: boolean;
+    whaleValidationEnabled: boolean;
+    whaleAutoScanEnabled: boolean;
 }
 
 type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history';
@@ -262,15 +267,16 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                             </div>
                             <div className="space-y-2 text-sm">
                                 {[
-                                    { label: 'AI Trading',       value: config?.aiEnabled   ? '✓ Aktif' : '✗ Nonaktif', green: config?.aiEnabled   },
-                                    { label: 'Copy Trading',     value: config?.copyEnabled ? '✓ Aktif' : '✗ Nonaktif', green: config?.copyEnabled },
-                                    { label: 'Jumlah Copy',      value: `${config?.copyAmount || '—'} ETH`               },
-                                    { label: 'Delay Copy',       value: `${config?.copyDelaySeconds || '—'} detik`        },
-                                    { label: 'Min Safety Score', value: `${config?.minSafetyScore || '—'}/100`            },
-                                    { label: 'Max Pool Age',     value: `${config?.maxPoolAgeSeconds || '—'}s`            },
-                                    { label: 'Flashblocks',      value: status?.config?.flashblocksEnabled ? '✓ Aktif' : '—', green: status?.config?.flashblocksEnabled },
-                                    { label: 'Serial Rugger',    value: config?.serialRuggerEnabled ? `✓ Aktif (>${config.serialRuggerMaxDeploys}x/${config.serialRuggerWindowHours}j)` : '✗ Nonaktif', green: config?.serialRuggerEnabled },
-                                    { label: 'Reputasi Deployer', value: config?.reputationEnabled ? `✓ Aktif (min ${config.reputationMinScore}/100)` : '✗ Nonaktif', green: config?.reputationEnabled }
+                                    { label: 'AI Trading',        value: config?.aiEnabled         ? '✓ Aktif' : '✗ Nonaktif', green: config?.aiEnabled         },
+                                    { label: 'Copy Trading',      value: config?.copyEnabled       ? '✓ Aktif' : '✗ Nonaktif', green: config?.copyEnabled       },
+                                    { label: 'Dynamic Sizing',    value: config?.dynamicSizingEnabled ? `✓ ${config.tradeBalancePct || 10}% per trade` : '✗ Nonaktif', green: config?.dynamicSizingEnabled },
+                                    { label: 'GeckoTerminal Scan',value: config?.geckoScannerEnabled  ? '✓ Aktif' : '✗ Nonaktif', green: config?.geckoScannerEnabled },
+                                    { label: 'Auto Whale Finder', value: config?.whaleAutoScanEnabled ? '✓ Aktif' : '✗ Nonaktif', green: config?.whaleAutoScanEnabled },
+                                    { label: 'Jumlah Copy',       value: `${config?.copyAmount || '—'} ETH`                },
+                                    { label: 'Delay Copy',        value: `${config?.copyDelaySeconds || '—'} detik`          },
+                                    { label: 'Min Safety Score',  value: `${config?.minSafetyScore || '—'}/100`             },
+                                    { label: 'Serial Rugger',     value: config?.serialRuggerEnabled ? `✓ Aktif (>${config.serialRuggerMaxDeploys}x/${config.serialRuggerWindowHours}j)` : '✗ Nonaktif', green: config?.serialRuggerEnabled },
+                                    { label: 'Reputasi Deployer', value: config?.reputationEnabled  ? `✓ Aktif (min ${config.reputationMinScore}/100)` : '✗ Nonaktif', green: config?.reputationEnabled }
                                 ].map(({ label, value, green }) => (
                                     <div key={label} className="flex justify-between">
                                         <span className="text-gray-500">{label}</span>

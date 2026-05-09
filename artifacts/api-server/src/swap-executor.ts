@@ -15,6 +15,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 import { EventEmitter } from 'events';
+import axios from 'axios';
 import dotenv from 'dotenv';
 import {
     getEthPriceUsd,
@@ -636,13 +637,10 @@ export class SwapExecutor extends EventEmitter {
             let bestLiq = 0;
             let bestFee: 500 | 3000 | 10000 = 3000;
             for (const pair of pairs) {
-                const liq = parseFloat(pair.liquidity?.usd || '0');
+                const liq = pair.liquidity?.usd || 0;
                 if (liq > bestLiq) {
                     bestLiq = liq;
-                    const rawFee = pair.feeTier || pair.fee || 3000;
-                    const feeNum = typeof rawFee === 'string' ? parseInt(rawFee) : rawFee;
-                    if (feeNum === 500 || feeNum === 10000) bestFee = feeNum as 500 | 10000;
-                    else bestFee = 3000;
+                    bestFee = 3000;
                 }
             }
             return bestFee;
@@ -661,7 +659,7 @@ export class SwapExecutor extends EventEmitter {
             ]);
             if (!pair) return { ok: true, impact: 0, liquidityUsd: 0 }; // Not yet indexed — allow
 
-            const liqUsd  = parseFloat(pair.liquidity?.usd || '0');
+            const liqUsd  = pair.liquidity?.usd || 0;
             if (liqUsd === 0) return { ok: false, impact: 100, liquidityUsd: 0 };
 
             const tradeUsd = amountEth * ethPriceUsd;
@@ -709,9 +707,15 @@ export class SwapExecutor extends EventEmitter {
                 let priceUsd: number | null = null;
                 let change24h: number | null = null;
                 try {
-                    const res = await axios.get(`https://api.dexscreener.com/latest/dex/search?q=${addr}`, { timeout: 4000 });
-                    const pair = res.data?.pairs?.[0];
-                    if (pair) { priceUsd = parseFloat(pair.priceUsd || '0') || null; change24h = pair.priceChange?.h24 ?? null; }
+                    const res = await axios.get(
+                        `https://api.geckoterminal.com/api/v2/networks/base/tokens/${addr}/pools?page=1`,
+                        { timeout: 4000, headers: { 'Accept': 'application/json;version=20230302' } }
+                    );
+                    const pool = res.data?.data?.[0];
+                    if (pool) {
+                        priceUsd  = parseFloat(pool.attributes?.base_token_price_usd  || '0') || null;
+                        change24h = parseFloat(pool.attributes?.price_change_percentage?.h24 || '0') || null;
+                    }
                 } catch { /* silent */ }
                 const valueUsd = priceUsd !== null ? balanceHuman * priceUsd : null;
                 const valueEth = valueUsd !== null ? valueUsd / ethPriceUsd : null;
