@@ -36,6 +36,9 @@ interface Config {
     minSafetyScore: string;
     maxPoolAgeSeconds: string;
     aiEnabled: boolean;
+    serialRuggerEnabled:    boolean;
+    serialRuggerMaxDeploys: string;
+    serialRuggerWindowHours: string;
 }
 
 type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history';
@@ -262,7 +265,8 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                                     { label: 'Delay Copy',       value: `${config?.copyDelaySeconds || '—'} detik`        },
                                     { label: 'Min Safety Score', value: `${config?.minSafetyScore || '—'}/100`            },
                                     { label: 'Max Pool Age',     value: `${config?.maxPoolAgeSeconds || '—'}s`            },
-                                    { label: 'Flashblocks',      value: status?.config?.flashblocksEnabled ? '✓ Aktif' : '—', green: status?.config?.flashblocksEnabled }
+                                    { label: 'Flashblocks',      value: status?.config?.flashblocksEnabled ? '✓ Aktif' : '—', green: status?.config?.flashblocksEnabled },
+                                    { label: 'Serial Rugger',    value: config?.serialRuggerEnabled ? `✓ Aktif (>${config.serialRuggerMaxDeploys}x/${config.serialRuggerWindowHours}j)` : '✗ Nonaktif', green: config?.serialRuggerEnabled }
                                 ].map(({ label, value, green }) => (
                                     <div key={label} className="flex justify-between">
                                         <span className="text-gray-500">{label}</span>

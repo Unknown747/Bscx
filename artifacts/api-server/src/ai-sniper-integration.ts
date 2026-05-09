@@ -2,6 +2,7 @@ import { FlashblocksScanner } from './flashblocks-scanner';
 import { CopyTradeMonitor } from './copy-trade-monitor';
 import { MultiAIProvider } from './multi-ai-provider';
 import { SwapExecutor } from './swap-executor';
+import { checkSerialDeployer } from './deployer-checker';
 import type { Address } from 'viem';
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
@@ -57,8 +58,11 @@ interface RuntimeConfig {
     copyMaxPerDay:   number;
     minSafetyScore:  number;
     maxPoolAgeSeconds: number;
-    aiEnabled:       boolean;
-    dcaEnabled:      boolean;
+    aiEnabled:            boolean;
+    dcaEnabled:           boolean;
+    serialRuggerEnabled:  boolean;
+    serialRuggerMaxDeploys: number;
+    serialRuggerWindowHours: number;
 }
 
 export class AISniperBot extends EventEmitter {
@@ -92,8 +96,11 @@ export class AISniperBot extends EventEmitter {
         copyMaxPerDay:    parseInt  (process.env.COPY_TRADING_MAX_PER_DAY     || '10'),
         minSafetyScore:   parseInt  (process.env.MIN_SAFETY_SCORE             || '65'),
         maxPoolAgeSeconds:parseInt  (process.env.MAX_POOL_AGE_SECONDS         || '60'),
-        aiEnabled:        process.env.AI_ENABLED === 'true',
-        dcaEnabled:       process.env.DCA_ENABLED !== 'false'
+        aiEnabled:             process.env.AI_ENABLED === 'true',
+        dcaEnabled:            process.env.DCA_ENABLED !== 'false',
+        serialRuggerEnabled:   process.env.SERIAL_RUGGER_ENABLED  !== 'false',
+        serialRuggerMaxDeploys: parseInt(process.env.SERIAL_RUGGER_MAX_DEPLOYS  || '3'),
+        serialRuggerWindowHours: parseInt(process.env.SERIAL_RUGGER_WINDOW_HOURS || '24')
     };
 
     private readonly CONFIG = {
@@ -516,6 +523,25 @@ export class AISniperBot extends EventEmitter {
             return;
         }
 
+        // ── Serial rugger check ──
+        if (this.runtimeConfig.serialRuggerEnabled) {
+            console.log('   🔍 Checking serial deployer (Blockscout)...');
+            const sr = await checkSerialDeployer(
+                tokenAddress,
+                this.runtimeConfig.serialRuggerMaxDeploys,
+                this.runtimeConfig.serialRuggerWindowHours
+            );
+            if (sr.isSerialRugger) {
+                console.log(`   🚨 SERIAL RUGGER: ${sr.deployer} deployed ${sr.deployCount}x in ${sr.windowHours}h — auto-blacklisting`);
+                this.addToBlacklist(tokenAddress, `Serial rugger (${sr.deployCount} deploy/${sr.windowHours}h)`);
+                this.addLog('info', `🚨 Serial rugger diblokir otomatis`, `${sr.deployer?.slice(0, 12)}... → ${sr.deployCount} deploy dalam ${sr.windowHours}j`);
+                return;
+            }
+            if (!sr.skipped && sr.deployer) {
+                console.log(`   ✅ Deployer OK: ${sr.deployer.slice(0, 10)}... (${sr.deployCount} deploy in ${sr.windowHours}h)`);
+            }
+        }
+
         // ── Honeypot check (GoPlus) ──
         console.log('   🔍 Checking token safety (GoPlus)...');
         const safety = await this.checkHoneypot(tokenAddress);
@@ -547,6 +573,21 @@ export class AISniperBot extends EventEmitter {
         if (this.blacklist.has(addr)) {
             console.log(`   🚫 Blacklisted token — skip copy`);
             return;
+        }
+
+        // ── Serial rugger check ──
+        if (this.runtimeConfig.serialRuggerEnabled) {
+            const sr = await checkSerialDeployer(
+                opportunity.tokenAddress,
+                this.runtimeConfig.serialRuggerMaxDeploys,
+                this.runtimeConfig.serialRuggerWindowHours
+            );
+            if (sr.isSerialRugger) {
+                console.log(`   🚨 SERIAL RUGGER (copy): ${sr.deployer} deployed ${sr.deployCount}x in ${sr.windowHours}h — skip & blacklist`);
+                this.addToBlacklist(opportunity.tokenAddress, `Serial rugger (${sr.deployCount} deploy/${sr.windowHours}h)`);
+                this.addLog('info', `🚨 Copy trade ditolak: serial rugger`, `${sr.deployer?.slice(0, 12)}... → ${sr.deployCount} deploy dalam ${sr.windowHours}j`);
+                return;
+            }
         }
 
         // ── Copy filter: skip if whale trade too small ──
@@ -669,8 +710,11 @@ export class AISniperBot extends EventEmitter {
         if (s.copyMaxPerDay    != null) this.runtimeConfig.copyMaxPerDay    = s.copyMaxPerDay;
         if (s.minSafetyScore   != null) this.runtimeConfig.minSafetyScore   = s.minSafetyScore;
         if (s.maxPoolAgeSeconds!= null) this.runtimeConfig.maxPoolAgeSeconds= s.maxPoolAgeSeconds;
-        if (s.aiEnabled        != null) this.runtimeConfig.aiEnabled        = s.aiEnabled;
-        if (s.dcaEnabled       != null) this.runtimeConfig.dcaEnabled       = s.dcaEnabled;
+        if (s.aiEnabled             != null) this.runtimeConfig.aiEnabled             = s.aiEnabled;
+        if (s.dcaEnabled            != null) this.runtimeConfig.dcaEnabled            = s.dcaEnabled;
+        if (s.serialRuggerEnabled   != null) this.runtimeConfig.serialRuggerEnabled   = s.serialRuggerEnabled;
+        if (s.serialRuggerMaxDeploys   != null) this.runtimeConfig.serialRuggerMaxDeploys   = s.serialRuggerMaxDeploys;
+        if (s.serialRuggerWindowHours  != null) this.runtimeConfig.serialRuggerWindowHours  = s.serialRuggerWindowHours;
 
         // Push trading params to SwapExecutor
         if (this.executor) {

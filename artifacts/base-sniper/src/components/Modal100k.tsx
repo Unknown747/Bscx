@@ -31,6 +31,11 @@ export interface ModalSettings {
 
     // DCA
     dcaEnabled: boolean;
+
+    // Serial Rugger Detection
+    serialRuggerEnabled:    boolean;
+    serialRuggerMaxDeploys: number;
+    serialRuggerWindowHours: number;
 }
 
 // FIX: Uniswap V3 swap uses ~150,000 gas units, not 21,000 (ETH transfer)
@@ -52,7 +57,10 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
         copyEnabled: true,
         copyAmount: 0.0003,
         copyDelay: 2,
-        dcaEnabled: true
+        dcaEnabled: true,
+        serialRuggerEnabled:    true,
+        serialRuggerMaxDeploys: 3,
+        serialRuggerWindowHours: 24
     });
     
     const [estimatedGasCost, setEstimatedGasCost] = useState(0.00015);
@@ -416,6 +424,83 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                         {!settings.dcaEnabled && (
                             <div className="mt-3 p-3 bg-yellow-900/20 rounded-lg border border-yellow-800/40">
                                 <p className="text-xs text-yellow-300">⚠️ DCA dimatikan. Direkomendasikan untuk modal &lt; 0.003 ETH agar tidak kehabisan modal.</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ========== SERIAL RUGGER DETECTION ========== */}
+                    <div className="bg-gray-800/50 rounded-xl p-5 border border-red-900/40">
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <h3 className="text-lg font-semibold text-white">🚨 Serial Rugger Detection</h3>
+                                <p className="text-xs text-gray-400 mt-0.5">
+                                    Blokir otomatis token dari wallet yang baru deploy banyak kontrak (serial rugger)
+                                </p>
+                            </div>
+                            <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.serialRuggerEnabled}
+                                    onChange={(e) => setSettings({...settings, serialRuggerEnabled: e.target.checked})}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                            </label>
+                        </div>
+
+                        {settings.serialRuggerEnabled && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">
+                                        Max Deploy dalam Window
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        min="1"
+                                        max="20"
+                                        value={settings.serialRuggerMaxDeploys}
+                                        onChange={(e) => {
+                                            const val = parseInt(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, serialRuggerMaxDeploys: val});
+                                        }}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        Blokir jika deployer &gt; {settings.serialRuggerMaxDeploys} kontrak
+                                    </p>
+                                </div>
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">
+                                        Window Waktu (jam)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        min="1"
+                                        max="168"
+                                        value={settings.serialRuggerWindowHours}
+                                        onChange={(e) => {
+                                            const val = parseInt(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, serialRuggerWindowHours: val});
+                                        }}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        Periksa {settings.serialRuggerWindowHours}j terakhir
+                                    </p>
+                                </div>
+                                <div className="md:col-span-2 p-3 bg-red-900/20 rounded-lg border border-red-800/40">
+                                    <p className="text-xs text-red-300">
+                                        🚨 Jika deployer token membuat lebih dari <strong>{settings.serialRuggerMaxDeploys} kontrak</strong> dalam <strong>{settings.serialRuggerWindowHours} jam</strong> terakhir, token otomatis diblacklist dan masuk ke daftar Blokir.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {!settings.serialRuggerEnabled && (
+                            <div className="p-3 bg-yellow-900/20 rounded-lg border border-yellow-800/40">
+                                <p className="text-xs text-yellow-300">⚠️ Serial rugger detection dinonaktifkan. Bot tidak akan memeriksa riwayat deploy kontrak.</p>
                             </div>
                         )}
                     </div>

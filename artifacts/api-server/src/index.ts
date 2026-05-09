@@ -98,7 +98,10 @@ app.post('/api/settings', (req: Request, res: Response) => {
             minSafetyScore:   s.minSafetyScore,
             maxPoolAgeSeconds:s.maxPoolAgeSeconds,
             aiEnabled:        s.aiEnabled,
-            dcaEnabled:       s.dcaEnabled
+            dcaEnabled:       s.dcaEnabled,
+            serialRuggerEnabled:     s.serialRuggerEnabled,
+            serialRuggerMaxDeploys:  s.serialRuggerMaxDeploys,
+            serialRuggerWindowHours: s.serialRuggerWindowHours
         });
         res.json({ ok: true, message: 'Pengaturan berhasil diterapkan' });
     } catch (err: any) {
@@ -269,20 +272,23 @@ app.get('/api/config', (_req: Request, res: Response) => {
     // Return runtime config — reflects changes from POST /api/settings immediately
     const rc = bot.getRuntimeConfig();
     res.json({
-        capital:           String(rc.totalCapital),
-        maxTrade:          String(rc.maxTradeAmount),
-        copyEnabled:       rc.copyEnabled,
-        copyAmount:        String(rc.copyAmount),
-        copyDelaySeconds:  String(rc.copyDelay),
-        copyMaxPerDay:     String(rc.copyMaxPerDay),
-        minSafetyScore:    String(rc.minSafetyScore),
-        maxPoolAgeSeconds: String(rc.maxPoolAgeSeconds),
-        aiEnabled:         rc.aiEnabled,
-        tp1Multiplier:     rc.tp1Multiplier,
-        tp1Percentage:     rc.tp1Percentage,
-        tp2Multiplier:     rc.tp2Multiplier,
-        tp2Percentage:     rc.tp2Percentage,
-        stopLoss:          rc.stopLoss
+        capital:                 String(rc.totalCapital),
+        maxTrade:                String(rc.maxTradeAmount),
+        copyEnabled:             rc.copyEnabled,
+        copyAmount:              String(rc.copyAmount),
+        copyDelaySeconds:        String(rc.copyDelay),
+        copyMaxPerDay:           String(rc.copyMaxPerDay),
+        minSafetyScore:          String(rc.minSafetyScore),
+        maxPoolAgeSeconds:       String(rc.maxPoolAgeSeconds),
+        aiEnabled:               rc.aiEnabled,
+        tp1Multiplier:           rc.tp1Multiplier,
+        tp1Percentage:           rc.tp1Percentage,
+        tp2Multiplier:           rc.tp2Multiplier,
+        tp2Percentage:           rc.tp2Percentage,
+        stopLoss:                rc.stopLoss,
+        serialRuggerEnabled:     rc.serialRuggerEnabled,
+        serialRuggerMaxDeploys:  String(rc.serialRuggerMaxDeploys),
+        serialRuggerWindowHours: String(rc.serialRuggerWindowHours)
     });
 });
 
