@@ -70,6 +70,13 @@ app.get('/api/positions', (_req: Request, res: Response) => {
     });
 });
 
+app.get('/api/logs', (_req: Request, res: Response) => {
+    res.json({
+        logs:      bot.getActivityLog(),
+        timestamp: Date.now()
+    });
+});
+
 app.get('/api/config', (_req: Request, res: Response) => {
     res.json({
         capital: process.env.TOTAL_CAPITAL_ETH,

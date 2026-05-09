@@ -3,15 +3,30 @@ import { CopyTradeMonitor } from './copy-trade-monitor';
 import { MultiAIProvider } from './multi-ai-provider';
 import { SwapExecutor } from './swap-executor';
 import type { Address } from 'viem';
+import { randomBytes } from 'crypto';
 import dotenv from 'dotenv';
 
 dotenv.config();
+
+// ============ ACTIVITY LOG TYPES ============
+type LogType = 'buy-success' | 'buy-failed' | 'sell-success' | 'take-profit' | 'stop-loss' | 'copy-trade' | 'info';
+
+interface LogEntry {
+    id: string;
+    type: LogType;
+    message: string;
+    detail?: string;
+    timestamp: number;
+}
+
+const MAX_LOG_ENTRIES = 100;
 
 export class AISniperBot {
     private scanner: FlashblocksScanner;
     private copyMonitor: CopyTradeMonitor;
     private ai: MultiAIProvider;
     private executor: SwapExecutor | null = null;
+    private activityLog: LogEntry[] = [];
 
     private readonly CONFIG = {
         TOTAL_CAPITAL:              parseFloat(process.env.TOTAL_CAPITAL_ETH           || '0.006'),
@@ -31,9 +46,29 @@ export class AISniperBot {
         } catch (err: any) {
             console.warn(`⚠️  SwapExecutor disabled: ${err.message}`);
             console.warn('   Set a valid PRIVATE_KEY in .env to enable live trading.');
+            this.addLog('info', 'Live trading dinonaktifkan', 'Set PRIVATE_KEY di .env untuk aktifkan');
         }
 
         this.setupEventHandlers();
+    }
+
+    // ============ ACTIVITY LOG ============
+    private addLog(type: LogType, message: string, detail?: string): void {
+        const entry: LogEntry = {
+            id:        randomBytes(6).toString('hex'),
+            type,
+            message,
+            detail,
+            timestamp: Date.now()
+        };
+        this.activityLog.unshift(entry); // newest first
+        if (this.activityLog.length > MAX_LOG_ENTRIES) {
+            this.activityLog.length = MAX_LOG_ENTRIES;
+        }
+    }
+
+    getActivityLog(): LogEntry[] {
+        return this.activityLog;
     }
 
     private setupEventHandlers(): void {
@@ -56,9 +91,11 @@ export class AISniperBot {
                 const amount = this.calculatePositionSize(analysis);
                 console.log(`   ✅ AI APPROVED: BUY ${amount} ETH`);
                 console.log(`   💡 Reason: ${analysis.reasoning}`);
+                this.addLog('info', `AI approved: BUY ${amount} ETH`, `${analysis.confidence}% confidence · ${analysis.riskLevel} risk`);
                 await this.executeBuy(pool.token0 as Address, amount);
             } else {
                 console.log(`   ❌ AI REJECTED: ${analysis.reasoning}`);
+                this.addLog('info', `AI rejected pool ${pool.poolAddress.slice(0, 10)}...`, analysis.reasoning);
             }
         });
 
@@ -81,19 +118,36 @@ export class AISniperBot {
 
             if (walletAnalysis.shouldCopy && walletAnalysis.score > this.CONFIG.AUTO_COPY_SCORE_THRESHOLD) {
                 console.log(`   ✅ COPY APPROVED: ${walletAnalysis.reason}`);
+                this.addLog('copy-trade', `Copy dari ${opportunity.walletName}`, `${opportunity.tokenSymbol} · score ${walletAnalysis.score}/100`);
                 await this.executeCopyTrade(opportunity);
             } else {
                 console.log(`   ❌ COPY REJECTED: ${walletAnalysis.reason}`);
+                this.addLog('info', `Copy ditolak: ${opportunity.walletName}`, walletAnalysis.reason);
             }
         });
 
-        // Forward swap events to bot-level emitter
+        // Forward swap events + record to activity log
         if (this.executor) {
-            this.executor.on('buy-success',  (d) => this.emit('buy-success',  d));
-            this.executor.on('buy-failed',   (d) => this.emit('buy-failed',   d));
-            this.executor.on('sell-success', (d) => this.emit('sell-success', d));
-            this.executor.on('take-profit',  (d) => this.emit('take-profit',  d));
-            this.executor.on('stop-loss',    (d) => this.emit('stop-loss',    d));
+            this.executor.on('buy-success', (d) => {
+                this.emit('buy-success', d);
+                this.addLog('buy-success', `BUY ${d.tokenSymbol}`, `TX: ${d.txHash?.slice(0, 18)}...`);
+            });
+            this.executor.on('buy-failed', (d) => {
+                this.emit('buy-failed', d);
+                this.addLog('buy-failed', `BUY gagal: ${d.tokenAddress?.slice(0, 10)}...`, d.error);
+            });
+            this.executor.on('sell-success', (d) => {
+                this.emit('sell-success', d);
+                this.addLog('sell-success', `SELL ${d.tokenSymbol} (${d.percentSold}%)`, `TX: ${d.txHash?.slice(0, 18)}...`);
+            });
+            this.executor.on('take-profit', (d) => {
+                this.emit('take-profit', d);
+                this.addLog('take-profit', `TP${d.level} ${d.tokenSymbol} @ ${d.multiplier?.toFixed(2)}x`, 'Auto take profit triggered');
+            });
+            this.executor.on('stop-loss', (d) => {
+                this.emit('stop-loss', d);
+                this.addLog('stop-loss', `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`, 'Auto stop loss triggered');
+            });
         }
 
         // ============ Periodic Market Sentiment (every 5 min) ============
