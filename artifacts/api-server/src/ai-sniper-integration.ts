@@ -97,8 +97,9 @@ export class AISniperBot extends EventEmitter {
     };
 
     private readonly CONFIG = {
-        MIN_AI_CONFIDENCE:         parseInt(process.env.MIN_AI_CONFIDENCE        || '65'),
+        MIN_AI_CONFIDENCE:         parseInt(process.env.MIN_AI_CONFIDENCE        || '75'),  // was 65
         AUTO_COPY_SCORE_THRESHOLD: parseInt(process.env.AUTO_COPY_SCORE_THRESHOLD || '75'),
+        MAX_OPEN_POSITIONS:        parseInt(process.env.MAX_OPEN_POSITIONS        || '3'),   // cap concurrent trades
         ENABLE_GROQ_PRIMARY:       true
     };
 
@@ -166,16 +167,23 @@ export class AISniperBot extends EventEmitter {
             const sellTax = parseFloat(data.sell_tax || '0');
             const buyTax  = parseFloat(data.buy_tax  || '0');
 
-            if (data.is_honeypot  === '1') return { safe: false, reason: '🍯 Honeypot detected' };
+            if (data.is_honeypot    === '1') return { safe: false, reason: '🍯 Honeypot detected' };
             if (data.cannot_sell_all === '1') return { safe: false, reason: 'Cannot sell all — rug risk' };
-            if (sellTax > 15)               return { safe: false, reason: `Sell tax too high: ${sellTax}%`, sellTax };
-            if (buyTax  > 15)               return { safe: false, reason: `Buy tax too high: ${buyTax}%`,  buyTax  };
+            if (sellTax > 15)                 return { safe: false, reason: `Sell tax too high: ${sellTax}%`, sellTax };
+            if (buyTax  > 15)                 return { safe: false, reason: `Buy tax too high: ${buyTax}%`,  buyTax  };
+
+            // ── Holder concentration — creator holding too much = rug risk ──
+            const creatorPct  = parseFloat(data.creator_percent || '0') * 100;
+            const holderCount = parseInt(data.holder_count || '0');
+            if (creatorPct > 30) return { safe: false, reason: `Creator holds too much: ${creatorPct.toFixed(0)}%` };
+            if (holderCount < 10 && holderCount > 0) return { safe: false, reason: `Too few holders: ${holderCount}` };
 
             const warnings: string[] = [];
             if (data.is_mintable === '1' && data.owner_address) warnings.push('Mintable');
             if (data.is_blacklisted === '1')                    warnings.push('Has blacklist');
             if (sellTax > 5)  warnings.push(`Sell tax ${sellTax}%`);
             if (buyTax  > 5)  warnings.push(`Buy tax ${buyTax}%`);
+            if (creatorPct > 10) warnings.push(`Creator ${creatorPct.toFixed(0)}%`);
 
             if (warnings.length > 0) console.log(`   ⚠️  Token warnings: ${warnings.join(', ')}`);
             return { safe: true, sellTax, buyTax };
@@ -187,10 +195,13 @@ export class AISniperBot extends EventEmitter {
     private setupEventHandlers(): void {
         // ============ EVENT: Pool Baru Ditemukan ============
         this.scanner.on('pool-ready', async (pool) => {
+            // pool.token0 is always the NEW token (non-WETH) after the scanner fix
+            const tokenAddress = pool.token0 as Address;
             console.log(`\n🎯 New pool: ${pool.poolAddress}`);
+            console.log(`   🪙 Token: ${tokenAddress.slice(0, 10)}...`);
             const startTime = Date.now();
 
-            const analysis = await this.ai.analyzeToken(pool.token0, {
+            const analysis = await this.ai.analyzeToken(tokenAddress, {
                 liquidity:  pool.liquidity,
                 volume24h:  pool.volume24h,
                 ageSeconds: (Date.now() - pool.createdAt) / 1000
@@ -198,14 +209,14 @@ export class AISniperBot extends EventEmitter {
 
             const aiLatency = Date.now() - startTime;
             console.log(`   🤖 AI Decision (${aiLatency}ms): ${analysis.recommendation}`);
-            console.log(`   📊 Confidence: ${analysis.confidence}% | Risk: ${analysis.riskLevel}`);
+            console.log(`   📊 Confidence: ${analysis.confidence}% | Risk: ${analysis.riskLevel} | predictedProfit: ${analysis.predictedProfit}%`);
 
             if (this.shouldBuy(analysis)) {
                 const amount = this.calculatePositionSize(analysis);
-                console.log(`   ✅ AI APPROVED: BUY ${amount} ETH`);
+                console.log(`   ✅ AI APPROVED: BUY ${amount.toFixed(4)} ETH (${analysis.confidence}% confidence)`);
                 console.log(`   💡 Reason: ${analysis.reasoning}`);
-                this.addLog('info', `AI approved: BUY ${amount} ETH`, `${analysis.confidence}% confidence · ${analysis.riskLevel} risk`);
-                await this.executeBuy(pool.token0 as Address, amount);
+                this.addLog('info', `AI approved: BUY ${amount.toFixed(4)} ETH`, `${analysis.confidence}% confidence · ${analysis.riskLevel} risk · predicted +${analysis.predictedProfit}%`);
+                await this.executeBuy(tokenAddress, amount);
             } else {
                 console.log(`   ❌ AI REJECTED: ${analysis.reasoning}`);
                 this.addLog('info', `AI rejected pool ${pool.poolAddress.slice(0, 10)}...`, analysis.reasoning);
@@ -381,24 +392,41 @@ export class AISniperBot extends EventEmitter {
 
     // ============ TRADE DECISION LOGIC ============
     private shouldBuy(analysis: any): boolean {
-        if (analysis.recommendation !== 'BUY')               return false;
-        if (analysis.confidence      < this.CONFIG.MIN_AI_CONFIDENCE) return false;
-        if (analysis.riskLevel      === 'CRITICAL')           return false;
-        if (analysis.predictedProfit < 20)                    return false;
+        if (analysis.recommendation !== 'BUY')                            return false;
+        if (analysis.confidence      < this.CONFIG.MIN_AI_CONFIDENCE)     return false;
+        if (analysis.riskLevel      === 'CRITICAL')                        return false;
+        if (analysis.predictedProfit < 30)                                 return false; // was 20 — need bigger edge to cover gas
+
+        // ── Concurrent position cap: protect remaining capital ──
+        const openCount = this.executor?.getOpenPositions().length ?? 0;
+        if (openCount >= this.CONFIG.MAX_OPEN_POSITIONS) {
+            console.log(`   ⚠️  Position cap reached (${openCount}/${this.CONFIG.MAX_OPEN_POSITIONS}) — skip`);
+            return false;
+        }
+
         return true;
     }
 
     private calculatePositionSize(analysis: any): number {
-        let pct = 0.10; // 10% default
+        // Kelly-inspired sizing: scale with AI confidence
+        // At min threshold (75%) → 20% of maxTradeAmount
+        // At 80%+ → 50%
+        // At 85%+ → 75%
+        // At 90%+ → 100%
+        const c = analysis.confidence;
+        let pct = c >= 90 ? 1.0
+                : c >= 85 ? 0.75
+                : c >= 80 ? 0.50
+                :           0.20;
 
-        if      (analysis.confidence > 80) pct = 0.15;
-        else if (analysis.confidence > 70) pct = 0.12;
+        // Risk adjustment
+        if      (analysis.riskLevel === 'LOW')      pct = Math.min(1.0, pct * 1.2);
+        else if (analysis.riskLevel === 'HIGH')     pct = pct * 0.5;
+        else if (analysis.riskLevel === 'CRITICAL') pct = 0; // blocked by shouldBuy anyway
 
-        if      (analysis.riskLevel === 'LOW')  pct *= 1.2;
-        else if (analysis.riskLevel === 'HIGH') pct *= 0.7;
-
-        // Cap at maxTradeAmount from runtime config
-        return Math.min(this.runtimeConfig.totalCapital * pct, this.runtimeConfig.maxTradeAmount);
+        const amount = this.runtimeConfig.maxTradeAmount * pct;
+        // Hard floor: 0.001 ETH minimum (below this, gas eats the whole trade)
+        return Math.max(0.001, Math.min(amount, this.runtimeConfig.maxTradeAmount));
     }
 
     // ============ EXECUTION ============

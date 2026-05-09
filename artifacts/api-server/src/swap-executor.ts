@@ -125,6 +125,11 @@ export class SwapExecutor extends EventEmitter {
         // ── DCA ─ disabled for small capital (gas cost > benefit) ────────────
         DCA_TRIGGER_MULT:           0.98,
         DCA_ENABLED:                process.env.DCA_ENABLED === 'true', // default OFF (was default ON)
+        // ── Position Management ───────────────────────────────────────────────
+        MAX_OPEN_POSITIONS:         parseInt(process.env.MAX_OPEN_POSITIONS   || '3'),   // max simultaneous trades
+        MAX_HOLD_MINUTES:           parseInt(process.env.MAX_HOLD_MINUTES     || '30'),  // exit stale positions
+        EMERGENCY_EXIT_PCT:         parseFloat(process.env.EMERGENCY_EXIT_PCT || '-50'), // rug detection: exit if drops this fast
+        EMERGENCY_EXIT_MINUTES:     2,  // window for emergency exit check (first N minutes of trade)
     };
 
     constructor() {
@@ -443,7 +448,34 @@ export class SwapExecutor extends EventEmitter {
         const profitPct  = ((currentValueEth - entryEth) / entryEth) * 100;
         const multiplier = currentValueEth / entryEth;
 
-        const holdMins = ((Date.now() - position.openedAt) / 60000).toFixed(1);
+        const holdMins    = (Date.now() - position.openedAt) / 60000;
+        const holdMinsStr = holdMins.toFixed(1);
+
+        // ─── EMERGENCY EXIT: rug detection ───
+        // If position is <2 min old AND already down >50% — very likely a rug/honeypot miss
+        if (holdMins <= this.CONFIG.EMERGENCY_EXIT_MINUTES && profitPct <= this.CONFIG.EMERGENCY_EXIT_PCT) {
+            console.log(`🚨 EMERGENCY EXIT: ${position.tokenSymbol} dropped ${profitPct.toFixed(1)}% in ${holdMinsStr}min — possible rug!`);
+            this.emit('stop-loss', {
+                tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
+                reason: `🚨 Emergency: -${Math.abs(profitPct).toFixed(0)}% in ${holdMinsStr}min (rug suspected)`,
+                peakMult: 1, sourceWallet: position.sourceWallet
+            });
+            await this.sell(tokenAddress, 100);
+            return;
+        }
+
+        // ─── MAX HOLD TIME: exit stale positions ───
+        // Free up capital if token hasn't reached TP1 after MAX_HOLD_MINUTES
+        if (holdMins >= this.CONFIG.MAX_HOLD_MINUTES && !position.takeProfit1Hit) {
+            console.log(`⏰ MAX HOLD TIME (${this.CONFIG.MAX_HOLD_MINUTES}min) reached — exiting ${position.tokenSymbol} at ${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(1)}%`);
+            this.emit('stop-loss', {
+                tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
+                reason: `⏰ Timeout (${this.CONFIG.MAX_HOLD_MINUTES}min hold, no TP1)`,
+                peakMult: 1, sourceWallet: position.sourceWallet
+            });
+            await this.sell(tokenAddress, 100);
+            return;
+        }
 
         // ── Update peak value for trailing SL ──
         if (currentValueEth > (position.peakValueEth || entryEth)) {
@@ -458,7 +490,7 @@ export class SwapExecutor extends EventEmitter {
             ? dropFromPeak  >= this.CONFIG.TRAILING_SL_FROM_PEAK_PCT
             : profitPct     <= -this.CONFIG.STOP_LOSS_PCT;
 
-        console.log(`📊 ${position.tokenSymbol}: ${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(1)}% | ${multiplier.toFixed(2)}x | peak ${peakMult.toFixed(2)}x | ${holdMins}m`);
+        console.log(`📊 ${position.tokenSymbol}: ${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(1)}% | ${multiplier.toFixed(2)}x | peak ${peakMult.toFixed(2)}x | ${holdMinsStr}m`);
 
         // ─── STOP LOSS (Fixed or Trailing) ───
         if (slTriggered) {

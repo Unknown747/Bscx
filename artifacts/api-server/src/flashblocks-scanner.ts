@@ -261,16 +261,26 @@ export class FlashblocksScanner extends EventEmitter {
         console.log('🔥🔥🔥 NEW POOL DETECTED! 🔥🔥🔥');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
         
+        const WETH_ADDR = '0x4200000000000000000000000000000000000006';
+        const rawToken0 = '0x' + logData.topics[1].slice(-40);
+        const rawToken1 = '0x' + logData.topics[2].slice(-40);
+
+        // Always analyse the non-WETH token — previously bot sometimes analysed WETH itself
+        const newToken  = rawToken0.toLowerCase() === WETH_ADDR.toLowerCase() ? rawToken1 : rawToken0;
+        const baseToken = rawToken0.toLowerCase() === WETH_ADDR.toLowerCase() ? rawToken0 : rawToken1;
+
         const poolData: PoolData = {
             poolAddress: logData.address,
-            token0: '0x' + logData.topics[1].slice(-40),
-            token1: '0x' + logData.topics[2].slice(-40),
+            token0: newToken,   // new token (non-WETH)
+            token1: baseToken,  // base token (WETH)
             liquidity: 0,
             volume24h: 0,
             createdAt: Date.now(),
             txHash: logData.transactionHash,
             blockNumber: parseInt(logData.blockNumber, 16)
         };
+
+        console.log(`   🪙 New token: ${newToken.slice(0, 10)}... / WETH`);
         
         const liquidity = await this.getPoolLiquidity(poolData.poolAddress);
         if (liquidity) {
