@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import PositionCard from './PositionCard';
 import ActivityLog from './ActivityLog';
+import Portfolio from './Portfolio';
 import Modal100k, { ModalSettings } from './Modal100k';
 import WalletConfigModal from './WalletConfigModal';
 import CopyWalletsModal from './CopyWalletsModal';
@@ -34,24 +35,26 @@ interface Config {
     aiEnabled: boolean;
 }
 
-type Tab = 'overview' | 'positions' | 'log';
+type Tab = 'overview' | 'portfolio' | 'positions' | 'log';
 
 interface DashboardProps {
     apiUrl: string;
 }
 
 const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
-    { id: 'overview',  label: 'Overview', icon: '📊' },
-    { id: 'positions', label: 'Posisi',   icon: '💼' },
-    { id: 'log',       label: 'Log',      icon: '📋' }
+    { id: 'overview',   label: 'Overview',  icon: '📊' },
+    { id: 'portfolio',  label: 'Portfolio', icon: '👜' },
+    { id: 'positions',  label: 'Posisi',    icon: '💼' },
+    { id: 'log',        label: 'Log',       icon: '📋' }
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
-    const [activeTab, setActiveTab]       = useState<Tab>('overview');
-    const [status, setStatus]             = useState<Status | null>(null);
-    const [config, setConfig]             = useState<Config | null>(null);
-    const [lastUpdate, setLastUpdate]     = useState('');
-    const [error, setError]               = useState('');
+    const [activeTab, setActiveTab]             = useState<Tab>('overview');
+    const [status, setStatus]                   = useState<Status | null>(null);
+    const [config, setConfig]                   = useState<Config | null>(null);
+    const [lastUpdate, setLastUpdate]           = useState('');
+    const [error, setError]                     = useState('');
+    const [ethBalance, setEthBalance]           = useState<string | null>(null);
     const [showSettings, setShowSettings]       = useState(false);
     const [showWalletConfig, setShowWalletConfig]   = useState(false);
     const [showCopyWallets, setShowCopyWallets]     = useState(false);
@@ -72,11 +75,25 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         }
     }, [apiUrl]);
 
+    const fetchBalance = useCallback(async () => {
+        try {
+            const res  = await fetch(`${apiUrl}/api/portfolio`);
+            const json = await res.json();
+            if (json.ethBalance) setEthBalance(parseFloat(json.ethBalance).toFixed(5));
+        } catch { /* silent */ }
+    }, [apiUrl]);
+
     useEffect(() => {
         fetchData();
         const interval = setInterval(fetchData, 3000);
         return () => clearInterval(interval);
     }, [fetchData]);
+
+    useEffect(() => {
+        fetchBalance();
+        const interval = setInterval(fetchBalance, 30000);
+        return () => clearInterval(interval);
+    }, [fetchBalance]);
 
     const handleSaveSettings = useCallback(async (settings: ModalSettings) => {
         setSaveStatus('saving');
@@ -89,7 +106,6 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
             if (!res.ok) throw new Error('Server error');
             setSaveStatus('saved');
             setShowSettings(false);
-            // Refresh config immediately after save
             await fetchData();
             setTimeout(() => setSaveStatus('idle'), 2000);
         } catch {
@@ -110,10 +126,13 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     <span className="text-3xl">🔥</span>
                     <div>
                         <h1 className="text-xl font-bold text-white leading-tight">Base Sniper</h1>
+                        {ethBalance !== null && (
+                            <p className="text-xs text-green-400 font-medium">Ξ {ethBalance} ETH</p>
+                        )}
                     </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                     {/* Connection status */}
                     <div className="flex items-center gap-1.5">
                         <div className={`w-2 h-2 rounded-full ${status?.connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
@@ -173,7 +192,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
-                        className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium transition-all
+                        className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-medium transition-all
                             ${activeTab === tab.id
                                 ? 'bg-gray-700 text-white shadow'
                                 : 'text-gray-500 hover:text-gray-300'}`}
@@ -246,6 +265,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         )}
                     </div>
                 )}
+
+                {/* ─── PORTFOLIO ─── */}
+                {activeTab === 'portfolio' && <Portfolio apiUrl={apiUrl} />}
 
                 {/* ─── POSITIONS ─── */}
                 {activeTab === 'positions' && <PositionCard apiUrl={apiUrl} />}

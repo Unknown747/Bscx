@@ -3,7 +3,9 @@ import {
     createPublicClient,
     http,
     parseEther,
+    parseUnits,
     formatEther,
+    formatUnits,
     encodeFunctionData,
     type WalletClient,
     type PublicClient,
@@ -46,10 +48,12 @@ const ROUTER_ABI = [
 
 // ERC20 ABI (minimal)
 const ERC20_ABI = [
-    { name: 'balanceOf',  type: 'function', inputs: [{ name: 'account', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
-    { name: 'decimals',   type: 'function', inputs: [],                                      outputs: [{ name: '', type: 'uint8'   }] },
-    { name: 'symbol',     type: 'function', inputs: [],                                      outputs: [{ name: '', type: 'string'  }] },
-    { name: 'approve',    type: 'function', inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ name: '', type: 'bool' }] }
+    { name: 'balanceOf',  type: 'function', inputs: [{ name: 'account', type: 'address' }],                                                                           outputs: [{ name: '', type: 'uint256' }] },
+    { name: 'decimals',   type: 'function', inputs: [],                                                                                                                outputs: [{ name: '', type: 'uint8'   }] },
+    { name: 'symbol',     type: 'function', inputs: [],                                                                                                                outputs: [{ name: '', type: 'string'  }] },
+    { name: 'name',       type: 'function', inputs: [],                                                                                                                outputs: [{ name: '', type: 'string'  }] },
+    { name: 'approve',    type: 'function', inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }],                                      outputs: [{ name: '', type: 'bool'    }] },
+    { name: 'transfer',   type: 'function', inputs: [{ name: 'to',      type: 'address' }, { name: 'amount', type: 'uint256' }],                                      outputs: [{ name: '', type: 'bool'    }] }
 ] as const;
 
 // ============ TYPES ============
@@ -87,6 +91,7 @@ export class SwapExecutor extends EventEmitter {
     private publicClient: PublicClient;
     private account: ReturnType<typeof privateKeyToAccount>;
     private openPositions: Map<Address, OpenPosition> = new Map();
+    private knownTokens: Set<Address> = new Set();
     private positionMonitorInterval: NodeJS.Timeout | null = null;
     private isReady = false;
 
@@ -226,6 +231,7 @@ export class SwapExecutor extends EventEmitter {
                 takeProfit2Hit: false
             });
 
+            this.knownTokens.add(tokenAddress.toLowerCase() as Address);
             console.log(`   ✅ BUY SUCCESS: ${formatEther(tokenBalance)} ${tokenSymbol}`);
             console.log(`   📋 TX: ${txHash}`);
             console.log(`   ⛽ Gas used: ${receipt.gasUsed}`);
@@ -486,6 +492,100 @@ export class SwapExecutor extends EventEmitter {
             }) as string;
         } catch {
             return 'UNKNOWN';
+        }
+    }
+
+    // ============ KNOWN TOKEN REGISTRY ============
+    addKnownToken(addr: string): void {
+        this.knownTokens.add(addr.toLowerCase() as Address);
+    }
+
+    getKnownTokens(): Address[] {
+        return Array.from(this.knownTokens);
+    }
+
+    // ============ PORTFOLIO DATA ============
+    async getPortfolioData(): Promise<{
+        ethBalance: string;
+        ethValueUsd: number;
+        tokens: Array<{
+            address: string; symbol: string; balance: string;
+            decimals: number; priceUsd: number | null;
+            valueEth: number | null; valueUsd: number | null; change24h: number | null;
+        }>;
+        totalValueEth: number; totalValueUsd: number;
+    }> {
+        const { default: axios } = await import('axios');
+        const ethPriceUsd = await this.getEthPriceUsd();
+        const { eth } = await this.getBalance();
+        const ethValueUsd = parseFloat(eth) * ethPriceUsd;
+        const tokens: any[] = [];
+
+        await Promise.all(Array.from(this.knownTokens).map(async (addr) => {
+            try {
+                const [balance, decimals, symbol] = await Promise.all([
+                    this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [this.account.address] }) as Promise<bigint>,
+                    this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'decimals' }) as Promise<number>,
+                    this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'symbol' }) as Promise<string>
+                ]);
+                if (balance === 0n) return;
+                const balanceHuman = Number(formatUnits(balance, decimals));
+                let priceUsd: number | null = null;
+                let change24h: number | null = null;
+                try {
+                    const res = await axios.get(`https://api.dexscreener.com/latest/dex/search?q=${addr}`, { timeout: 4000 });
+                    const pair = res.data?.pairs?.[0];
+                    if (pair) { priceUsd = parseFloat(pair.priceUsd || '0') || null; change24h = pair.priceChange?.h24 ?? null; }
+                } catch { /* silent */ }
+                const valueUsd = priceUsd !== null ? balanceHuman * priceUsd : null;
+                const valueEth = valueUsd !== null ? valueUsd / ethPriceUsd : null;
+                tokens.push({ address: addr, symbol, balance: balanceHuman.toFixed(6), decimals, priceUsd, valueEth, valueUsd, change24h });
+            } catch { /* silent */ }
+        }));
+
+        tokens.sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
+        const totalValueEth = tokens.reduce((s, t) => s + (t.valueEth ?? 0), 0) + parseFloat(eth);
+        const totalValueUsd = tokens.reduce((s, t) => s + (t.valueUsd ?? 0), 0) + ethValueUsd;
+        return { ethBalance: eth, ethValueUsd, tokens, totalValueEth, totalValueUsd };
+    }
+
+    // ============ SEND ETH ============
+    async sendEth(to: Address, amountEth: number): Promise<{ success: boolean; txHash?: string; error?: string }> {
+        if (!this.isReady) return { success: false, error: 'Executor belum siap' };
+        try {
+            const value = parseEther(amountEth.toString());
+            const { wei: balance } = await this.getBalance();
+            if (balance < value + parseEther('0.001')) {
+                return { success: false, error: `Saldo tidak cukup: ${formatEther(balance)} ETH` };
+            }
+            const gasPrice = await this.getGasPrice();
+            const txHash = await (this.walletClient as any).sendTransaction({ to, value, ...gasPrice });
+            await this.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 30_000 });
+            console.log(`✅ Sent ${amountEth} ETH → ${to}`);
+            return { success: true, txHash };
+        } catch (e: any) {
+            return { success: false, error: e?.shortMessage || e?.message || 'Unknown error' };
+        }
+    }
+
+    // ============ SEND TOKEN ============
+    async sendToken(tokenAddress: Address, to: Address, amountHuman: number, decimals: number): Promise<{ success: boolean; txHash?: string; error?: string }> {
+        if (!this.isReady) return { success: false, error: 'Executor belum siap' };
+        try {
+            const amount = parseUnits(amountHuman.toString(), decimals);
+            const balance = await this.publicClient.readContract({
+                address: tokenAddress, abi: ERC20_ABI, functionName: 'balanceOf', args: [this.account.address]
+            }) as bigint;
+            if (balance < amount) return { success: false, error: 'Saldo token tidak cukup' };
+            const gasPrice = await this.getGasPrice();
+            const txHash = await (this.walletClient as any).writeContract({
+                address: tokenAddress, abi: ERC20_ABI, functionName: 'transfer', args: [to, amount], ...gasPrice
+            });
+            await this.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 30_000 });
+            console.log(`✅ Sent ${amountHuman} token (${tokenAddress}) → ${to}`);
+            return { success: true, txHash };
+        } catch (e: any) {
+            return { success: false, error: e?.shortMessage || e?.message || 'Unknown error' };
         }
     }
 

@@ -437,6 +437,24 @@ export class AISniperBot extends EventEmitter {
         return { success: result.success, txHash: result.txHash as string | undefined, error: result.error };
     }
 
+    // ============ PORTFOLIO ============
+    async getPortfolio() {
+        if (!this.executor) {
+            return { ethBalance: '0', ethValueUsd: 0, tokens: [], totalValueEth: 0, totalValueUsd: 0 };
+        }
+        return this.executor.getPortfolioData();
+    }
+
+    // ============ SEND FUNDS ============
+    async sendFunds(type: 'eth' | 'token', to: string, amount: number, tokenAddress?: string, decimals?: number) {
+        if (!this.executor) return { success: false, error: 'Executor belum siap (PRIVATE_KEY belum dikonfigurasi)' };
+        if (type === 'eth') {
+            return this.executor.sendEth(to as `0x${string}`, amount);
+        }
+        if (!tokenAddress) return { success: false, error: 'tokenAddress diperlukan untuk send token' };
+        return this.executor.sendToken(tokenAddress as `0x${string}`, to as `0x${string}`, amount, decimals ?? 18);
+    }
+
     // ============ COPY WALLET MANAGEMENT ============
     getCopyWallets() { return this.copyMonitor.getWallets(); }
 

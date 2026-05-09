@@ -117,6 +117,39 @@ app.get('/api/pnl', async (_req: Request, res: Response) => {
     }
 });
 
+// ============ PORTFOLIO ENDPOINT ============
+app.get('/api/portfolio', async (_req: Request, res: Response) => {
+    try {
+        const data = await bot.getPortfolio();
+        res.json({ ...data, timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============ SEND FUNDS ENDPOINT ============
+app.post('/api/send', async (req: Request, res: Response) => {
+    const { type, to, amount, tokenAddress, decimals } = req.body;
+    if (!to || typeof to !== 'string' || !to.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tujuan tidak valid' });
+        return;
+    }
+    if (!amount || typeof amount !== 'number' || amount <= 0) {
+        res.status(400).json({ error: 'Jumlah tidak valid' });
+        return;
+    }
+    if (!['eth', 'token'].includes(type)) {
+        res.status(400).json({ error: 'type harus "eth" atau "token"' });
+        return;
+    }
+    try {
+        const result = await bot.sendFunds(type, to, amount, tokenAddress, decimals);
+        res.json(result);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ============ MANUAL SELL ENDPOINT ============
 app.post('/api/sell', async (req: Request, res: Response) => {
     const { tokenAddress, percent } = req.body;
