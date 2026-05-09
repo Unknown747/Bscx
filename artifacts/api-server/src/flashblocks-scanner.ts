@@ -22,12 +22,11 @@ interface TokenSafety {
     safetyScore: number;
 }
 
-interface SnipeOpportunity {
-    pool: PoolData;
-    safety: TokenSafety;
-    estimatedGas: number;
-    score: number;
-}
+// FIX: Removed unused SnipeOpportunity interface
+
+// Constant to avoid hardcoding in multiple places
+const UNISWAP_V3_FACTORY = '0x33128a8fC17869897dcE68Ed026d694621fd6Df';
+const POOL_CREATED_SIG = '0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118';
 
 // ============ MAIN SCANNER CLASS ============
 export class FlashblocksScanner extends EventEmitter {
@@ -36,7 +35,7 @@ export class FlashblocksScanner extends EventEmitter {
     private reconnectAttempts = 0;
     private isConnected = false;
     private pendingTransactions: Map<string, number> = new Map();
-    private lastPing = 0;
+    private keepAliveInterval: NodeJS.Timeout | null = null; // FIX: store interval ref
     private readonly RPC_ENDPOINTS = [
         { url: 'wss://mainnet-preconf.base.org', type: 'flashblocks', priority: 1 },
         { url: 'wss://base.llamarpc.com', type: 'public', priority: 2 },
@@ -45,15 +44,15 @@ export class FlashblocksScanner extends EventEmitter {
     
     // Konfigurasi modal 100rb (0.006 ETH)
     private readonly CONFIG = {
-        MAX_TRADE_ETH: 0.0006,           // 10% dari modal
-        MIN_LIQUIDITY_ETH: 0.15,          // Minimal liquidity pool
-        MAX_LIQUIDITY_ETH: 2.0,           // Max liquidity (hindari gas war)
-        MAX_POOL_AGE_SECONDS: 60,         // Hanya pool < 1 menit
-        MAX_GAS_PRICE_GWEI: 2.0,          // Max gas untuk modal kecil
-        MIN_SAFETY_SCORE: 65,             // Minimal safety score
-        MAX_BUY_TAX_PERCENT: 10,          // Max tax beli
-        MAX_SELL_TAX_PERCENT: 10,         // Max tax jual
-        SCAN_INTERVAL_MS: 200,            // Scan tiap 200ms (Flashblocks speed)
+        MAX_TRADE_ETH: 0.0006,
+        MIN_LIQUIDITY_ETH: 0.15,
+        MAX_LIQUIDITY_ETH: 2.0,
+        MAX_POOL_AGE_SECONDS: 60,
+        MAX_GAS_PRICE_GWEI: 2.0,
+        MIN_SAFETY_SCORE: 65,
+        MAX_BUY_TAX_PERCENT: 10,
+        MAX_SELL_TAX_PERCENT: 10,
+        SCAN_INTERVAL_MS: 200,
     };
 
     constructor() {
@@ -68,7 +67,6 @@ export class FlashblocksScanner extends EventEmitter {
         console.log(`💰 Modal Mode: ${this.CONFIG.MAX_TRADE_ETH * 1000} USD (100rb)`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
-        // Test all endpoints first
         const fastestEndpoint = await this.findFastestEndpoint();
         if (fastestEndpoint) {
             this.currentWsUrl = fastestEndpoint.url;
@@ -122,30 +120,31 @@ export class FlashblocksScanner extends EventEmitter {
         return new Promise((resolve, reject) => {
             console.log(`🔌 Connecting to ${this.currentWsUrl}...`);
             
+            // FIX: removed invalid 'timeout' option (not supported by ws library)
             this.ws = new WebSocket(this.currentWsUrl, {
                 handshakeTimeout: 10000,
-                timeout: 30000,
             });
             
+            // FIX: settled flag prevents double-reject from timeout + error handler
+            let settled = false;
+
             const timeoutId = setTimeout(() => {
+                if (settled) return;
+                settled = true;
                 reject(new Error('Connection timeout'));
             }, 15000);
             
             this.ws.on('open', async () => {
+                if (settled) return;
+                settled = true;
                 clearTimeout(timeoutId);
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
-                this.lastPing = Date.now();
                 
                 console.log('✅ WebSocket CONNECTED!');
                 
-                // Subscribe ke newPendingTransactions (kunci deteksi koin baru)
                 this.subscribeToMempool();
-                
-                // Subscribe ke logs Uniswap V3 Factory
                 this.subscribeToPoolEvents();
-                
-                // Start keepalive ping
                 this.startKeepAlive();
                 
                 resolve();
@@ -153,8 +152,12 @@ export class FlashblocksScanner extends EventEmitter {
             
             this.ws.on('error', (error) => {
                 console.error(`WebSocket error: ${error.message}`);
+                if (!settled) {
+                    settled = true;
+                    clearTimeout(timeoutId);
+                    reject(error);
+                }
                 this.handleDisconnect();
-                reject(error);
             });
             
             this.ws.on('close', () => {
@@ -171,26 +174,19 @@ export class FlashblocksScanner extends EventEmitter {
     private subscribeToMempool(): void {
         if (!this.ws) return;
         
-        const subscribeMsg = JSON.stringify({
+        this.ws.send(JSON.stringify({
             jsonrpc: '2.0',
             id: 1,
             method: 'eth_subscribe',
             params: ['newPendingTransactions']
-        });
-        
-        this.ws.send(subscribeMsg);
+        }));
         console.log('✅ Subscribed to newPendingTransactions');
     }
 
     private subscribeToPoolEvents(): void {
         if (!this.ws) return;
         
-        // Uniswap V3 Factory address on Base
-        const UNISWAP_V3_FACTORY = '0x33128a8fC17869897dcE68Ed026d694621fd6Df';
-        // PoolCreated event signature
-        const POOL_CREATED_SIG = '0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118';
-        
-        const subscribeMsg = JSON.stringify({
+        this.ws.send(JSON.stringify({
             jsonrpc: '2.0',
             id: 2,
             method: 'eth_subscribe',
@@ -198,14 +194,14 @@ export class FlashblocksScanner extends EventEmitter {
                 address: UNISWAP_V3_FACTORY,
                 topics: [POOL_CREATED_SIG]
             }]
-        });
-        
-        this.ws.send(subscribeMsg);
+        }));
         console.log('✅ Subscribed to pool creation events');
     }
 
     private startKeepAlive(): void {
-        setInterval(() => {
+        // FIX: store interval so it can be cleared on disconnect
+        if (this.keepAliveInterval) clearInterval(this.keepAliveInterval);
+        this.keepAliveInterval = setInterval(() => {
             if (this.ws && this.isConnected) {
                 this.ws.send(JSON.stringify({
                     jsonrpc: '2.0',
@@ -224,18 +220,17 @@ export class FlashblocksScanner extends EventEmitter {
             if (parsed.method === 'eth_subscription') {
                 const result = parsed.params.result;
                 
-                // Handle new pending transactions
                 if (typeof result === 'string' && result.startsWith('0x')) {
                     this.onNewTransaction(result);
                 }
                 
-                // Handle new pool creation
-                if (result && result.address === '0x33128a8fC17869897dcE68Ed026d694621fd6Df') {
+                // FIX: use constant for address comparison
+                if (result && result.address === UNISWAP_V3_FACTORY) {
                     this.onPoolCreated(result);
                 }
             }
         } catch (error) {
-            // Parse error - ignore malformed messages
+            // Ignore malformed messages
         }
     }
 
@@ -243,22 +238,18 @@ export class FlashblocksScanner extends EventEmitter {
     private onNewTransaction(txHash: string): void {
         const now = Date.now();
         
-        // Deduplicate transactions
         if (this.pendingTransactions.has(txHash)) return;
         this.pendingTransactions.set(txHash, now);
         
-        // Clean old entries every 1000 txs
         if (this.pendingTransactions.size > 1000) {
-            const cutoff = now - 30000; // 30 seconds
+            const cutoff = now - 30000;
             for (const [hash, time] of this.pendingTransactions) {
                 if (time < cutoff) this.pendingTransactions.delete(hash);
             }
         }
         
-        // Emit untuk monitoring
         this.emit('transaction', { hash: txHash, timestamp: now });
         
-        // Log setiap 10 transaksi (biar ga spam)
         if (this.pendingTransactions.size % 10 === 0) {
             console.log(`📊 Mempool size: ${this.pendingTransactions.size} pending txs`);
         }
@@ -279,13 +270,11 @@ export class FlashblocksScanner extends EventEmitter {
             blockNumber: parseInt(logData.blockNumber, 16)
         };
         
-        // Get pool liquidity
         const liquidity = await this.getPoolLiquidity(poolData.poolAddress);
         if (liquidity) {
             poolData.liquidity = liquidity;
         }
         
-        // Check if pool meets criteria for modal kecil
         const isValid = await this.validatePool(poolData);
         
         if (isValid) {
@@ -301,7 +290,6 @@ export class FlashblocksScanner extends EventEmitter {
     }
 
     private async validatePool(pool: PoolData): Promise<boolean> {
-        // Filter 1: Liquidity must be in range
         if (pool.liquidity < this.CONFIG.MIN_LIQUIDITY_ETH) {
             console.log(`   ❌ Liquidity too low: ${pool.liquidity.toFixed(3)} ETH (min: ${this.CONFIG.MIN_LIQUIDITY_ETH})`);
             return false;
@@ -312,14 +300,12 @@ export class FlashblocksScanner extends EventEmitter {
             return false;
         }
         
-        // Filter 2: Pool age
         const ageSeconds = (Date.now() - pool.createdAt) / 1000;
         if (ageSeconds > this.CONFIG.MAX_POOL_AGE_SECONDS) {
             console.log(`   ❌ Pool too old: ${ageSeconds.toFixed(0)}s (max: ${this.CONFIG.MAX_POOL_AGE_SECONDS}s)`);
             return false;
         }
         
-        // Filter 3: Token safety check (most important!)
         const safety = await this.checkTokenSafety(pool.token0);
         if (!safety) return false;
         
@@ -350,7 +336,6 @@ export class FlashblocksScanner extends EventEmitter {
     // ============ API INTEGRATIONS ============
     private async getPoolLiquidity(poolAddress: string): Promise<number | null> {
         try {
-            // Use DexScreener API (free, no key needed)
             const response = await axios.get(
                 `https://api.dexscreener.com/latest/dex/search?q=${poolAddress}`,
                 { timeout: 5000 }
@@ -375,13 +360,12 @@ export class FlashblocksScanner extends EventEmitter {
             );
             return response.data.ethereum.usd;
         } catch {
-            return 3000; // Fallback price
+            return 3000;
         }
     }
 
     private async checkTokenSafety(tokenAddress: string): Promise<TokenSafety | null> {
         try {
-            // Use GoPlus API (free)
             const response = await axios.get(
                 `https://api.gopluslabs.io/api/v1/token_security/8453?contract_addresses=${tokenAddress}`,
                 { timeout: 8000 }
@@ -407,7 +391,7 @@ export class FlashblocksScanner extends EventEmitter {
     private calculateSafetyScore(data: any): number {
         let score = 100;
         
-        if (data.is_honeypot === '1') score -= 50;
+        // FIX: was duplicated (deducted 100 total instead of 50)
         if (data.is_honeypot === '1') score -= 50;
         if (data.mintable === 'true') score -= 20;
         if (data.can_take_back_ownership === 'true') score -= 15;
@@ -422,6 +406,7 @@ export class FlashblocksScanner extends EventEmitter {
     }
 
     private handleDisconnect(): void {
+        if (!this.isConnected) return; // prevent multiple disconnect triggers
         this.isConnected = false;
         this.reconnectAttempts++;
         
@@ -443,6 +428,11 @@ export class FlashblocksScanner extends EventEmitter {
     }
     
     disconnect(): void {
+        // FIX: clear keepAlive interval on disconnect
+        if (this.keepAliveInterval) {
+            clearInterval(this.keepAliveInterval);
+            this.keepAliveInterval = null;
+        }
         if (this.ws) {
             this.ws.close();
             this.ws = null;

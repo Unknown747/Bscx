@@ -58,14 +58,13 @@ export class CopyTradeMonitor extends EventEmitter {
     private recentTrades: Map<string, number> = new Map();
     private isScanning = false;
     
-    // Konfigurasi copy trade untuk modal 100rb
     private readonly CONFIG = {
-        COPY_INVEST_AMOUNT: 0.0003,      // 50% dari max trade (0.0006 ETH)
-        COPY_DELAY_SECONDS: 2,            // Delay 2 detik setelah whale buy
-        MAX_COPY_PER_DAY: 10,             // Maksimal 10 copy per hari
-        MIN_WALLET_SCORE: 60,             // Minimal skor wallet untuk di-copy
-        BLACKLIST_TOKENS: new Set<string>(), // Token blacklist
-        SCAN_INTERVAL_MS: 2000,           // Scan setiap 2 detik
+        COPY_INVEST_AMOUNT: 0.0003,
+        COPY_DELAY_SECONDS: 2,
+        MAX_COPY_PER_DAY: 10,
+        MIN_WALLET_SCORE: 60,
+        BLACKLIST_TOKENS: new Set<string>(),
+        SCAN_INTERVAL_MS: 2000,
     };
     
     private dailyCopyCount = 0;
@@ -88,7 +87,6 @@ export class CopyTradeMonitor extends EventEmitter {
             this.scanWallets();
         }, this.CONFIG.SCAN_INTERVAL_MS);
         
-        // Reset daily counter at midnight
         this.resetDailyCounter();
     }
     
@@ -123,6 +121,12 @@ export class CopyTradeMonitor extends EventEmitter {
             }
         }
         
+        // FIX: clean up recentTrades to prevent unbounded memory growth
+        const cutoff = Date.now() - 60000;
+        for (const [hash, time] of this.recentTrades) {
+            if (time < cutoff) this.recentTrades.delete(hash);
+        }
+
         this.isScanning = false;
     }
 
@@ -140,18 +144,10 @@ export class CopyTradeMonitor extends EventEmitter {
                 }
             );
             
-            return response.data || [];
+            // FIX: Blockscout returns { items: [], next_page_params: ... }, not a plain array
+            return response.data?.items || [];
         } catch (error) {
-            // Fallback to DexScreener
-            try {
-                const response = await axios.get(
-                    `https://api.dexscreener.com/latest/dex/search?q=${address}`,
-                    { timeout: 5000 }
-                );
-                return response.data.pairs || [];
-            } catch {
-                return [];
-            }
+            return [];
         }
     }
 
@@ -160,20 +156,18 @@ export class CopyTradeMonitor extends EventEmitter {
         const now = Date.now();
         
         for (const tx of transactions) {
-            // Check if this is a buy transaction (simplified detection)
             const isBuy = this.isBuyTransaction(tx);
             if (!isBuy) continue;
             
             const txHash = tx.hash || tx.id;
             const txTime = this.getTxTimestamp(tx);
             
-            // Check if already processed
             if (this.recentTrades.has(txHash)) continue;
             
-            // Check if within last 10 seconds
+            // FIX: if txTime is 0 (no timestamp), skip instead of always passing
+            if (txTime === 0) continue;
             if (now - txTime > 10000) continue;
             
-            // Check if different from last buy
             const tokenAddress = this.extractTokenAddress(tx);
             if (tokenAddress === wallet.lastBuyToken) continue;
             
@@ -185,21 +179,19 @@ export class CopyTradeMonitor extends EventEmitter {
     }
 
     private isBuyTransaction(tx: any): boolean {
-        // Simplified detection - in production, you'd decode the transaction
         const input = tx.input || tx.data || '';
-        // Uniswap V3 exactInput signature
-        return input.includes('0x414bf389') || input.includes('0xbc651188');
+        // FIX: use startsWith, not includes — selector is always at the beginning of calldata
+        return input.startsWith('0x414bf389') || input.startsWith('0xbc651188');
     }
 
     private getTxTimestamp(tx: any): number {
         if (tx.timestamp) return tx.timestamp * 1000;
         if (tx.time) return new Date(tx.time).getTime();
-        return Date.now();
+        // FIX: return 0 instead of Date.now() — caller will skip txs with no timestamp
+        return 0;
     }
 
     private extractTokenAddress(tx: any): string {
-        // Extract token address from transaction data
-        // Simplified - in production, decode properly
         const data = tx.input || tx.data || '';
         const match = data.match(/0x[a-fA-F0-9]{40}/);
         return match ? match[0] : '';
@@ -210,23 +202,19 @@ export class CopyTradeMonitor extends EventEmitter {
         const tokenAddress = this.extractTokenAddress(tx);
         if (!tokenAddress) return;
         
-        // Check blacklist
         if (this.CONFIG.BLACKLIST_TOKENS.has(tokenAddress)) {
             console.log(`   ⚠️ Skipping blacklisted token: ${tokenAddress.slice(0, 10)}...`);
             return;
         }
         
-        // Check daily limit
         if (this.dailyCopyCount >= this.CONFIG.MAX_COPY_PER_DAY) {
             console.log('📊 Daily copy limit reached');
             return;
         }
         
-        // Get token info
         const tokenInfo = await this.getTokenInfo(tokenAddress);
         if (!tokenInfo) return;
         
-        // Safety check before copying
         const isSafe = await this.quickSafetyCheck(tokenAddress);
         if (!isSafe) {
             console.log(`   🛡️ Token failed safety check, not copying`);
@@ -242,12 +230,10 @@ export class CopyTradeMonitor extends EventEmitter {
         console.log(`⏱️ Delay: ${this.CONFIG.COPY_DELAY_SECONDS}s`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
         
-        // Update wallet state
         wallet.lastBuyTime = Date.now();
         wallet.lastBuyToken = tokenAddress;
         this.dailyCopyCount++;
         
-        // Emit event for execution
         this.emit('copy-opportunity', {
             walletAddress: wallet.address,
             walletName: wallet.name,
@@ -258,7 +244,6 @@ export class CopyTradeMonitor extends EventEmitter {
             txHash: tx.hash || tx.id
         } as CopyTradeOpportunity);
         
-        // Schedule the actual buy after delay
         setTimeout(() => {
             this.emit('execute-copy', {
                 tokenAddress: tokenAddress,
@@ -271,7 +256,6 @@ export class CopyTradeMonitor extends EventEmitter {
 
     private async getTokenInfo(tokenAddress: string): Promise<{ symbol: string; name: string } | null> {
         try {
-            // Use DexScreener to get token info
             const response = await axios.get(
                 `https://api.dexscreener.com/latest/dex/search?q=${tokenAddress}`,
                 { timeout: 5000 }
@@ -299,7 +283,6 @@ export class CopyTradeMonitor extends EventEmitter {
             const data = response.data.result[tokenAddress.toLowerCase()];
             if (!data) return false;
             
-            // Quick checks
             if (data.is_honeypot === '1') return false;
             
             const buyTax = parseFloat(data.buy_tax || '0');
@@ -310,7 +293,7 @@ export class CopyTradeMonitor extends EventEmitter {
             
             return true;
         } catch {
-            return false; // Fail safe - don't copy if can't verify
+            return false;
         }
     }
 

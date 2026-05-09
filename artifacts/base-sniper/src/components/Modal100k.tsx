@@ -30,9 +30,12 @@ export interface ModalSettings {
     copyDelay: number;
 }
 
+// FIX: Uniswap V3 swap uses ~150,000 gas units, not 21,000 (ETH transfer)
+const SWAP_GAS_UNITS = 150000;
+
 const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance = 0.006 }) => {
     const [settings, setSettings] = useState<ModalSettings>({
-        totalCapital: 0.006,
+        totalCapital: currentBalance,
         maxTradeAmount: 0.0006,
         minLiquidity: 0.15,
         maxSlippage: 15,
@@ -52,17 +55,23 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
     const [recommendedTrades, setRecommendedTrades] = useState(0);
     
     useEffect(() => {
-        // Calculate estimated gas cost based on settings
-        const gasCost = (settings.maxFeePerGas * 21000) / 1e9;
+        // FIX: use SWAP_GAS_UNITS (150,000) instead of 21,000
+        const gasCost = (settings.maxFeePerGas * SWAP_GAS_UNITS) / 1e9;
         setEstimatedGasCost(gasCost);
         
-        // Calculate how many trades can be done
-        const availableForTrades = settings.totalCapital * 0.7; // 70% for trades, 30% for gas
-        const trades = Math.floor(availableForTrades / (settings.maxTradeAmount + gasCost));
+        // FIX: guard against division by zero when totalCapital is 0 or NaN
+        const capital = settings.totalCapital > 0 ? settings.totalCapital : 0.006;
+        const tradeAmount = settings.maxTradeAmount > 0 ? settings.maxTradeAmount : 0.0006;
+        const availableForTrades = capital * 0.7;
+        const trades = Math.floor(availableForTrades / (tradeAmount + gasCost));
         setRecommendedTrades(Math.min(trades, 15));
     }, [settings]);
     
-    const rupiahEquivalent = settings.totalCapital * 3000 * 18000; // ETH * USD * IDR approx
+    // FIX: guard against NaN in display calculations
+    const capital = settings.totalCapital > 0 ? settings.totalCapital : 0;
+    const tradeAmount = settings.maxTradeAmount > 0 ? settings.maxTradeAmount : 0;
+    const rupiahEquivalent = capital * 3000 * 18000;
+    const tradePercent = capital > 0 ? Math.floor(tradeAmount / capital * 100) : 0;
     
     return (
         <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50 p-4">
@@ -83,13 +92,13 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                         <div className="flex justify-between items-center flex-wrap gap-4">
                             <div>
                                 <div className="text-gray-400 text-sm">Total Modal</div>
-                                <div className="text-2xl font-bold text-white">{settings.totalCapital.toFixed(4)} ETH</div>
+                                <div className="text-2xl font-bold text-white">{capital.toFixed(4)} ETH</div>
                                 <div className="text-green-400 text-sm">≈ Rp{(rupiahEquivalent / 1000).toFixed(0)}rb</div>
                             </div>
                             <div>
                                 <div className="text-gray-400 text-sm">Per Snipe</div>
-                                <div className="text-xl font-bold text-yellow-400">{settings.maxTradeAmount.toFixed(4)} ETH</div>
-                                <div className="text-gray-400 text-xs">≈ {Math.floor(settings.maxTradeAmount / settings.totalCapital * 100)}% dari modal</div>
+                                <div className="text-xl font-bold text-yellow-400">{tradeAmount.toFixed(4)} ETH</div>
+                                <div className="text-gray-400 text-xs">≈ {tradePercent}% dari modal</div>
                             </div>
                             <div>
                                 <div className="text-gray-400 text-sm">Estimasi Gas</div>
@@ -114,7 +123,7 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                             <div className="text-sm text-yellow-300">
                                 <p className="font-bold">Peringatan Modal Kecil:</p>
                                 <p className="text-yellow-200/80 mt-1">
-                                    Dengan modal {settings.totalCapital.toFixed(3)} ETH, Anda hanya bisa melakukan ~{recommendedTrades} kali snipe.
+                                    Dengan modal {capital.toFixed(3)} ETH, Anda hanya bisa melakukan ~{recommendedTrades} kali snipe.
                                     <strong className="block mt-1">FOKUS ke COPY TRADING</strong> - jangan snipe langsung!
                                 </p>
                             </div>
@@ -130,8 +139,12 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                 <input
                                     type="number"
                                     step="0.001"
+                                    min="0.001"
                                     value={settings.totalCapital}
-                                    onChange={(e) => setSettings({...settings, totalCapital: parseFloat(e.target.value)})}
+                                    onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        if (!isNaN(val)) setSettings({...settings, totalCapital: val});
+                                    }}
                                     className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
                                 />
                                 <p className="text-xs text-gray-500 mt-1">0.006 ETH = ~Rp100.000</p>
@@ -141,8 +154,12 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                 <input
                                     type="number"
                                     step="0.0001"
+                                    min="0.0001"
                                     value={settings.maxTradeAmount}
-                                    onChange={(e) => setSettings({...settings, maxTradeAmount: parseFloat(e.target.value)})}
+                                    onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        if (!isNaN(val)) setSettings({...settings, maxTradeAmount: val});
+                                    }}
                                     className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
                                 />
                                 <p className="text-xs text-green-400 mt-1">✅ Rekomendasi: 10-15% dari modal</p>
@@ -152,8 +169,12 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                 <input
                                     type="number"
                                     step="0.05"
+                                    min="0"
                                     value={settings.minLiquidity}
-                                    onChange={(e) => setSettings({...settings, minLiquidity: parseFloat(e.target.value)})}
+                                    onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        if (!isNaN(val)) setSettings({...settings, minLiquidity: val});
+                                    }}
                                     className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
                                 />
                                 <p className="text-xs text-gray-500 mt-1">Rekomendasi: 0.15 - 0.5 ETH</p>
@@ -163,8 +184,13 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                 <input
                                     type="number"
                                     step="1"
+                                    min="1"
+                                    max="50"
                                     value={settings.maxSlippage}
-                                    onChange={(e) => setSettings({...settings, maxSlippage: parseFloat(e.target.value)})}
+                                    onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        if (!isNaN(val)) setSettings({...settings, maxSlippage: val});
+                                    }}
                                     className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
                                 />
                                 <p className="text-xs text-yellow-400 mt-1">⚠️ Modal kecil bisa lebih tinggi (10-20%)</p>
@@ -177,31 +203,69 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                         <h3 className="text-lg font-semibold text-white mb-4">📈 Exit Strategy (Ambil Untung Cepat)</h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                             <div className="bg-gray-900 rounded-lg p-3">
-                                <div className="text-gray-400 text-sm">Take Profit 1</div>
-                                <div className="flex items-center gap-3">
+                                <div className="text-gray-400 text-sm mb-2">Take Profit 1</div>
+                                <div className="flex items-center gap-3 mb-2">
                                     <input
                                         type="number"
                                         step="0.5"
+                                        min="1"
                                         value={settings.tp1Multiplier}
-                                        onChange={(e) => setSettings({...settings, tp1Multiplier: parseFloat(e.target.value)})}
+                                        onChange={(e) => {
+                                            const val = parseFloat(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, tp1Multiplier: val});
+                                        }}
                                         className="w-24 bg-gray-800 border border-gray-700 rounded p-1 text-white"
                                     />
                                     <span className="text-green-400">x</span>
-                                    <span className="text-sm text-gray-400">jual {settings.tp1Percentage}%</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-400">Jual</span>
+                                    <input
+                                        type="number"
+                                        step="10"
+                                        min="1"
+                                        max="100"
+                                        value={settings.tp1Percentage}
+                                        onChange={(e) => {
+                                            const val = parseFloat(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, tp1Percentage: val});
+                                        }}
+                                        className="w-20 bg-gray-800 border border-gray-700 rounded p-1 text-white text-sm"
+                                    />
+                                    <span className="text-xs text-gray-400">% posisi</span>
                                 </div>
                             </div>
                             <div className="bg-gray-900 rounded-lg p-3">
-                                <div className="text-gray-400 text-sm">Take Profit 2</div>
-                                <div className="flex items-center gap-3">
+                                <div className="text-gray-400 text-sm mb-2">Take Profit 2</div>
+                                <div className="flex items-center gap-3 mb-2">
                                     <input
                                         type="number"
                                         step="0.5"
+                                        min="1"
                                         value={settings.tp2Multiplier}
-                                        onChange={(e) => setSettings({...settings, tp2Multiplier: parseFloat(e.target.value)})}
+                                        onChange={(e) => {
+                                            const val = parseFloat(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, tp2Multiplier: val});
+                                        }}
                                         className="w-24 bg-gray-800 border border-gray-700 rounded p-1 text-white"
                                     />
                                     <span className="text-green-400">x</span>
-                                    <span className="text-sm text-gray-400">jual {settings.tp2Percentage}%</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-gray-400">Jual</span>
+                                    <input
+                                        type="number"
+                                        step="10"
+                                        min="1"
+                                        max="100"
+                                        value={settings.tp2Percentage}
+                                        onChange={(e) => {
+                                            const val = parseFloat(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, tp2Percentage: val});
+                                        }}
+                                        className="w-20 bg-gray-800 border border-gray-700 rounded p-1 text-white text-sm"
+                                    />
+                                    <span className="text-xs text-gray-400">% posisi</span>
                                 </div>
                             </div>
                             <div className="bg-gray-900 rounded-lg p-3">
@@ -210,8 +274,13 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                     <input
                                         type="number"
                                         step="5"
+                                        min="1"
+                                        max="99"
                                         value={settings.stopLoss}
-                                        onChange={(e) => setSettings({...settings, stopLoss: parseFloat(e.target.value)})}
+                                        onChange={(e) => {
+                                            const val = parseFloat(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, stopLoss: val});
+                                        }}
                                         className="w-24 bg-gray-800 border border-gray-700 rounded p-1 text-white"
                                     />
                                     <span className="text-red-400">%</span>
@@ -231,8 +300,12 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                 <input
                                     type="number"
                                     step="0.1"
+                                    min="0"
                                     value={settings.maxPriorityFee}
-                                    onChange={(e) => setSettings({...settings, maxPriorityFee: parseFloat(e.target.value)})}
+                                    onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        if (!isNaN(val)) setSettings({...settings, maxPriorityFee: val});
+                                    }}
                                     className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
                                 />
                                 <p className="text-xs text-blue-400 mt-1">⚡ Super rendah, jangan ikut gas war!</p>
@@ -242,8 +315,12 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                 <input
                                     type="number"
                                     step="0.5"
+                                    min="0"
                                     value={settings.maxFeePerGas}
-                                    onChange={(e) => setSettings({...settings, maxFeePerGas: parseFloat(e.target.value)})}
+                                    onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        if (!isNaN(val)) setSettings({...settings, maxFeePerGas: val});
+                                    }}
                                     className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
                                 />
                             </div>
@@ -275,19 +352,27 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                     <input
                                         type="number"
                                         step="0.0001"
+                                        min="0.0001"
                                         value={settings.copyAmount}
-                                        onChange={(e) => setSettings({...settings, copyAmount: parseFloat(e.target.value)})}
+                                        onChange={(e) => {
+                                            const val = parseFloat(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, copyAmount: val});
+                                        }}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
                                     />
-                                    <p className="text-xs text-gray-500 mt-1">50% dari max trade ({settings.maxTradeAmount * 0.5} ETH)</p>
+                                    <p className="text-xs text-gray-500 mt-1">50% dari max trade ({(settings.maxTradeAmount * 0.5).toFixed(4)} ETH)</p>
                                 </div>
                                 <div>
                                     <label className="block text-sm text-gray-400 mb-1">Copy Delay (detik)</label>
                                     <input
                                         type="number"
                                         step="0.5"
+                                        min="0"
                                         value={settings.copyDelay}
-                                        onChange={(e) => setSettings({...settings, copyDelay: parseFloat(e.target.value)})}
+                                        onChange={(e) => {
+                                            const val = parseFloat(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, copyDelay: val});
+                                        }}
                                         className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
                                     />
                                     <p className="text-xs text-gray-500 mt-1">Delay setelah whale buy</p>
@@ -322,7 +407,7 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                         onClick={() => onSave(settings)}
                         className="flex-1 bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 py-3 rounded-xl font-semibold transition-all"
                     >
-                        💾 Apply Settings untuk Modal {settings.totalCapital.toFixed(3)} ETH
+                        💾 Apply Settings untuk Modal {capital.toFixed(3)} ETH
                     </button>
                     <button
                         onClick={onClose}

@@ -8,6 +8,16 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// FIX: add JSON body parser and CORS headers
+app.use(express.json());
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+});
+
 // ============ INITIALIZE COMPONENTS ============
 const scanner = new FlashblocksScanner();
 const copyMonitor = new CopyTradeMonitor();
@@ -18,15 +28,7 @@ async function startBot() {
     console.log(`💰 Capital Mode: ${process.env.TOTAL_CAPITAL_ETH || 0.006} ETH (100rb)`);
     console.log(`🐋 Copy Trading: ${process.env.COPY_TRADING_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
     
-    // Start Flashblocks scanner
-    await scanner.connect();
-    
-    // Start copy trade monitor
-    if (process.env.COPY_TRADING_ENABLED === 'true') {
-        copyMonitor.start();
-    }
-    
-    // Event handlers
+    // FIX: register event listeners BEFORE connecting to avoid missing first events
     scanner.on('pool-ready', async (pool) => {
         console.log(`\n🎯 POOL READY: ${pool.poolAddress}`);
         // Kirim ke frontend via WebSocket atau API
@@ -38,6 +40,14 @@ async function startBot() {
         console.log(`   Amount: ${data.amount} ETH`);
         // Execute actual swap here using viem/ethers
     });
+
+    // Start Flashblocks scanner
+    await scanner.connect();
+    
+    // Start copy trade monitor
+    if (process.env.COPY_TRADING_ENABLED === 'true') {
+        copyMonitor.start();
+    }
     
     console.log('\n✅ Bot is RUNNING!');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
@@ -68,10 +78,13 @@ app.listen(PORT, () => {
     startBot().catch(console.error);
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
+// FIX: handle both SIGINT (Ctrl+C) and SIGTERM (Docker/PM2 shutdown)
+function gracefulShutdown() {
     console.log('\n🛑 Shutting down...');
     scanner.disconnect();
     copyMonitor.stop();
     process.exit(0);
-});
+}
+
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
