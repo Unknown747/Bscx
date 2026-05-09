@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { authFetch } from '../lib/authFetch';
 
 interface BlacklistEntry {
     address: string;
@@ -22,7 +23,7 @@ const BlacklistModal: React.FC<BlacklistModalProps> = ({ apiUrl, onClose }) => {
 
     const fetchList = useCallback(async () => {
         try {
-            const res = await fetch(`${apiUrl}/api/blacklist`);
+            const res = await authFetch(`${apiUrl}/api/blacklist`);
             const data = await res.json();
             setList(data.blacklist || []);
         } catch { }
@@ -41,7 +42,7 @@ const BlacklistModal: React.FC<BlacklistModalProps> = ({ apiUrl, onClose }) => {
         }
         setAdding(true);
         try {
-            const res = await fetch(`${apiUrl}/api/blacklist`, {
+            const res = await authFetch(`${apiUrl}/api/blacklist`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ address: addr, label: addLabel.trim() || undefined })
@@ -58,7 +59,7 @@ const BlacklistModal: React.FC<BlacklistModalProps> = ({ apiUrl, onClose }) => {
     const handleRemove = async (address: string) => {
         setRemoving(address);
         try {
-            const res = await fetch(`${apiUrl}/api/blacklist/${address}`, { method: 'DELETE' });
+            const res = await authFetch(`${apiUrl}/api/blacklist/${address}`, { method: 'DELETE' });
             const data = await res.json();
             if (res.ok) setList(data.blacklist || []);
         } catch { }

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { authFetch } from '../lib/authFetch';
 
 interface TokenEntry {
     address: string;
@@ -82,7 +83,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
 
     const fetchPortfolio = useCallback(async () => {
         try {
-            const res  = await fetch(`${apiUrl}/api/portfolio`);
+            const res  = await authFetch(`${apiUrl}/api/portfolio`);
             const json = await res.json();
             setData(json);
             setLastUpdate(new Date().toLocaleTimeString('id-ID'));
@@ -121,7 +122,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
                 body.tokenAddress = sendState.token.address;
                 body.decimals     = sendState.token.decimals;
             }
-            const res  = await fetch(`${apiUrl}/api/send`, {
+            const res  = await authFetch(`${apiUrl}/api/send`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
             });
             const json = await res.json();
@@ -141,7 +142,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
         if (!swapState) return;
         setSwapState(s => s ? { ...s, step: 'swapping' } : s);
         try {
-            const res  = await fetch(`${apiUrl}/api/sell`, {
+            const res  = await authFetch(`${apiUrl}/api/sell`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ tokenAddress: swapState.token.address, percent: swapState.percent })
             });

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { authFetch } from '../lib/authFetch';
 
 interface Position {
     tokenAddress: string;
@@ -95,8 +96,8 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
     const fetchPositions = useCallback(async () => {
         try {
             const [posRes, cfgRes] = await Promise.all([
-                fetch(`${apiUrl}/api/positions`),
-                fetch(`${apiUrl}/api/config`)
+                authFetch(`${apiUrl}/api/positions`),
+                authFetch(`${apiUrl}/api/config`)
             ]);
             const posJson = await posRes.json();
             const cfgJson = await cfgRes.json();
@@ -115,7 +116,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
     const fetchPnL = useCallback(async () => {
         setPnlLoading(true);
         try {
-            const res  = await fetch(`${apiUrl}/api/pnl`);
+            const res  = await authFetch(`${apiUrl}/api/pnl`);
             const json = await res.json();
             const newMap = new Map<string, PnLEntry>();
             const flashing = new Set<string>();
@@ -138,7 +139,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
     const executeSell = useCallback(async (tokenAddress: string, percent: number) => {
         setSellState({ tokenAddress, step: 'selling', percent });
         try {
-            const res  = await fetch(`${apiUrl}/api/sell`, {
+            const res  = await authFetch(`${apiUrl}/api/sell`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ tokenAddress, percent })

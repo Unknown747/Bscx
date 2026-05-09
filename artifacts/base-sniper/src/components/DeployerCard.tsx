@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { authFetch } from '../lib/authFetch';
 
 interface TokenCheck {
     address:      string;
@@ -54,7 +55,7 @@ const DeployerCard: React.FC<DeployerCardProps> = ({ address, apiUrl, onClose })
     useEffect(() => {
         setLoading(true);
         setError('');
-        fetch(`${apiUrl}/api/reputation/${address}`)
+        authFetch(`${apiUrl}/api/reputation/${address}`)
             .then(r => r.json())
             .then(json => {
                 if (json.error) throw new Error(json.error);

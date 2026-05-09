@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import DeployerCard from './DeployerCard';
+import { authFetch } from '../lib/authFetch';
 
 interface LogEntry {
     id: string;
@@ -46,7 +47,7 @@ const ActivityLog: React.FC<ActivityLogProps> = ({ apiUrl }) => {
 
     const fetchLogs = useCallback(async () => {
         try {
-            const res  = await fetch(`${apiUrl}/api/logs`);
+            const res  = await authFetch(`${apiUrl}/api/logs`);
             const json = await res.json();
             setLogs(json.logs ?? []);
             setError('');

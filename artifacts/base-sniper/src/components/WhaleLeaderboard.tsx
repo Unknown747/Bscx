@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { authFetch } from '../lib/authFetch';
 
 interface Wallet {
     address: string;
@@ -51,7 +52,7 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
 
     const fetchWallets = useCallback(async () => {
         try {
-            const res  = await fetch(`${apiUrl}/api/wallets`);
+            const res  = await authFetch(`${apiUrl}/api/wallets`);
             const data = await res.json();
             setWallets(data.wallets || []);
             setLastUpdate(new Date().toLocaleTimeString('id-ID'));

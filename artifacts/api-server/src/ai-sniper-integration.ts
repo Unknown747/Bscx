@@ -68,6 +68,11 @@ interface RuntimeConfig {
     reputationMinScore: number;
 }
 
+/** Escape HTML special chars before inserting user-facing strings into Telegram HTML messages. */
+function sanitizeTg(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 export class AISniperBot extends EventEmitter {
     private scanner: FlashblocksScanner;
     private copyMonitor: CopyTradeMonitor;
@@ -355,7 +360,7 @@ export class AISniperBot extends EventEmitter {
             this.sendTelegram(
                 `❌ <b>BUY GAGAL</b>\n` +
                 `Token: <code>${d.tokenAddress?.slice(0, 10)}...</code>\n` +
-                `Alasan: ${d.error || 'Unknown error'}`
+                `Alasan: ${sanitizeTg(d.error || 'Unknown error')}`
             );
         });
 
@@ -807,7 +812,6 @@ export class AISniperBot extends EventEmitter {
             process.env.PRIVATE_KEY = keys.privateKey;
             try {
                 if (this.executor) this.executor.stop();
-                const { SwapExecutor } = require('./swap-executor');
                 this.executor = new SwapExecutor();
                 // Re-wire executor events
                 this.executor.on('buy-success',  (d: any) => { this.emit('buy-success',  d); this.addLog('buy-success',  `BUY ${d.tokenSymbol}`,                       `TX: ${d.txHash?.slice(0, 18)}...`); });

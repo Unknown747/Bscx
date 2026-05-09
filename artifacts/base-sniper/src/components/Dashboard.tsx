@@ -8,6 +8,7 @@ import CopyWalletsModal from './CopyWalletsModal';
 import BlacklistModal from './BlacklistModal';
 import TradeHistory from './TradeHistory';
 import WhaleLeaderboard from './WhaleLeaderboard';
+import { authFetch } from '../lib/authFetch';
 
 interface Status {
     connected: boolean;
@@ -73,8 +74,8 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const fetchData = useCallback(async () => {
         try {
             const [statusRes, configRes] = await Promise.all([
-                fetch(`${apiUrl}/api/status`),
-                fetch(`${apiUrl}/api/config`)
+                authFetch(`${apiUrl}/api/status`),
+                authFetch(`${apiUrl}/api/config`)
             ]);
             setStatus(await statusRes.json());
             setConfig(await configRes.json());
@@ -87,7 +88,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
 
     const fetchBalance = useCallback(async () => {
         try {
-            const res  = await fetch(`${apiUrl}/api/portfolio`);
+            const res  = await authFetch(`${apiUrl}/api/portfolio`);
             const json = await res.json();
             if (json.ethBalance) setEthBalance(parseFloat(json.ethBalance).toFixed(5));
         } catch { /* silent */ }
@@ -108,7 +109,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const handleSaveSettings = useCallback(async (settings: ModalSettings) => {
         setSaveStatus('saving');
         try {
-            const res = await fetch(`${apiUrl}/api/settings`, {
+            const res = await authFetch(`${apiUrl}/api/settings`, {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body:    JSON.stringify(settings)

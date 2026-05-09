@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { authFetch } from '../lib/authFetch';
 
 interface Wallet {
     address: string;
@@ -38,7 +39,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
 
     const fetchWallets = useCallback(async () => {
         try {
-            const res = await fetch(`${apiUrl}/api/wallets`);
+            const res = await authFetch(`${apiUrl}/api/wallets`);
             const data = await res.json();
             setWallets(data.wallets || []);
         } catch { }
@@ -52,7 +53,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
         if (!addAddress.trim()) { setAddError('Masukkan alamat wallet'); return; }
         setAdding(true);
         try {
-            const res = await fetch(`${apiUrl}/api/wallets`, {
+            const res = await authFetch(`${apiUrl}/api/wallets`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ address: addAddress.trim(), name: addLabel.trim() })
@@ -69,7 +70,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
     const handleRemove = async (address: string) => {
         if (!confirm('Hapus wallet ini dari daftar?')) return;
         try {
-            const res = await fetch(`${apiUrl}/api/wallets/${address}`, { method: 'DELETE' });
+            const res = await authFetch(`${apiUrl}/api/wallets/${address}`, { method: 'DELETE' });
             const data = await res.json();
             if (res.ok) setWallets(data.wallets);
         } catch { }
@@ -77,7 +78,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
 
     const handleToggle = async (address: string, current: boolean) => {
         try {
-            const res = await fetch(`${apiUrl}/api/wallets/${address}`, {
+            const res = await authFetch(`${apiUrl}/api/wallets/${address}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ active: !current })
@@ -90,7 +91,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
     const handleRename = async (address: string) => {
         if (!editName.trim()) { setEditingAddr(null); return; }
         try {
-            const res = await fetch(`${apiUrl}/api/wallets/${address}`, {
+            const res = await authFetch(`${apiUrl}/api/wallets/${address}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: editName.trim() })

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { authFetch } from '../lib/authFetch';
 
 interface ClosedTrade {
     id: string;
@@ -58,7 +59,7 @@ const TradeHistory: React.FC<Props> = ({ apiUrl }) => {
 
     const load = useCallback(async () => {
         try {
-            const res  = await fetch(`${apiUrl}/api/history`);
+            const res  = await authFetch(`${apiUrl}/api/history`);
             const json = await res.json();
             setData(json);
             setError('');

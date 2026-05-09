@@ -8,14 +8,53 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+// ── Session store (token → expiry ms) ─────────────────────────────────────────
+const sessions    = new Map<string, number>();
+const SESSION_TTL = 12 * 3600 * 1000; // 12 hours
+setInterval(() => {
+    const now = Date.now();
+    for (const [t, exp] of sessions) if (exp < now) sessions.delete(t);
+}, 3_600_000).unref();
+
+// ── Server-side rate limiting for /api/auth/verify ────────────────────────────
+const authAttempts = new Map<string, { count: number; resetAt: number }>();
+function getClientIp(req: Request): string {
+    return (req.headers['x-forwarded-for'] as string | undefined)
+        ?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? 'unknown';
+}
+function isRateLimited(ip: string): boolean {
+    const now = Date.now();
+    const e   = authAttempts.get(ip);
+    if (!e || e.resetAt < now) { authAttempts.set(ip, { count: 1, resetAt: now + 60_000 }); return false; }
+    if (e.count >= 20) return true;
+    e.count++;
+    return false;
+}
+
 // ============ MIDDLEWARE ============
 app.use(express.json());
 app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Session-Token');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
+});
+
+// ============ AUTH GUARD ============
+function requireAuth(req: Request, res: Response, next: NextFunction): void {
+    const token  = req.headers['x-session-token'] as string | undefined;
+    const expiry = token ? sessions.get(token) : undefined;
+    if (!token || !expiry || expiry < Date.now()) {
+        res.status(401).json({ error: 'Sesi tidak valid atau telah berakhir. Silakan login ulang.' });
+        return;
+    }
+    next();
+}
+// Protect every route except the login endpoint itself
+app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.path === '/api/auth/verify') return next();
+    requireAuth(req, res, next);
 });
 
 // ============ INITIALIZE BOT ============
@@ -32,8 +71,15 @@ async function startBot() {
     await bot.start();
 }
 
-// ============ AUTH ENDPOINT (public) ============
+// ============ AUTH ENDPOINT (public — exempt from requireAuth) ============
 app.post('/api/auth/verify', (req: Request, res: Response) => {
+    // Server-side rate limit: max 20 attempts per minute per IP
+    const ip = getClientIp(req);
+    if (isRateLimited(ip)) {
+        res.status(429).json({ ok: false, error: 'Terlalu banyak percobaan. Coba lagi dalam 1 menit.' });
+        return;
+    }
+
     const { password } = req.body;
     const expected = process.env.APP_PASSWORD || '';
 
@@ -51,9 +97,13 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
         password.length === expected.length &&
         crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expected));
 
-    res.status(match ? 200 : 401).json(
-        match ? { ok: true } : { ok: false, error: 'Password salah' }
-    );
+    if (match) {
+        const token = crypto.randomBytes(32).toString('hex');
+        sessions.set(token, Date.now() + SESSION_TTL);
+        res.json({ ok: true, token });
+    } else {
+        res.status(401).json({ ok: false, error: 'Password salah' });
+    }
 });
 
 // ============ API ENDPOINTS ============

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { authFetch } from '../lib/authFetch';
 
 interface KeyStatus {
     privateKey:     boolean;
@@ -38,7 +39,7 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
     const [telegramChatId,  setTelegramChatId]  = useState<FieldState>(EMPTY);
 
     useEffect(() => {
-        fetch(`${apiUrl}/api/keys`)
+        authFetch(`${apiUrl}/api/keys`)
             .then(r => r.json())
             .then(setKeyStatus)
             .catch(() => {});
@@ -66,7 +67,7 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
         }
 
         try {
-            const res = await fetch(`${apiUrl}/api/keys`, {
+            const res = await authFetch(`${apiUrl}/api/keys`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -83,7 +84,7 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
             setTelegramToken(EMPTY);
             setTelegramChatId(EMPTY);
 
-            const updated = await fetch(`${apiUrl}/api/keys`).then(r => r.json());
+            const updated = await authFetch(`${apiUrl}/api/keys`).then(r => r.json());
             setKeyStatus(updated);
             setTimeout(() => setSaveStatus('idle'), 2500);
         } catch (err: any) {
@@ -218,7 +219,7 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
                                         setTgTestStatus('sending');
                                         setTgTestError('');
                                         try {
-                                            const res = await fetch(`${apiUrl}/api/telegram/test`, { method: 'POST' });
+                                            const res = await authFetch(`${apiUrl}/api/telegram/test`, { method: 'POST' });
                                             const data = await res.json();
                                             if (data.ok) {
                                                 setTgTestStatus('ok');

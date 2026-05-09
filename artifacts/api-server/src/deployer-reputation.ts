@@ -45,6 +45,14 @@ export interface ReputationResult {
 // ── Cache: deployer address → result ─────────────────────────────────────────
 const reputationCache = new Map<string, { result: ReputationResult; ts: number }>();
 
+const MAX_CACHE_SIZE = 1_000;
+function pruneCache<V>(cache: Map<string, V>): void {
+    if (cache.size <= MAX_CACHE_SIZE) return;
+    const n = Math.floor(MAX_CACHE_SIZE * 0.1);
+    let i = 0;
+    for (const k of cache.keys()) { if (++i > n) break; cache.delete(k); }
+}
+
 // ── Internal: list token contracts deployed by an address ────────────────────
 async function getDeployerTokenContracts(deployerAddress: string, limit = 10): Promise<string[]> {
     try {
@@ -122,7 +130,8 @@ export async function getDeployerReputation(deployerAddress: string): Promise<Re
     const contracts = await getDeployerTokenContracts(key);
 
     if (contracts.length === 0) {
-        reputationCache.set(key, { result: UNKNOWN, ts: Date.now() });
+        pruneCache(reputationCache);
+    reputationCache.set(key, { result: UNKNOWN, ts: Date.now() });
         return UNKNOWN;
     }
 
@@ -161,6 +170,7 @@ export async function getDeployerReputation(deployerAddress: string): Promise<Re
         tokenChecks
     };
 
+    pruneCache(reputationCache);
     reputationCache.set(key, { result: rep, ts: Date.now() });
     return rep;
 }

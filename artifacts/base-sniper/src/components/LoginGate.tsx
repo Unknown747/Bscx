@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { setAuthToken } from '../lib/authFetch';
 
 interface LoginGateProps {
     apiUrl: string;
@@ -50,6 +51,7 @@ const LoginGate: React.FC<LoginGateProps> = ({ apiUrl, children }) => {
             const data = await res.json();
 
             if (data.ok) {
+                setAuthToken(data.token || '');
                 setUnlocked(true);
             } else {
                 setAttempts((a) => a + 1);

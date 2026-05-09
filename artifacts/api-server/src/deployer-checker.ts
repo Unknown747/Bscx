@@ -27,6 +27,14 @@ const deployerCache = new Map<string, { deployer: string; ts: number }>();
 // deployer:windowHours → deploy count
 const countCache    = new Map<string, { count: number; ts: number }>();
 
+const MAX_CACHE_SIZE = 1_000;
+function pruneCache<V>(cache: Map<string, V>): void {
+    if (cache.size <= MAX_CACHE_SIZE) return;
+    const n = Math.floor(MAX_CACHE_SIZE * 0.1);
+    let i = 0;
+    for (const k of cache.keys()) { if (++i > n) break; cache.delete(k); }
+}
+
 // ── Public: get who deployed a given token contract (exported for reuse) ──────
 export async function getTokenDeployer(tokenAddress: string): Promise<string | null> {
     const key    = tokenAddress.toLowerCase();
@@ -40,6 +48,7 @@ export async function getTokenDeployer(tokenAddress: string): Promise<string | n
         const deployer: string | undefined = res.data?.creator_address_hash;
         if (deployer) {
             const d = deployer.toLowerCase();
+            pruneCache(deployerCache);
             deployerCache.set(key, { deployer: d, ts: Date.now() });
             return d;
         }
@@ -77,6 +86,7 @@ async function countRecentDeploys(deployer: string, windowHours: number): Promis
             parseInt(tx.timeStamp ?? '0', 10) >= cutoff
         ).length;
 
+        pruneCache(countCache);
         countCache.set(key, { count, ts: Date.now() });
         return count;
     } catch {
