@@ -333,13 +333,33 @@ export class CopyTradeMonitor extends EventEmitter {
     }
     
     removeWallet(address: string): void {
-        const index = this.wallets.findIndex(w => w.address === address);
-        if (index !== -1) {
-            this.wallets[index].isActive = false;
+        const idx = this.wallets.findIndex(w => w.address.toLowerCase() === address.toLowerCase());
+        if (idx !== -1) {
+            this.wallets.splice(idx, 1);
             console.log(`❌ Removed wallet: ${address.slice(0, 10)}...`);
         }
     }
-    
+
+    toggleWallet(address: string, active: boolean): void {
+        const w = this.wallets.find(w => w.address.toLowerCase() === address.toLowerCase());
+        if (w) {
+            w.isActive = active;
+            console.log(`${active ? '✅' : '⏸️'} Wallet ${active ? 'activated' : 'paused'}: ${address.slice(0, 10)}...`);
+        }
+    }
+
+    renameWallet(address: string, name: string): void {
+        const w = this.wallets.find(w => w.address.toLowerCase() === address.toLowerCase());
+        if (w) {
+            w.name = name;
+            console.log(`✏️  Renamed wallet ${address.slice(0, 10)}... → "${name}"`);
+        }
+    }
+
+    getWallets(): WalletTarget[] {
+        return this.wallets.map(w => ({ ...w }));
+    }
+
     getStats(): object {
         return {
             activeWallets: this.wallets.filter(w => w.isActive).length,

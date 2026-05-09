@@ -418,6 +418,28 @@ export class AISniperBot extends EventEmitter {
         }
     }
 
+    // ============ COPY WALLET MANAGEMENT ============
+    getCopyWallets() { return this.copyMonitor.getWallets(); }
+
+    addCopyWallet(address: string, name: string): void {
+        this.copyMonitor.addWallet(address, name);
+        this.addLog('info', `Whale ditambahkan: ${name}`, address);
+    }
+
+    removeCopyWallet(address: string): void {
+        this.copyMonitor.removeWallet(address);
+        this.addLog('info', `Whale dihapus`, address);
+    }
+
+    toggleCopyWallet(address: string, active: boolean): void {
+        this.copyMonitor.toggleWallet(address, active);
+        this.addLog('info', `Whale ${active ? 'diaktifkan' : 'dijeda'}`, address);
+    }
+
+    renameCopyWallet(address: string, name: string): void {
+        this.copyMonitor.renameWallet(address, name);
+    }
+
     getKeyStatus(): { privateKey: boolean; groqKey: boolean; geminiKey: boolean; huggingfaceKey: boolean; appPassword: boolean } {
         const ai = this.ai.getKeyStatus();
         return {

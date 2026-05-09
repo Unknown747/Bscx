@@ -107,6 +107,41 @@ app.post('/api/settings', (req: Request, res: Response) => {
     }
 });
 
+// ============ COPY WALLET MANAGEMENT ENDPOINTS ============
+app.get('/api/wallets', (_req: Request, res: Response) => {
+    res.json({ wallets: bot.getCopyWallets() });
+});
+
+app.post('/api/wallets', (req: Request, res: Response) => {
+    const { address, name } = req.body;
+    if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat wallet tidak valid (harus format 0x...)' });
+        return;
+    }
+    const label = (name || '').trim() || `Whale ${address.slice(0, 8)}`;
+    const existing = bot.getCopyWallets().find(w => w.address.toLowerCase() === address.toLowerCase());
+    if (existing) {
+        res.status(409).json({ error: 'Wallet sudah ada dalam daftar' });
+        return;
+    }
+    bot.addCopyWallet(address, label);
+    res.json({ ok: true, wallets: bot.getCopyWallets() });
+});
+
+app.delete('/api/wallets/:address', (req: Request, res: Response) => {
+    const { address } = req.params;
+    bot.removeCopyWallet(address);
+    res.json({ ok: true, wallets: bot.getCopyWallets() });
+});
+
+app.patch('/api/wallets/:address', (req: Request, res: Response) => {
+    const { address } = req.params;
+    const { name, active } = req.body;
+    if (name   !== undefined) bot.renameCopyWallet(address, name);
+    if (active !== undefined) bot.toggleCopyWallet(address, !!active);
+    res.json({ ok: true, wallets: bot.getCopyWallets() });
+});
+
 // ============ KEY MANAGEMENT ENDPOINTS ============
 app.get('/api/keys', (_req: Request, res: Response) => {
     res.json(bot.getKeyStatus());
