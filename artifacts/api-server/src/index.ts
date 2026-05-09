@@ -2,8 +2,6 @@ import express, { Request, Response, NextFunction } from 'express';
 import { AISniperBot } from './ai-sniper-integration';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
 
 dotenv.config();
 
@@ -215,42 +213,14 @@ app.post('/api/keys', (req: Request, res: Response) => {
         return;
     }
 
-    // Write to .env file for persistence across restarts
-    const envPath = path.resolve(__dirname, '../.env');
-    let content = '';
-    try { content = fs.readFileSync(envPath, 'utf8'); } catch { content = ''; }
-
-    const lines = content.split('\n');
-    const lineIndex = new Map<string, number>();
-    lines.forEach((line, i) => {
-        const match = line.match(/^([A-Z_]+)=/);
-        if (match) lineIndex.set(match[1], i);
-    });
-
-    const updates: Record<string, string> = {};
-    if (privateKey)     updates['PRIVATE_KEY']          = privateKey;
-    if (groqKey)        updates['GROQ_API_KEY']          = groqKey;
-    if (geminiKey)      updates['GEMINI_API_KEY']        = geminiKey;
-    if (huggingfaceKey) updates['HUGGINGFACE_API_KEY']   = huggingfaceKey;
-    if (appPassword)    updates['APP_PASSWORD']          = appPassword;
-    if (telegramToken)  updates['TELEGRAM_BOT_TOKEN']   = telegramToken;
-    if (telegramChatId) updates['TELEGRAM_CHAT_ID']     = telegramChatId;
-
-    for (const [key, value] of Object.entries(updates)) {
-        process.env[key] = value;
-        const escaped = value.includes(' ') ? `"${value}"` : value;
-        if (lineIndex.has(key)) {
-            lines[lineIndex.get(key)!] = `${key}=${escaped}`;
-        } else {
-            lines.push(`${key}=${escaped}`);
-        }
-    }
-
-    try {
-        fs.writeFileSync(envPath, lines.filter(l => l !== '').join('\n') + '\n');
-    } catch (err: any) {
-        console.warn('⚠️  Could not write .env file:', err.message);
-    }
+    // Apply keys to process.env at runtime (on Replit, persist secrets via Secrets tab)
+    if (privateKey)     process.env.PRIVATE_KEY         = privateKey;
+    if (groqKey)        process.env.GROQ_API_KEY         = groqKey;
+    if (geminiKey)      process.env.GEMINI_API_KEY       = geminiKey;
+    if (huggingfaceKey) process.env.HUGGINGFACE_API_KEY  = huggingfaceKey;
+    if (appPassword)    process.env.APP_PASSWORD         = appPassword;
+    if (telegramToken)  process.env.TELEGRAM_BOT_TOKEN  = telegramToken;
+    if (telegramChatId) process.env.TELEGRAM_CHAT_ID    = telegramChatId;
 
     // Apply keys to running bot without restart
     bot.updateKeys({ privateKey, groqKey, geminiKey, huggingfaceKey, telegramToken, telegramChatId });
