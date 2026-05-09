@@ -232,6 +232,11 @@ app.get('/api/history', (_req: Request, res: Response) => {
     res.json(bot.getTradeHistory());
 });
 
+app.post('/api/telegram/test', async (_req: Request, res: Response) => {
+    const result = await bot.testTelegram();
+    res.status(result.ok ? 200 : 400).json(result);
+});
+
 app.get('/api/logs', (_req: Request, res: Response) => {
     res.json({
         logs:      bot.getActivityLog(),

@@ -146,11 +146,43 @@ export class AISniperBot extends EventEmitter {
         try {
             const { default: axios } = await import('axios');
             await axios.post(`https://api.telegram.org/bot${this.telegramToken}/sendMessage`, {
-                chat_id: this.telegramChatId,
-                text: message,
-                parse_mode: 'HTML'
+                chat_id:    this.telegramChatId,
+                text:       message,
+                parse_mode: 'HTML',
+                disable_web_page_preview: true
             }, { timeout: 5000 });
         } catch { /* silent — don't block trading on Telegram failure */ }
+    }
+
+    /** Public: send a test message — called from /api/telegram/test */
+    async testTelegram(): Promise<{ ok: boolean; error?: string }> {
+        if (!this.telegramToken || !this.telegramChatId) {
+            return { ok: false, error: 'Bot Token atau Chat ID belum diisi' };
+        }
+        try {
+            const { default: axios } = await import('axios');
+            const positions = this.executor?.getOpenPositions() ?? [];
+            await axios.post(`https://api.telegram.org/bot${this.telegramToken}/sendMessage`, {
+                chat_id:    this.telegramChatId,
+                parse_mode: 'HTML',
+                disable_web_page_preview: true,
+                text:
+                    `✅ <b>Base Sniper — Test Berhasil!</b>\n\n` +
+                    `Bot terhubung dan siap mengirim notifikasi.\n\n` +
+                    `📊 <b>Notifikasi yang akan dikirim:</b>\n` +
+                    `  ✅ BUY berhasil (dengan link Basescan)\n` +
+                    `  ❌ BUY gagal (dengan alasan error)\n` +
+                    `  🎯 Take Profit TP1 / TP2 (multiplier & profit %)\n` +
+                    `  🛑 Stop Loss (normal, trailing, timeout)\n` +
+                    `  🚨 Emergency Exit (rug detection)\n` +
+                    `  📊 Ringkasan portofolio setiap 30 menit\n\n` +
+                    `⚡ Posisi aktif sekarang: ${positions.length}`
+            }, { timeout: 5000 });
+            return { ok: true };
+        } catch (err: any) {
+            const detail = err?.response?.data?.description || err?.message || 'Unknown error';
+            return { ok: false, error: detail };
+        }
     }
 
     // ============ HONEYPOT DETECTION (GoPlus API) ============
@@ -254,13 +286,40 @@ export class AISniperBot extends EventEmitter {
         this.wireExecutorEvents();
 
         // ============ Periodic Market Sentiment (every 5 min) ============
-        // Store reference so we can clear it in stop()
         this.sentimentInterval = setInterval(async () => {
             const sentiment = await this.ai.getMarketSentiment();
             console.log(`\n📊 Market Sentiment: ${sentiment.sentiment}/100`);
             console.log(`   ⛽ Gas Advice: ${sentiment.gasAdvice}`);
             console.log(`   ⏰ Best Time: ${sentiment.bestTime}`);
         }, 300_000);
+
+        // ============ Periodic Telegram Portfolio Summary (every 30 min) ============
+        setInterval(async () => {
+            if (!this.telegramToken || !this.telegramChatId) return;
+            try {
+                const positions  = this.executor?.getOpenPositions() ?? [];
+                const history    = this.getTradeHistory();
+                const balance    = await this.executor?.getBalance();
+                const ethBal     = balance?.eth ?? '?';
+
+                const wins   = history.filter((t: any) => (t.profitPct ?? 0) > 0).length;
+                const losses = history.filter((t: any) => (t.profitPct ?? 0) < 0).length;
+                const totalPnl = history.reduce((sum: number, t: any) => sum + (t.profitPct ?? 0), 0);
+
+                const posLines = positions.length > 0
+                    ? positions.map((p: any) => `  • ${p.tokenSymbol || p.tokenAddress?.slice(0,8)}`).join('\n')
+                    : '  (tidak ada posisi terbuka)';
+
+                await this.sendTelegram(
+                    `📊 <b>Ringkasan 30 Menit</b>\n\n` +
+                    `💰 Saldo: <b>${ethBal} ETH</b>\n` +
+                    `📂 Posisi aktif: ${positions.length}\n` +
+                    `${posLines}\n\n` +
+                    `📈 Trade hari ini: ${wins + losses} (✅${wins} ❌${losses})\n` +
+                    `💹 Total P&L: ${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(1)}%`
+                );
+            } catch { /* silent */ }
+        }, 30 * 60_000);
     }
 
     // ============ EXECUTOR EVENT WIRING (centralised, reusable) ============
@@ -281,6 +340,11 @@ export class AISniperBot extends EventEmitter {
         this.executor.on('buy-failed', (d) => {
             this.emit('buy-failed', d);
             this.addLog('buy-failed', `BUY gagal: ${d.tokenAddress?.slice(0, 10)}...`, d.error);
+            this.sendTelegram(
+                `❌ <b>BUY GAGAL</b>\n` +
+                `Token: <code>${d.tokenAddress?.slice(0, 10)}...</code>\n` +
+                `Alasan: ${d.error || 'Unknown error'}`
+            );
         });
 
         this.executor.on('sell-success', (d) => {
@@ -369,12 +433,21 @@ export class AISniperBot extends EventEmitter {
             };
             this.closedTrades.unshift(trade);
             if (this.closedTrades.length > MAX_TRADE_HISTORY) this.closedTrades.length = MAX_TRADE_HISTORY;
+                // Pick the right emoji + title based on the reason
+            const isEmergency = d.reason?.startsWith('🚨');
+            const isTimeout   = d.reason?.startsWith('⏰');
+            const isTrailing  = d.reason?.includes('Trailing');
+            const icon  = isEmergency ? '🚨' : isTimeout ? '⏰' : '🛑';
+            const title = isEmergency ? 'EMERGENCY EXIT (Rug!)'
+                        : isTimeout   ? 'TIMEOUT EXIT'
+                        : isTrailing  ? 'TRAILING STOP LOSS'
+                        :               'STOP LOSS';
             this.sendTelegram(
-                `🛑 <b>STOP LOSS</b>\n` +
+                `${icon} <b>${title}</b>\n` +
                 `Token: <code>${d.tokenSymbol}</code>\n` +
-                `Loss: ${d.profitPct?.toFixed(1)}%\n` +
+                `P&L: ${(d.profitPct ?? 0) >= 0 ? '+' : ''}${d.profitPct?.toFixed(1) ?? '?'}%\n` +
                 `Alasan: ${d.reason || 'Fixed SL'}\n` +
-                `Token auto-blacklisted ✓`
+                (d.tokenAddress ? `Token auto-blacklisted ✓` : '')
             );
         });
 

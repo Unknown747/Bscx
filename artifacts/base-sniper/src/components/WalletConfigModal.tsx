@@ -23,9 +23,11 @@ interface FieldState {
 const EMPTY: FieldState = { value: '', show: false };
 
 const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }) => {
-    const [keyStatus,   setKeyStatus]   = useState<KeyStatus | null>(null);
-    const [saveStatus,  setSaveStatus]  = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-    const [errorMsg,    setErrorMsg]    = useState('');
+    const [keyStatus,    setKeyStatus]   = useState<KeyStatus | null>(null);
+    const [saveStatus,   setSaveStatus]  = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [errorMsg,     setErrorMsg]    = useState('');
+    const [tgTestStatus, setTgTestStatus] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle');
+    const [tgTestError,  setTgTestError]  = useState('');
 
     const [privateKey,      setPrivateKey]      = useState<FieldState>(EMPTY);
     const [groqKey,         setGroqKey]         = useState<FieldState>(EMPTY);
@@ -203,16 +205,57 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
 
                     {/* Telegram */}
                     <div className="bg-gray-800/40 border border-gray-700 rounded-xl p-5 space-y-4">
-                        <div className="flex items-center gap-2">
-                            <h3 className="text-sm font-semibold text-gray-200">📱 Notifikasi Telegram</h3>
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <h3 className="text-sm font-semibold text-gray-200">📱 Notifikasi Telegram</h3>
+                                {keyStatus?.telegramToken && keyStatus?.telegramChatId && (
+                                    <span className="text-xs bg-green-900/40 text-green-400 border border-green-700 px-2 py-0.5 rounded-full">Aktif</span>
+                                )}
+                            </div>
                             {keyStatus?.telegramToken && keyStatus?.telegramChatId && (
-                                <span className="text-xs bg-green-900/40 text-green-400 border border-green-700 px-2 py-0.5 rounded-full">Aktif</span>
+                                <button
+                                    onClick={async () => {
+                                        setTgTestStatus('sending');
+                                        setTgTestError('');
+                                        try {
+                                            const res = await fetch(`${apiUrl}/api/telegram/test`, { method: 'POST' });
+                                            const data = await res.json();
+                                            if (data.ok) {
+                                                setTgTestStatus('ok');
+                                                setTimeout(() => setTgTestStatus('idle'), 4000);
+                                            } else {
+                                                setTgTestStatus('error');
+                                                setTgTestError(data.error || 'Gagal');
+                                            }
+                                        } catch {
+                                            setTgTestStatus('error');
+                                            setTgTestError('Tidak bisa hubungi server');
+                                        }
+                                    }}
+                                    disabled={tgTestStatus === 'sending'}
+                                    className="text-xs px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 border border-blue-600/40 text-blue-400 disabled:opacity-50 transition-colors"
+                                >
+                                    {tgTestStatus === 'sending' ? '⏳ Mengirim...' : tgTestStatus === 'ok' ? '✅ Terkirim!' : '📤 Test'}
+                                </button>
                             )}
                         </div>
+                        {tgTestStatus === 'error' && (
+                            <p className="text-xs text-red-400 bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">
+                                ❌ {tgTestError}
+                            </p>
+                        )}
                         <div className="bg-gray-900/60 rounded-lg p-3 text-xs text-gray-400 space-y-1">
+                            <p className="font-medium text-gray-300 mb-1">Cara setup:</p>
                             <p>1. Buka <span className="text-blue-400">@BotFather</span> di Telegram → <code>/newbot</code></p>
                             <p>2. Salin Bot Token yang diberikan</p>
                             <p>3. Chat bot kamu, lalu buka <span className="text-blue-400">@userinfobot</span> untuk dapat Chat ID</p>
+                        </div>
+                        <div className="bg-gray-900/40 rounded-lg p-3 text-xs text-gray-500 space-y-0.5">
+                            <p className="text-gray-400 font-medium mb-1">Notifikasi yang dikirim ke HP kamu:</p>
+                            <p>✅ BUY berhasil · ❌ BUY gagal</p>
+                            <p>🎯 Take Profit TP1 & TP2</p>
+                            <p>🛑 Stop Loss · 🚨 Emergency Exit (rug)</p>
+                            <p>⏰ Timeout Exit · 📊 Ringkasan 30 menit</p>
                         </div>
                         <KeyField
                             label="Bot Token"
