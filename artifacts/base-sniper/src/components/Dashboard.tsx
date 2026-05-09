@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import PositionCard from './PositionCard';
 
 interface Status {
     connected: boolean;
@@ -147,6 +148,11 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         </span>
                     </div>
                 </div>
+            </div>
+
+            {/* Posisi Terbuka */}
+            <div className="mb-4">
+                <PositionCard apiUrl={apiUrl} />
             </div>
 
             {/* Footer */}
