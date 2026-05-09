@@ -266,21 +266,55 @@ export class MultiAIProvider {
         liquidity: number;
         volume24h: number;
         ageSeconds: number;
+        buySellRatio1m?: number;
+        volume1m?: number;
+        holderCount?: number;
+        top10Concentration?: number;
     }): Promise<TokenAnalysis> {
-        const prompt = `
-            Analyze this token for immediate trading on Base Network:
-            Token: ${tokenAddress}
-            Liquidity: ${tokenData.liquidity} ETH
-            Volume: ${tokenData.volume24h}
-            Age: ${tokenData.ageSeconds} seconds
+        // Rule-based fast path (no AI key needed)
+        const ruleResult = this.getRuleBasedRecommendation(tokenData);
 
-            Return JSON with:
-            - recommendation: "BUY", "SELL", "HOLD", or "SKIP"
-            - confidence: number 0-100
-            - riskLevel: "LOW", "MEDIUM", "HIGH", "CRITICAL"
-            - predictedProfit: number (percentage expected return)
-            - reasoning: string (brief explanation)
-        `;
+        // If AI is unavailable, use rule-based result
+        if (!this.API_KEYS.GROQ && !this.API_KEYS.GEMINI && !this.API_KEYS.HUGGINGFACE) {
+            return {
+                tokenAddress,
+                confidence:     ruleResult.confidence,
+                recommendation: ruleResult.action as any,
+                riskLevel:      ruleResult.confidence >= 70 ? 'MEDIUM' : 'HIGH',
+                predictedProfit: ruleResult.confidence >= 70 ? 40 : 15,
+                reasoning:      `Rule-based: ${ruleResult.reasoning}`,
+            };
+        }
+
+        const liquidityUSD = tokenData.liquidity * 3000;
+        const prompt = `
+Anda adalah sniper token microcap profesional dengan modal kecil di Base Network.
+Analisis token ini untuk POTENSI PUMP CEPAT (10-20 menit):
+
+Token: ${tokenAddress}
+Usia: ${Math.round(tokenData.ageSeconds)} detik (${(tokenData.ageSeconds / 60).toFixed(1)} menit)
+Likuiditas: $${liquidityUSD.toFixed(0)} (${tokenData.liquidity.toFixed(4)} ETH)
+Volume 24h: $${tokenData.volume24h.toFixed(0)}
+${tokenData.volume1m !== undefined ? `Volume 1m: $${tokenData.volume1m.toFixed(0)}` : ''}
+${tokenData.buySellRatio1m !== undefined ? `Buy/Sell ratio 1m: ${tokenData.buySellRatio1m.toFixed(2)}` : ''}
+${tokenData.holderCount !== undefined ? `Holder: ${tokenData.holderCount}` : ''}
+${tokenData.top10Concentration !== undefined ? `Top 10 konsentrasi: ${tokenData.top10Concentration}%` : ''}
+
+KRITERIA BUY (cek 3 dari 4):
+1. Ada buy pressure? (buy/sell ratio > 1.5 di 1 menit)
+2. Market making aktif? (volume/liquidity > 0.3)
+3. Tidak ada sell wall? (sell orders < 2x buy orders)
+4. Tidak terpusat? (top 10 concentration < 40%)
+
+Jika 3+ terpenuhi → BUY confidence 70-100
+Jika 2 terpenuhi → BUY confidence 50-70
+Jika 1 atau kurang → HOLD
+
+Respond JSON (WAJIB HANYA JSON):
+{"recommendation":"BUY|HOLD","confidence":0-100,"riskLevel":"LOW|MEDIUM|HIGH|CRITICAL","predictedProfit":0-200,"reasoning":"singkat"}
+
+JANGAN PERNAH output SKIP atau SELL untuk token baru.
+`;
 
         const response = await this.query(prompt, 'groq');
 
@@ -402,6 +436,49 @@ export class MultiAIProvider {
             groq:         !!this.API_KEYS.GROQ,
             gemini:       !!this.API_KEYS.GEMINI,
             huggingface:  !!this.API_KEYS.HUGGINGFACE
+        };
+    }
+
+    // ============ RULE-BASED FALLBACK ============
+    getRuleBasedRecommendation(tokenData: {
+        liquidity: number;
+        volume24h: number;
+        ageSeconds: number;
+        buySellRatio1m?: number;
+        volume1m?: number;
+        holderCount?: number;
+        top10Concentration?: number;
+    }): { action: 'BUY' | 'HOLD'; confidence: number; reasoning: string } {
+        let score = 0;
+        const reasons: string[] = [];
+
+        const liquidityUSD = tokenData.liquidity * 3000;
+        if (liquidityUSD >= 5000)  { score += 20; reasons.push('liq OK'); }
+        if (liquidityUSD >= 10000) { score += 10; reasons.push('liq good'); }
+
+        const bsr = tokenData.buySellRatio1m ?? 1;
+        if (bsr > 1.5) { score += 30; reasons.push(`BSR ${bsr.toFixed(1)}`); }
+        if (bsr > 2.5) { score += 20; }
+
+        const volOverLiq = tokenData.volume1m ? tokenData.volume1m / Math.max(liquidityUSD, 1) : 0;
+        if (volOverLiq > 0.3) { score += 25; reasons.push('vol/liq high'); }
+
+        const holders = tokenData.holderCount ?? 0;
+        if (holders > 100) { score += 15; reasons.push(`${holders} holders`); }
+
+        const conc = tokenData.top10Concentration ?? 100;
+        if (conc < 40) { score += 10; reasons.push('spread OK'); }
+        if (conc > 70) { score -= 20; reasons.push('concentrated!'); }
+
+        if (tokenData.ageSeconds < 60)  { score += 10; reasons.push('very fresh'); }
+        if (tokenData.ageSeconds > 300) { score -= 15; reasons.push('stale'); }
+
+        score = Math.max(0, Math.min(100, score));
+
+        return {
+            action:     score >= 55 ? 'BUY' : 'HOLD',
+            confidence: score,
+            reasoning:  reasons.join(', ') || 'not enough signals',
         };
     }
 

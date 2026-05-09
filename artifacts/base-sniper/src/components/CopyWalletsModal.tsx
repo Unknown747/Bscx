@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { authFetch } from '../lib/authFetch';
+import WhaleDetailModal from './WhaleDetailModal';
 
 interface Wallet {
     address: string;
@@ -47,6 +48,12 @@ interface CopyWalletsModalProps {
 
 type ModalTab = 'manual' | 'finder';
 
+interface DetailTarget {
+    address: string;
+    name?:   string;
+    showActions?: boolean;
+}
+
 function winRateColor(wr: number, trades: number): string {
     if (trades === 0) return 'text-gray-500 border-gray-700 bg-gray-800/40';
     if (wr >= 60)    return 'text-green-400 border-green-800 bg-green-900/30';
@@ -87,6 +94,9 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
     const [simAddress, setSimAddress]   = useState('');
     const [simToken, setSimToken]       = useState('');
     const [simLoading, setSimLoading]   = useState(false);
+
+    // ─── Detail modal state ─────────────────────────────────────────────────────
+    const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
 
     const fetchWallets = useCallback(async () => {
         try {
@@ -222,8 +232,8 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
         setSimLoading(false);
     };
 
-    const activeCount = wallets.filter(w => w.isActive).length;
-    const pausedByBot = wallets.filter(w => w.autoPaused).length;
+    const activeCount  = wallets.filter(w => w.isActive).length;
+    const pausedByBot  = wallets.filter(w => w.autoPaused).length;
     const pendingCount = candidates.filter(c => c.status === 'pending').length;
 
     return (
@@ -442,13 +452,19 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                             c.status === 'rejected' ? 'text-gray-500 border-gray-700 bg-gray-800' :
                                                             'text-blue-400 border-blue-700 bg-blue-900/30'
                                                         }`}>
-                                                            {c.status === 'approved' ? '✅ Approved' : c.status === 'rejected' ? '❌ Ditolak' : '⏳ Pending'}
+                                                            {c.status === 'approved' ? '✅ Approved' : c.status === 'rejected' ? '❌ Ditolak' : '⏳ Waitlist'}
                                                         </span>
                                                     </div>
                                                 </div>
-                                                <span className={`text-sm font-bold flex-shrink-0 ${scoreColor(c.score)}`}>
-                                                    {c.score}/100
-                                                </span>
+                                                <div className="flex items-center gap-2 flex-shrink-0">
+                                                    <button
+                                                        onClick={() => setDetailTarget({ address: c.address, showActions: c.status === 'pending' })}
+                                                        className="text-xs text-blue-400 hover:text-blue-300 bg-blue-900/20 border border-blue-800/50 px-2 py-0.5 rounded-lg transition-colors"
+                                                    >
+                                                        🔬 Analisis
+                                                    </button>
+                                                    <span className={`text-sm font-bold ${scoreColor(c.score)}`}>{c.score}/100</span>
+                                                </div>
                                             </div>
 
                                             <div className="grid grid-cols-3 gap-2 mb-3">
@@ -462,7 +478,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                 </div>
                                                 <div className="text-center bg-gray-800/50 rounded-lg p-2">
                                                     <p className="text-xs text-gray-500">Terakhir</p>
-                                                    <p className="text-sm font-bold text-white">{daysSince}h</p>
+                                                    <p className="text-sm font-bold text-white">{daysSince}h lalu</p>
                                                 </div>
                                             </div>
 
@@ -571,6 +587,19 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                     </button>
                 </div>
             </div>
+
+            {/* Whale Detail Modal */}
+            {detailTarget && (
+                <WhaleDetailModal
+                    apiUrl={apiUrl}
+                    address={detailTarget.address}
+                    name={detailTarget.name}
+                    showActions={detailTarget.showActions}
+                    onClose={() => setDetailTarget(null)}
+                    onApprove={async (address) => { await handleApprove(address); }}
+                    onReject={async (address) => { await handleReject(address); }}
+                />
+            )}
         </div>
     );
 };

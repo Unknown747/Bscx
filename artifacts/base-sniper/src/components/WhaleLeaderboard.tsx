@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { authFetch } from '../lib/authFetch';
+import WhaleDetailModal from './WhaleDetailModal';
 
 interface Wallet {
     address: string;
@@ -45,10 +46,11 @@ function statusDot(w: Wallet): { color: string; label: string } {
 }
 
 const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
-    const [wallets, setWallets] = useState<Wallet[]>([]);
-    const [sortBy, setSortBy]   = useState<SortKey>('winRate');
-    const [loading, setLoading] = useState(true);
+    const [wallets, setWallets]   = useState<Wallet[]>([]);
+    const [sortBy, setSortBy]     = useState<SortKey>('winRate');
+    const [loading, setLoading]   = useState(true);
     const [lastUpdate, setLastUpdate] = useState('');
+    const [detailAddr, setDetailAddr] = useState<{ address: string; name: string } | null>(null);
 
     const fetchWallets = useCallback(async () => {
         try {
@@ -88,6 +90,7 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
     const totalPnL    = wallets.reduce((s, w) => s + w.totalPnL, 0);
 
     return (
+        <>
         <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
 
             {/* Header */}
@@ -155,8 +158,9 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
                     return (
                         <div
                             key={w.address}
-                            className={`flex items-center gap-3 px-4 py-3 transition-colors ${
-                                i === 0 && hasTrades ? 'bg-yellow-900/5' : 'hover:bg-gray-800/30'
+                            onClick={() => setDetailAddr({ address: w.address, name: w.name })}
+                            className={`flex items-center gap-3 px-4 py-3 transition-colors cursor-pointer ${
+                                i === 0 && hasTrades ? 'bg-yellow-900/5 hover:bg-yellow-900/10' : 'hover:bg-gray-800/40'
                             }`}
                         >
                             {/* Rank */}
@@ -209,11 +213,23 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
 
             {/* Footer */}
             {lastUpdate && (
-                <div className="px-4 py-2 border-t border-gray-800/60 text-right">
+                <div className="px-4 py-2 border-t border-gray-800/60 flex items-center justify-between">
+                    <span className="text-xs text-gray-700">Klik baris untuk analisis detail</span>
                     <span className="text-xs text-gray-700">Live · {lastUpdate}</span>
                 </div>
             )}
         </div>
+
+        {/* Whale Detail Modal */}
+        {detailAddr && (
+            <WhaleDetailModal
+                apiUrl={apiUrl}
+                address={detailAddr.address}
+                name={detailAddr.name}
+                onClose={() => setDetailAddr(null)}
+            />
+        )}
+    </>
     );
 };
 

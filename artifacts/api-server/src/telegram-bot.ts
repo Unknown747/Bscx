@@ -299,6 +299,59 @@ export class TelegramBot {
         await this.send(`🚫 <b>Blacklist (${bl.length} token)</b>\n\n${lines}`);
     }
 
+    // ── Pro trade alert ──────────────────────────────────────────────────────
+    async sendTradeAlert(trade: {
+        action:        'BUY' | 'SELL' | 'COPY_BUY';
+        tokenSymbol:   string;
+        tokenAddress:  string;
+        amountEth:     number;
+        profitPct?:    number;
+        reason?:       string;
+        confidence?:   number;
+        txHash?:       string;
+        whaleAddress?: string;
+        whaleName?:    string;
+    }): Promise<void> {
+        const chartUrl  = `https://www.geckoterminal.com/base/pools/${trade.tokenAddress}`;
+        const scanUrl   = trade.txHash ? `https://basescan.org/tx/${trade.txHash}` : '';
+        const icon      = trade.action === 'BUY' ? '🟢' : trade.action === 'COPY_BUY' ? '🐋' : '🔴';
+        const pnlLine   = trade.profitPct != null
+            ? `\n📈 P&L: <b>${trade.profitPct >= 0 ? '+' : ''}${trade.profitPct.toFixed(1)}%</b>`
+            : '';
+        const confLine  = trade.confidence != null ? `\n🤖 AI Confidence: ${trade.confidence}%` : '';
+        const whaleLine = trade.whaleName  ? `\n🐋 Whale: <b>${trade.whaleName}</b>` : '';
+        const txLine    = scanUrl ? `\n🔗 <a href="${scanUrl}">Lihat TX</a> · <a href="${chartUrl}">Chart</a>` : `\n📊 <a href="${chartUrl}">Lihat Chart</a>`;
+        const reasonLine = trade.reason ? `\n💡 ${trade.reason}` : '';
+
+        await this.send(
+            `${icon} <b>${trade.action === 'COPY_BUY' ? 'COPY TRADE' : trade.action}</b>\n` +
+            `Token: <code>${trade.tokenSymbol}</code>${whaleLine}\n` +
+            `💰 Jumlah: ${trade.amountEth.toFixed(5)} ETH` +
+            pnlLine + confLine + reasonLine + txLine
+        );
+    }
+
+    // ── Risk alert ──────────────────────────────────────────────────────────
+    async sendRiskAlert(type: 'daily_loss' | 'consecutive_loss' | 'cooldown' | 'blocked', details: string): Promise<void> {
+        const icons: Record<string, string> = {
+            daily_loss:       '🔴',
+            consecutive_loss: '⚠️',
+            cooldown:         '⏳',
+            blocked:          '🚫',
+        };
+        const titles: Record<string, string> = {
+            daily_loss:       'Daily Loss Limit Tercapai',
+            consecutive_loss: 'Consecutive Loss Alert',
+            cooldown:         'Cooldown Aktif',
+            blocked:          'Trade Diblokir Risk Manager',
+        };
+        await this.send(
+            `${icons[type] || '⚠️'} <b>Risk Alert: ${titles[type] || type}</b>\n\n` +
+            `${details}\n\n` +
+            `<i>Bot akan melanjutkan trading setelah kondisi terpenuhi.</i>`
+        );
+    }
+
     // ── Helper ────────────────────────────────────────────────────────────────
 
     async send(text: string): Promise<void> {

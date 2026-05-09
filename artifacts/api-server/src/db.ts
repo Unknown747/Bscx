@@ -58,6 +58,19 @@ export function initDb(): void {
             is_active INTEGER NOT NULL DEFAULT 1,
             added_at  INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS whale_waitlist_events (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            address      TEXT    NOT NULL,
+            event_type   TEXT    NOT NULL,
+            token        TEXT,
+            profit_pct   REAL,
+            volume_eth   REAL,
+            recorded_at  INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_wwe_address ON whale_waitlist_events(address);
+        CREATE INDEX IF NOT EXISTS idx_wwe_time    ON whale_waitlist_events(recorded_at);
     `);
     console.log(`💾 SQLite DB ready: ${DB_PATH}`);
 }
@@ -254,6 +267,54 @@ export function dbUpdateCopyWallet(address: string, fields: { name?: string; isA
     if (fields.isActive !== undefined) {
         db.prepare('UPDATE copy_wallets SET is_active = ? WHERE address = ?').run(fields.isActive ? 1 : 0, address.toLowerCase());
     }
+}
+
+// ── Whale Waitlist Events ─────────────────────────────────────────────────────
+
+export interface WaitlistEvent {
+    id?:         number;
+    address:     string;
+    eventType:   string;
+    token?:      string;
+    profitPct?:  number;
+    volumeEth?:  number;
+    recordedAt:  number;
+}
+
+export function dbInsertWaitlistEvent(e: WaitlistEvent): void {
+    db.prepare(`
+        INSERT INTO whale_waitlist_events
+            (address, event_type, token, profit_pct, volume_eth, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `).run(e.address.toLowerCase(), e.eventType, e.token ?? null, e.profitPct ?? null, e.volumeEth ?? null, e.recordedAt);
+}
+
+export function dbGetWaitlistEvents(address: string, limit = 50): WaitlistEvent[] {
+    return (db.prepare(`
+        SELECT * FROM whale_waitlist_events WHERE address = ? ORDER BY recorded_at DESC LIMIT ?
+    `).all(address.toLowerCase(), limit) as any[]).map(r => ({
+        id:         r.id,
+        address:    r.address,
+        eventType:  r.event_type,
+        token:      r.token ?? undefined,
+        profitPct:  r.profit_pct ?? undefined,
+        volumeEth:  r.volume_eth ?? undefined,
+        recordedAt: r.recorded_at,
+    }));
+}
+
+export function dbGetWaitlistSummary(address: string): {
+    totalEvents: number;
+    wins: number;
+    losses: number;
+    avgProfitPct: number;
+} {
+    const events = dbGetWaitlistEvents(address, 200);
+    const trades = events.filter(e => e.profitPct != null);
+    const wins   = trades.filter(e => (e.profitPct ?? 0) > 0).length;
+    const losses = trades.filter(e => (e.profitPct ?? 0) < 0).length;
+    const avg    = trades.length > 0 ? trades.reduce((s, e) => s + (e.profitPct ?? 0), 0) / trades.length : 0;
+    return { totalEvents: events.length, wins, losses, avgProfitPct: parseFloat(avg.toFixed(1)) };
 }
 
 export default db;

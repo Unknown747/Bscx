@@ -445,6 +445,40 @@ app.post('/api/simulate', async (req: Request, res: Response) => {
     }
 });
 
+// ============ RISK MANAGER ============
+app.get('/api/risk', (_req: Request, res: Response) => {
+    try {
+        res.json({ riskState: bot.getRiskState(), timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============ WHALE DETAIL (pro analysis) ============
+app.get('/api/whale/detail/:address', async (req: Request, res: Response) => {
+    const { address } = req.params;
+    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+    }
+    try {
+        const [analysis, waitlistEvents] = await Promise.all([
+            bot.analyzeWhaleDetail(address),
+            import('./db').then(m => ({
+                events:  m.dbGetWaitlistEvents(address, 30),
+                summary: m.dbGetWaitlistSummary(address),
+            }))
+        ]);
+        res.json({ address, analysis, ...waitlistEvents, timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============ PERFORMANCE CACHE ============
+app.get('/api/cache', (_req: Request, res: Response) => {
+    res.json({ ...bot.getPerfCacheStats(), timestamp: Date.now() });
+});
+
 // ============ START SERVER ============
 app.listen(PORT, () => {
     console.log(`🌐 API Server running on port ${PORT}`);

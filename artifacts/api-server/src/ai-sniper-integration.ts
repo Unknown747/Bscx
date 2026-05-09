@@ -19,6 +19,10 @@ import {
     type TradeRow,
 } from './db';
 import { startTelegramBot, type TelegramBot } from './telegram-bot';
+import { MicroCapRiskManager } from './microcap-risk-manager';
+import { calculateExit } from './dynamic-exit';
+import { getCachedTokenPrice, batchGetPrices, prioritizeWallets, getCacheStats } from './performance-optimizer';
+import { analyzeWhale } from './whale-analyzer-pro';
 import type { Address } from 'viem';
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
@@ -83,6 +87,7 @@ export class AISniperBot extends EventEmitter {
     private ai:           MultiAIProvider;
     private executor:     SwapExecutor | null = null;
     private geckoScanner: GeckoTokenScanner;
+    private riskManager:  MicroCapRiskManager;
     private activityLog:  LogEntry[] = [];
     private telegramToken  = process.env.TELEGRAM_BOT_TOKEN || '';
     private telegramChatId = process.env.TELEGRAM_CHAT_ID   || '';
@@ -134,6 +139,7 @@ export class AISniperBot extends EventEmitter {
         this.scanner      = new FlashblocksScanner();
         this.copyMonitor  = new CopyTradeMonitor();
         this.ai           = new MultiAIProvider();
+        this.riskManager  = new MicroCapRiskManager(this.runtimeConfig.totalCapital);
         this.geckoScanner = new GeckoTokenScanner({
             minLiquidityUsd: this.runtimeConfig.minLiquidity * 3000,
         });
@@ -520,6 +526,11 @@ export class AISniperBot extends EventEmitter {
         this.executor.on('stop-loss', (d) => {
             this.emit('stop-loss', d);
             this.addLog('stop-loss', `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`, d.reason || 'Auto stop loss triggered');
+            // ── Update risk manager on loss ──
+            if (d.profitPct != null) {
+                const lossEth = (Math.abs(d.profitPct) / 100) * this.runtimeConfig.maxTradeAmount;
+                this.riskManager.afterTrade(-lossEth);
+            }
             if (d.sourceWallet) this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
             if (d.tokenAddress) {
                 dbAddToBlacklist(d.tokenAddress.toLowerCase(), 'Stop Loss auto-blacklist');
@@ -584,6 +595,20 @@ export class AISniperBot extends EventEmitter {
     ): Promise<void> {
         if (!this.executor) { console.warn('   ⚠️  Live trading disabled'); return; }
 
+        // ── Risk manager gate ──
+        const riskGate = this.riskManager.beforeTrade({});
+        if (!riskGate.allowed) {
+            console.log(`   🚫 [RiskManager] ${riskGate.reason}`);
+            this.addLog('info', `Trade diblokir risk manager`, riskGate.reason);
+            if (this.tgBot) {
+                const alertType = riskGate.reason?.includes('Daily') ? 'daily_loss' :
+                    riskGate.reason?.includes('consecutive') ? 'consecutive_loss' :
+                    riskGate.reason?.includes('Cooldown') ? 'cooldown' : 'blocked';
+                this.tgBot.sendRiskAlert(alertType, riskGate.reason || '');
+            }
+            return;
+        }
+
         if (dbIsBlacklisted(tokenAddress.toLowerCase())) {
             console.log(`   🚫 Token blacklisted — skip`);
             return;
@@ -630,6 +655,14 @@ export class AISniperBot extends EventEmitter {
 
     private async executeCopyTrade(opportunity: any): Promise<void> {
         if (!this.executor) { console.warn('   ⚠️  Live trading disabled'); return; }
+
+        // ── Risk manager gate ──
+        const riskGate = this.riskManager.beforeTrade({});
+        if (!riskGate.allowed) {
+            console.log(`   🚫 [RiskManager] copy blocked: ${riskGate.reason}`);
+            this.addLog('info', `Copy trade diblokir`, riskGate.reason);
+            return;
+        }
 
         const addr = (opportunity.tokenAddress as string).toLowerCase();
         if (dbIsBlacklisted(addr)) { console.log(`   🚫 Blacklisted — skip copy`); return; }
@@ -979,6 +1012,17 @@ export class AISniperBot extends EventEmitter {
         };
     }
 
+    // ============ RISK MANAGER PUBLIC API ============
+    getRiskState() { return this.riskManager.getState(); }
+
+    // ============ CACHE STATS ============
+    getPerfCacheStats() { return getCacheStats(); }
+
+    // ============ WHALE DETAIL ANALYSIS ============
+    async analyzeWhaleDetail(address: string) {
+        return analyzeWhale(address);
+    }
+
     getStatus() {
         return {
             connected:     this.scanner.isConnectedToBase(),
@@ -991,6 +1035,7 @@ export class AISniperBot extends EventEmitter {
                 enabled:    this.runtimeConfig.geckoScannerEnabled,
                 seenTokens: this.geckoScanner.getSeenCount(),
             },
+            riskState:     this.riskManager.getState(),
             pendingWhales: dbGetPendingWhales().length,
             timestamp:     Date.now()
         };
