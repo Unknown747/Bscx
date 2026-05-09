@@ -194,12 +194,3 @@ export async function analyzeWhale(walletAddress: string): Promise<WhaleQualityS
     };
 }
 
-// ── Crowd-copy signal: score across multiple whales buying same token ─────────
-export function crowdCopySignal(
-    whaleScores: { address: string; score: number; isBuying: boolean }[],
-): { signal: number; shouldCopy: boolean } {
-    const signal = whaleScores
-        .filter(w => w.isBuying)
-        .reduce((s, w) => s + w.score, 0);
-    return { signal, shouldCopy: signal >= 200 };
-}

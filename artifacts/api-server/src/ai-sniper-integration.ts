@@ -10,18 +10,17 @@ import {
     getPendingCandidates, getAllCandidates, simulateCopyTrade,
     formatWhaleTelegramMsg, type WhaleCandidate, type SimulationResult
 } from './whale-finder';
-import { getEthPriceUsd, getBestDexPair } from './price-oracle';
+import { getEthPriceUsd } from './price-oracle';
 import {
     dbInsertTrade, dbGetTrades,
     dbAddToBlacklist, dbRemoveFromBlacklist, dbGetBlacklist, dbIsBlacklisted,
     dbAddCopyWallet, dbRemoveCopyWallet, dbGetCopyWallets, dbUpdateCopyWallet,
-    dbGetPendingWhales,
+    dbGetPendingWhales, dbInsertWaitlistEvent,
     type TradeRow,
 } from './db';
 import { startTelegramBot, type TelegramBot } from './telegram-bot';
 import { MicroCapRiskManager } from './microcap-risk-manager';
-import { calculateExit } from './dynamic-exit';
-import { getCachedTokenPrice, batchGetPrices, prioritizeWallets, getCacheStats } from './performance-optimizer';
+import { getCacheStats } from './performance-optimizer';
 import { analyzeWhale } from './whale-analyzer-pro';
 import type { Address } from 'viem';
 import { randomBytes } from 'crypto';
@@ -708,8 +707,29 @@ export class AISniperBot extends EventEmitter {
     // ============ WHALE FINDER — PUBLIC METHODS ============
     async runWhaleScan(forceManual = false): Promise<WhaleCandidate[]> {
         const candidates = await runWhaleScan(forceManual);
-        for (const c of candidates) {
-            await this.sendTelegram(formatWhaleTelegramMsg(c, candidates.indexOf(c)));
+        const now = Date.now();
+        for (let i = 0; i < candidates.length; i++) {
+            const c = candidates[i];
+            // Persist waitlist discovery event
+            dbInsertWaitlistEvent({
+                address:    c.address,
+                eventType:  'discovered',
+                recordedAt: now,
+            });
+            // Rich Telegram notification via command bot if available, else plain sendTelegram
+            if (this.tgBot) {
+                await this.tgBot.sendWaitlistAlert({
+                    address:          c.address,
+                    score:            c.score,
+                    estimatedWinRate: c.estimatedWinRate,
+                    avgProfitPct:     c.avgProfitPct,
+                    tradeCount:       c.tradeCount,
+                    index:            i,
+                    total:            candidates.length,
+                });
+            } else {
+                await this.sendTelegram(formatWhaleTelegramMsg(c, i));
+            }
         }
         return candidates;
     }
@@ -722,6 +742,7 @@ export class AISniperBot extends EventEmitter {
         if (c) {
             this.copyMonitor.addWallet(c.address, `Whale ${c.address.slice(0, 8)} (auto)`, false);
             this.addLog('info', `🐋 Whale disetujui & ditambahkan`, `Score: ${c.score}/100 | WR: ${c.estimatedWinRate}%`);
+            dbInsertWaitlistEvent({ address: c.address, eventType: 'approved', recordedAt: Date.now() });
             this.sendTelegram(
                 `✅ <b>Whale Disetujui!</b>\n` +
                 `<code>${c.address}</code>\n` +
@@ -735,6 +756,7 @@ export class AISniperBot extends EventEmitter {
     rejectWhale(address: string): void {
         rejectCandidate(address);
         this.addLog('info', `🐋 Whale ditolak`, address);
+        dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'rejected', recordedAt: Date.now() });
         this.sendTelegram(`❌ <b>Whale Ditolak</b>\n<code>${address}</code>`);
     }
 

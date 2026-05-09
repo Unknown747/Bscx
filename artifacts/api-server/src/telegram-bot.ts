@@ -352,6 +352,31 @@ export class TelegramBot {
         );
     }
 
+    // ── Waitlist entry alert ─────────────────────────────────────────────────
+    async sendWaitlistAlert(candidate: {
+        address:          string;
+        score:            number;
+        estimatedWinRate: number;
+        avgProfitPct:     number;
+        tradeCount:       number;
+        index:            number;
+        total:            number;
+    }): Promise<void> {
+        const stars = candidate.score >= 80 ? '⭐⭐⭐' : candidate.score >= 65 ? '⭐⭐' : '⭐';
+        const scoreBar = '█'.repeat(Math.round(candidate.score / 10)) + '░'.repeat(10 - Math.round(candidate.score / 10));
+        await this.send(
+            `🐋 <b>Whale Baru Masuk Waitlist</b> (${candidate.index + 1}/${candidate.total})\n\n` +
+            `${stars} <code>${candidate.address}</code>\n\n` +
+            `📊 Skor: <b>${candidate.score}/100</b>\n` +
+            `${scoreBar}\n\n` +
+            `📈 Win Rate:  <b>${candidate.estimatedWinRate}%</b>\n` +
+            `💰 Avg Profit: <b>+${candidate.avgProfitPct}%</b>\n` +
+            `🔢 Total Trade: ${candidate.tradeCount}\n\n` +
+            `✅ Setujui: /approve ${candidate.address}\n` +
+            `❌ Tolak:   /reject  ${candidate.address}`
+        );
+    }
+
     // ── Helper ────────────────────────────────────────────────────────────────
 
     async send(text: string): Promise<void> {
