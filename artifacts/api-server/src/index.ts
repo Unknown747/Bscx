@@ -70,6 +70,37 @@ app.get('/api/positions', (_req: Request, res: Response) => {
     });
 });
 
+// POST /api/settings — apply new config at runtime
+app.post('/api/settings', (req: Request, res: Response) => {
+    const s = req.body;
+    if (!s || typeof s !== 'object') {
+        res.status(400).json({ error: 'Invalid payload' });
+        return;
+    }
+
+    try {
+        bot.updateRuntimeConfig({
+            totalCapital:    s.totalCapital,
+            maxTradeAmount:  s.maxTradeAmount,
+            minLiquidity:    s.minLiquidity,
+            maxSlippage:     s.maxSlippage,
+            tp1Multiplier:   s.tp1Multiplier,
+            tp1Percentage:   s.tp1Percentage,
+            tp2Multiplier:   s.tp2Multiplier,
+            tp2Percentage:   s.tp2Percentage,
+            stopLoss:        s.stopLoss,
+            maxPriorityFee:  s.maxPriorityFee,
+            maxFeePerGas:    s.maxFeePerGas,
+            copyEnabled:     s.copyEnabled,
+            copyAmount:      s.copyAmount,
+            copyDelay:       s.copyDelay
+        });
+        res.json({ ok: true, message: 'Pengaturan berhasil diterapkan' });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/logs', (_req: Request, res: Response) => {
     res.json({
         logs:      bot.getActivityLog(),

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import PositionCard from './PositionCard';
 import ActivityLog from './ActivityLog';
+import Modal100k, { ModalSettings } from './Modal100k';
 
 interface Status {
     connected: boolean;
@@ -38,17 +39,19 @@ interface DashboardProps {
 }
 
 const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
-    { id: 'overview',   label: 'Overview',  icon: '📊' },
-    { id: 'positions',  label: 'Posisi',    icon: '💼' },
-    { id: 'log',        label: 'Log',       icon: '📋' }
+    { id: 'overview',  label: 'Overview', icon: '📊' },
+    { id: 'positions', label: 'Posisi',   icon: '💼' },
+    { id: 'log',       label: 'Log',      icon: '📋' }
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
-    const [activeTab, setActiveTab] = useState<Tab>('overview');
-    const [status, setStatus]       = useState<Status | null>(null);
-    const [config, setConfig]       = useState<Config | null>(null);
-    const [lastUpdate, setLastUpdate] = useState('');
-    const [error, setError]         = useState('');
+    const [activeTab, setActiveTab]       = useState<Tab>('overview');
+    const [status, setStatus]             = useState<Status | null>(null);
+    const [config, setConfig]             = useState<Config | null>(null);
+    const [lastUpdate, setLastUpdate]     = useState('');
+    const [error, setError]               = useState('');
+    const [showSettings, setShowSettings] = useState(false);
+    const [saveStatus, setSaveStatus]     = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
     const fetchData = useCallback(async () => {
         try {
@@ -71,10 +74,32 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         return () => clearInterval(interval);
     }, [fetchData]);
 
+    const handleSaveSettings = useCallback(async (settings: ModalSettings) => {
+        setSaveStatus('saving');
+        try {
+            const res = await fetch(`${apiUrl}/api/settings`, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(settings)
+            });
+            if (!res.ok) throw new Error('Server error');
+            setSaveStatus('saved');
+            setShowSettings(false);
+            // Refresh config immediately after save
+            await fetchData();
+            setTimeout(() => setSaveStatus('idle'), 2000);
+        } catch {
+            setSaveStatus('error');
+            setTimeout(() => setSaveStatus('idle'), 3000);
+        }
+    }, [apiUrl, fetchData]);
+
     const openCount = status?.openPositions?.length ?? 0;
+    const currentCapital = config?.capital ? parseFloat(config.capital) : 0.006;
 
     return (
         <div className="min-h-screen bg-gray-950 flex flex-col">
+
             {/* Header */}
             <div className="flex items-center justify-between px-4 pt-5 pb-3">
                 <div className="flex items-center gap-3">
@@ -84,11 +109,36 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         <p className="text-xs text-gray-500">Modal 0.006 ETH · 100rb</p>
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${status?.connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                    <span className="text-xs text-gray-400">{status?.connected ? 'Live' : 'Offline'}</span>
+
+                <div className="flex items-center gap-3">
+                    {/* Connection status */}
+                    <div className="flex items-center gap-1.5">
+                        <div className={`w-2 h-2 rounded-full ${status?.connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                        <span className="text-xs text-gray-400">{status?.connected ? 'Live' : 'Offline'}</span>
+                    </div>
+
+                    {/* Settings button */}
+                    <button
+                        onClick={() => setShowSettings(true)}
+                        className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                    >
+                        <span>⚙️</span>
+                        <span>Atur</span>
+                    </button>
                 </div>
             </div>
+
+            {/* Save feedback banner */}
+            {saveStatus === 'saved' && (
+                <div className="mx-4 mb-2 bg-green-900/40 border border-green-700 rounded-xl px-4 py-2 text-sm text-green-400 text-center">
+                    ✅ Pengaturan berhasil disimpan
+                </div>
+            )}
+            {saveStatus === 'error' && (
+                <div className="mx-4 mb-2 bg-red-900/40 border border-red-700 rounded-xl px-4 py-2 text-sm text-red-400 text-center">
+                    ❌ Gagal menyimpan — coba lagi
+                </div>
+            )}
 
             {error && (
                 <div className="mx-4 mb-3 bg-red-900/30 border border-red-800 rounded-xl p-3 text-sm text-red-400">
@@ -124,7 +174,6 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 {/* ─── OVERVIEW ─── */}
                 {activeTab === 'overview' && (
                     <div className="space-y-4">
-                        {/* Stats Grid */}
                         <div className="grid grid-cols-2 gap-3">
                             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                                 <p className="text-xs text-gray-500 mb-1">Modal Total</p>
@@ -151,18 +200,25 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                             </div>
                         </div>
 
-                        {/* Config Summary */}
                         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                            <h2 className="text-sm font-semibold text-gray-300 mb-3">Konfigurasi Aktif</h2>
+                            <div className="flex items-center justify-between mb-3">
+                                <h2 className="text-sm font-semibold text-gray-300">Konfigurasi Aktif</h2>
+                                <button
+                                    onClick={() => setShowSettings(true)}
+                                    className="text-xs text-green-400 hover:text-green-300 transition-colors"
+                                >
+                                    Edit ✏️
+                                </button>
+                            </div>
                             <div className="space-y-2 text-sm">
                                 {[
-                                    { label: 'AI Trading',      value: config?.aiEnabled   ? '✓ Aktif' : '✗ Nonaktif', green: config?.aiEnabled },
-                                    { label: 'Copy Trading',    value: config?.copyEnabled ? '✓ Aktif' : '✗ Nonaktif', green: config?.copyEnabled },
-                                    { label: 'Jumlah Copy',     value: `${config?.copyAmount || '—'} ETH` },
-                                    { label: 'Delay Copy',      value: `${config?.copyDelaySeconds || '—'} detik` },
-                                    { label: 'Min Safety Score',value: `${config?.minSafetyScore || '—'}/100` },
-                                    { label: 'Max Pool Age',    value: `${config?.maxPoolAgeSeconds || '—'}s` },
-                                    { label: 'Flashblocks',     value: status?.config?.flashblocksEnabled ? '✓ Aktif' : '—', green: status?.config?.flashblocksEnabled }
+                                    { label: 'AI Trading',       value: config?.aiEnabled   ? '✓ Aktif' : '✗ Nonaktif', green: config?.aiEnabled   },
+                                    { label: 'Copy Trading',     value: config?.copyEnabled ? '✓ Aktif' : '✗ Nonaktif', green: config?.copyEnabled },
+                                    { label: 'Jumlah Copy',      value: `${config?.copyAmount || '—'} ETH`               },
+                                    { label: 'Delay Copy',       value: `${config?.copyDelaySeconds || '—'} detik`        },
+                                    { label: 'Min Safety Score', value: `${config?.minSafetyScore || '—'}/100`            },
+                                    { label: 'Max Pool Age',     value: `${config?.maxPoolAgeSeconds || '—'}s`            },
+                                    { label: 'Flashblocks',      value: status?.config?.flashblocksEnabled ? '✓ Aktif' : '—', green: status?.config?.flashblocksEnabled }
                                 ].map(({ label, value, green }) => (
                                     <div key={label} className="flex justify-between">
                                         <span className="text-gray-500">{label}</span>
@@ -181,15 +237,33 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 )}
 
                 {/* ─── POSITIONS ─── */}
-                {activeTab === 'positions' && (
-                    <PositionCard apiUrl={apiUrl} />
-                )}
+                {activeTab === 'positions' && <PositionCard apiUrl={apiUrl} />}
 
                 {/* ─── LOG ─── */}
-                {activeTab === 'log' && (
-                    <ActivityLog apiUrl={apiUrl} />
-                )}
+                {activeTab === 'log' && <ActivityLog apiUrl={apiUrl} />}
             </div>
+
+            {/* Settings Modal */}
+            {showSettings && (
+                <Modal100k
+                    currentBalance={currentCapital}
+                    onClose={() => setShowSettings(false)}
+                    onSave={handleSaveSettings}
+                />
+            )}
+
+            {/* Full-screen saving overlay */}
+            {saveStatus === 'saving' && (
+                <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+                    <div className="bg-gray-900 border border-gray-700 rounded-2xl px-8 py-6 flex items-center gap-4">
+                        <svg className="animate-spin h-5 w-5 text-green-400" viewBox="0 0 24 24" fill="none">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                        </svg>
+                        <span className="text-white text-sm font-medium">Menyimpan pengaturan...</span>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

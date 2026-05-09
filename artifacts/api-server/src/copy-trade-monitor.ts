@@ -297,6 +297,24 @@ export class CopyTradeMonitor extends EventEmitter {
         }
     }
 
+    // ============ RUNTIME CONFIG UPDATE ============
+    updateConfig(updates: {
+        copyEnabled?:  boolean;
+        copyAmount?:   number;
+        copyDelay?:    number;
+        minLiquidity?: number;
+    }): void {
+        const c = this.CONFIG as any;
+        if (updates.copyAmount  != null) c.COPY_INVEST_AMOUNT  = updates.copyAmount;
+        if (updates.copyDelay   != null) c.COPY_DELAY_SECONDS  = updates.copyDelay;
+
+        // Enable/disable by starting or stopping the scanner
+        if (updates.copyEnabled === true  && !this.scanInterval) this.start();
+        if (updates.copyEnabled === false && this.scanInterval)  this.stop();
+
+        console.log('⚙️  CopyTradeMonitor config updated');
+    }
+
     // ============ PUBLIC METHODS ============
     addWallet(address: string, name: string): void {
         this.wallets.push({

@@ -4,6 +4,7 @@ import { MultiAIProvider } from './multi-ai-provider';
 import { SwapExecutor } from './swap-executor';
 import type { Address } from 'viem';
 import { randomBytes } from 'crypto';
+import { EventEmitter } from 'events';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -21,7 +22,7 @@ interface LogEntry {
 
 const MAX_LOG_ENTRIES = 100;
 
-export class AISniperBot {
+export class AISniperBot extends EventEmitter {
     private scanner: FlashblocksScanner;
     private copyMonitor: CopyTradeMonitor;
     private ai: MultiAIProvider;
@@ -36,6 +37,7 @@ export class AISniperBot {
     };
 
     constructor() {
+        super();
         this.scanner     = new FlashblocksScanner();
         this.copyMonitor = new CopyTradeMonitor();
         this.ai          = new MultiAIProvider();
@@ -279,6 +281,52 @@ export class AISniperBot {
         this.copyMonitor.stop();
         this.executor?.stop();
         console.log('🛑 AI Sniper stopped');
+    }
+
+    // ============ RUNTIME CONFIG UPDATE ============
+    updateRuntimeConfig(s: {
+        totalCapital?:   number;
+        maxTradeAmount?: number;
+        minLiquidity?:   number;
+        maxSlippage?:    number;
+        tp1Multiplier?:  number;
+        tp1Percentage?:  number;
+        tp2Multiplier?:  number;
+        tp2Percentage?:  number;
+        stopLoss?:       number;
+        maxPriorityFee?: number;
+        maxFeePerGas?:   number;
+        copyEnabled?:    boolean;
+        copyAmount?:     number;
+        copyDelay?:      number;
+    }): void {
+        // Update bot-level capital/confidence thresholds
+        if (s.totalCapital  != null) (this.CONFIG as any).TOTAL_CAPITAL  = s.totalCapital;
+
+        // Push trading params to SwapExecutor
+        if (this.executor) {
+            this.executor.updateConfig({
+                maxSlippage:    s.maxSlippage,
+                tp1Multiplier:  s.tp1Multiplier,
+                tp1Percentage:  s.tp1Percentage,
+                tp2Multiplier:  s.tp2Multiplier,
+                tp2Percentage:  s.tp2Percentage,
+                stopLoss:       s.stopLoss,
+                maxPriorityFee: s.maxPriorityFee,
+                maxFeePerGas:   s.maxFeePerGas
+            });
+        }
+
+        // Push copy trading params to CopyTradeMonitor
+        this.copyMonitor.updateConfig({
+            copyEnabled:  s.copyEnabled,
+            copyAmount:   s.copyAmount,
+            copyDelay:    s.copyDelay,
+            minLiquidity: s.minLiquidity
+        });
+
+        this.addLog('info', 'Pengaturan diperbarui via UI', `Capital: ${s.totalCapital ?? '—'} ETH`);
+        console.log('⚙️  Runtime config updated:', s);
     }
 
     getStatus() {

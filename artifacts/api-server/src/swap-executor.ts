@@ -116,7 +116,8 @@ export class SwapExecutor extends EventEmitter {
 
         const rpcUrl = process.env.BASE_HTTP_URL || 'https://mainnet-preconf.base.org';
 
-        this.publicClient = createPublicClient({ chain: base, transport: http(rpcUrl) });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.publicClient = createPublicClient({ chain: base, transport: http(rpcUrl) }) as any;
         this.walletClient = createWalletClient({ account: this.account, chain: base, transport: http(rpcUrl) });
 
         this.isReady = true;
@@ -177,7 +178,8 @@ export class SwapExecutor extends EventEmitter {
 
             const gasPrice = await this.getGasPrice();
 
-            const txHash = await this.walletClient.writeContract({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const txHash = await (this.walletClient as any).writeContract({
                 address: UNISWAP_V3_ROUTER,
                 abi: ROUTER_ABI,
                 functionName: 'exactInputSingle',
@@ -264,7 +266,8 @@ export class SwapExecutor extends EventEmitter {
 
             // Approve router to spend tokens
             const gasPrice = await this.getGasPrice();
-            const approveTx = await this.walletClient.writeContract({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const approveTx = await (this.walletClient as any).writeContract({
                 address: tokenAddress,
                 abi: ERC20_ABI,
                 functionName: 'approve',
@@ -274,7 +277,8 @@ export class SwapExecutor extends EventEmitter {
             await this.publicClient.waitForTransactionReceipt({ hash: approveTx, timeout: 20_000 });
 
             // Execute sell
-            const txHash = await this.walletClient.writeContract({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const txHash = await (this.walletClient as any).writeContract({
                 address: UNISWAP_V3_ROUTER,
                 abi: ROUTER_ABI,
                 functionName: 'exactInputSingle',
@@ -439,6 +443,29 @@ export class SwapExecutor extends EventEmitter {
         } catch {
             return 'UNKNOWN';
         }
+    }
+
+    // ============ RUNTIME CONFIG UPDATE ============
+    updateConfig(updates: {
+        maxSlippage?:    number;
+        tp1Multiplier?:  number;
+        tp1Percentage?:  number;
+        tp2Multiplier?:  number;
+        tp2Percentage?:  number;
+        stopLoss?:       number;
+        maxPriorityFee?: number;
+        maxFeePerGas?:   number;
+    }): void {
+        const c = this.CONFIG as any;
+        if (updates.maxSlippage    != null) c.DEFAULT_SLIPPAGE      = updates.maxSlippage;
+        if (updates.tp1Multiplier  != null) c.TAKE_PROFIT_1_X       = updates.tp1Multiplier;
+        if (updates.tp1Percentage  != null) c.TAKE_PROFIT_1_PCT     = updates.tp1Percentage;
+        if (updates.tp2Multiplier  != null) c.TAKE_PROFIT_2_X       = updates.tp2Multiplier;
+        if (updates.tp2Percentage  != null) c.TAKE_PROFIT_2_PCT     = updates.tp2Percentage;
+        if (updates.stopLoss       != null) c.STOP_LOSS_PCT          = updates.stopLoss;
+        if (updates.maxPriorityFee != null) c.MAX_PRIORITY_FEE_GWEI = updates.maxPriorityFee;
+        if (updates.maxFeePerGas   != null) c.MAX_FEE_GWEI           = updates.maxFeePerGas;
+        console.log('⚙️  SwapExecutor config updated');
     }
 
     // ============ PUBLIC GETTERS ============
