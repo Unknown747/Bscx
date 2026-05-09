@@ -2,7 +2,8 @@ import { FlashblocksScanner } from './flashblocks-scanner';
 import { CopyTradeMonitor } from './copy-trade-monitor';
 import { MultiAIProvider } from './multi-ai-provider';
 import { SwapExecutor } from './swap-executor';
-import { checkSerialDeployer } from './deployer-checker';
+import { checkSerialDeployer, getTokenDeployer } from './deployer-checker';
+import { getDeployerReputation } from './deployer-reputation';
 import type { Address } from 'viem';
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
@@ -63,6 +64,8 @@ interface RuntimeConfig {
     serialRuggerEnabled:  boolean;
     serialRuggerMaxDeploys: number;
     serialRuggerWindowHours: number;
+    reputationEnabled:  boolean;
+    reputationMinScore: number;
 }
 
 export class AISniperBot extends EventEmitter {
@@ -100,7 +103,9 @@ export class AISniperBot extends EventEmitter {
         dcaEnabled:            process.env.DCA_ENABLED !== 'false',
         serialRuggerEnabled:   process.env.SERIAL_RUGGER_ENABLED  !== 'false',
         serialRuggerMaxDeploys: parseInt(process.env.SERIAL_RUGGER_MAX_DEPLOYS  || '3'),
-        serialRuggerWindowHours: parseInt(process.env.SERIAL_RUGGER_WINDOW_HOURS || '24')
+        serialRuggerWindowHours: parseInt(process.env.SERIAL_RUGGER_WINDOW_HOURS || '24'),
+        reputationEnabled:  process.env.REPUTATION_ENABLED !== 'false',
+        reputationMinScore: parseInt(process.env.REPUTATION_MIN_SCORE || '25')
     };
 
     private readonly CONFIG = {
@@ -542,6 +547,23 @@ export class AISniperBot extends EventEmitter {
             }
         }
 
+        // ── Reputation check (DexScreener survival rate) ──
+        if (this.runtimeConfig.reputationEnabled) {
+            const deployer = await getTokenDeployer(tokenAddress as string);
+            if (deployer) {
+                const rep = await getDeployerReputation(deployer);
+                if (rep.score !== null && rep.score < this.runtimeConfig.reputationMinScore) {
+                    console.log(`   🔴 LOW REPUTATION: ${deployer.slice(0, 10)}... score ${rep.score}/100 (${rep.deadTokens} rugged/${rep.aliveTokens + rep.deadTokens} checked)`);
+                    this.addLog('info', `🔴 Reputasi deployer rendah: ${rep.score}/100`, `${rep.deadTokens} token mati dari ${rep.aliveTokens + rep.deadTokens} yang dicek`);
+                    return;
+                }
+                if (rep.score !== null) {
+                    const e = rep.label === 'trusted' ? '⭐' : rep.label === 'neutral' ? '🟡' : '🔴';
+                    console.log(`   ${e} Deployer rep: ${rep.score}/100 [${rep.label}] (${rep.aliveTokens} alive, ${rep.deadTokens} dead)`);
+                }
+            }
+        }
+
         // ── Honeypot check (GoPlus) ──
         console.log('   🔍 Checking token safety (GoPlus)...');
         const safety = await this.checkHoneypot(tokenAddress);
@@ -587,6 +609,23 @@ export class AISniperBot extends EventEmitter {
                 this.addToBlacklist(opportunity.tokenAddress, `Serial rugger (${sr.deployCount} deploy/${sr.windowHours}h)`);
                 this.addLog('info', `🚨 Copy trade ditolak: serial rugger`, `${sr.deployer?.slice(0, 12)}... → ${sr.deployCount} deploy dalam ${sr.windowHours}j`);
                 return;
+            }
+        }
+
+        // ── Reputation check (copy trade) ──
+        if (this.runtimeConfig.reputationEnabled) {
+            const deployer = await getTokenDeployer(opportunity.tokenAddress as string);
+            if (deployer) {
+                const rep = await getDeployerReputation(deployer);
+                if (rep.score !== null && rep.score < this.runtimeConfig.reputationMinScore) {
+                    console.log(`   🔴 LOW REPUTATION (copy): ${deployer.slice(0, 10)}... score ${rep.score}/100`);
+                    this.addLog('info', `🔴 Copy ditolak: reputasi deployer ${rep.score}/100`, `${rep.deadTokens} token mati dari ${rep.aliveTokens + rep.deadTokens} yang dicek`);
+                    return;
+                }
+                if (rep.score !== null) {
+                    const e = rep.label === 'trusted' ? '⭐' : rep.label === 'neutral' ? '🟡' : '🔴';
+                    console.log(`   ${e} Copy deployer rep: ${rep.score}/100 [${rep.label}]`);
+                }
             }
         }
 
@@ -712,9 +751,11 @@ export class AISniperBot extends EventEmitter {
         if (s.maxPoolAgeSeconds!= null) this.runtimeConfig.maxPoolAgeSeconds= s.maxPoolAgeSeconds;
         if (s.aiEnabled             != null) this.runtimeConfig.aiEnabled             = s.aiEnabled;
         if (s.dcaEnabled            != null) this.runtimeConfig.dcaEnabled            = s.dcaEnabled;
-        if (s.serialRuggerEnabled   != null) this.runtimeConfig.serialRuggerEnabled   = s.serialRuggerEnabled;
+        if (s.serialRuggerEnabled      != null) this.runtimeConfig.serialRuggerEnabled      = s.serialRuggerEnabled;
         if (s.serialRuggerMaxDeploys   != null) this.runtimeConfig.serialRuggerMaxDeploys   = s.serialRuggerMaxDeploys;
         if (s.serialRuggerWindowHours  != null) this.runtimeConfig.serialRuggerWindowHours  = s.serialRuggerWindowHours;
+        if (s.reputationEnabled        != null) this.runtimeConfig.reputationEnabled        = s.reputationEnabled;
+        if (s.reputationMinScore       != null) this.runtimeConfig.reputationMinScore       = s.reputationMinScore;
 
         // Push trading params to SwapExecutor
         if (this.executor) {
@@ -862,6 +903,13 @@ export class AISniperBot extends EventEmitter {
                 worstTrade: sorted[sorted.length - 1]     ?? null
             }
         };
+    }
+
+    // ============ DEPLOYER REPUTATION ============
+    async checkDeployerReputation(address: string): Promise<import('./deployer-reputation').ReputationResult> {
+        // If address is a token contract, resolve its deployer first (cached from serial rugger)
+        const deployer = await getTokenDeployer(address) ?? address;
+        return getDeployerReputation(deployer);
     }
 
     // ============ MANUAL BLACKLIST ============

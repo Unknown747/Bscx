@@ -36,6 +36,10 @@ export interface ModalSettings {
     serialRuggerEnabled:    boolean;
     serialRuggerMaxDeploys: number;
     serialRuggerWindowHours: number;
+
+    // Deployer Reputation
+    reputationEnabled:  boolean;
+    reputationMinScore: number;
 }
 
 // FIX: Uniswap V3 swap uses ~150,000 gas units, not 21,000 (ETH transfer)
@@ -60,7 +64,9 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
         dcaEnabled: true,
         serialRuggerEnabled:    true,
         serialRuggerMaxDeploys: 3,
-        serialRuggerWindowHours: 24
+        serialRuggerWindowHours: 24,
+        reputationEnabled:  true,
+        reputationMinScore: 25
     });
     
     const [estimatedGasCost, setEstimatedGasCost] = useState(0.00015);
@@ -501,6 +507,80 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                         {!settings.serialRuggerEnabled && (
                             <div className="p-3 bg-yellow-900/20 rounded-lg border border-yellow-800/40">
                                 <p className="text-xs text-yellow-300">⚠️ Serial rugger detection dinonaktifkan. Bot tidak akan memeriksa riwayat deploy kontrak.</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ── Deployer Reputation ── */}
+                    <div className="bg-gray-800/50 rounded-xl p-5 border border-purple-900/40">
+                        <div className="flex justify-between items-center mb-4">
+                            <div>
+                                <h3 className="text-lg font-semibold text-white">⭐ Skor Reputasi Deployer</h3>
+                                <p className="text-xs text-gray-400 mt-0.5">
+                                    Cek riwayat token deployer via DexScreener — token mati = rug → skor rendah → tolak
+                                </p>
+                            </div>
+                            <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.reputationEnabled}
+                                    onChange={(e) => setSettings({...settings, reputationEnabled: e.target.checked})}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                            </label>
+                        </div>
+
+                        {settings.reputationEnabled && (
+                            <div className="grid grid-cols-1 gap-4">
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">
+                                        Skor Minimum (0–100)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        step="5"
+                                        min="0"
+                                        max="100"
+                                        value={settings.reputationMinScore}
+                                        onChange={(e) => {
+                                            const val = parseInt(e.target.value);
+                                            if (!isNaN(val)) setSettings({...settings, reputationMinScore: val});
+                                        }}
+                                        className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-white"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">
+                                        Tolak token jika skor deployer di bawah {settings.reputationMinScore}/100
+                                    </p>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                                    <div className="p-2 bg-green-900/30 rounded border border-green-800/40">
+                                        <div className="text-green-400 font-bold">⭐ Tepercaya</div>
+                                        <div className="text-gray-400">Skor ≥ 65</div>
+                                        <div className="text-gray-500 mt-0.5">Token-token sebelumnya masih aktif</div>
+                                    </div>
+                                    <div className="p-2 bg-yellow-900/30 rounded border border-yellow-800/40">
+                                        <div className="text-yellow-400 font-bold">🟡 Netral</div>
+                                        <div className="text-gray-400">Skor 35–64</div>
+                                        <div className="text-gray-500 mt-0.5">Campuran hidup dan mati</div>
+                                    </div>
+                                    <div className="p-2 bg-red-900/30 rounded border border-red-800/40">
+                                        <div className="text-red-400 font-bold">🔴 Berisiko</div>
+                                        <div className="text-gray-400">Skor &lt; 35</div>
+                                        <div className="text-gray-500 mt-0.5">Sebagian besar token mati</div>
+                                    </div>
+                                </div>
+                                <div className="p-3 bg-purple-900/20 rounded-lg border border-purple-800/40">
+                                    <p className="text-xs text-purple-300">
+                                        ⭐ Bot memeriksa hingga 5 token terakhir deployer di DexScreener. Token dengan likuiditas &gt; $500 = hidup. Token tanpa likuiditas = mati (kemungkinan rug). Skor = 50 + (hidup × 15) − (mati × 20). Jika data kurang dari 2 token, cek dilewati (fail-open).
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {!settings.reputationEnabled && (
+                            <div className="p-3 bg-yellow-900/20 rounded-lg border border-yellow-800/40">
+                                <p className="text-xs text-yellow-300">⚠️ Skor reputasi dinonaktifkan. Bot tidak akan memeriksa riwayat token deployer.</p>
                             </div>
                         )}
                     </div>

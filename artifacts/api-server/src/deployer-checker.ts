@@ -27,8 +27,8 @@ const deployerCache = new Map<string, { deployer: string; ts: number }>();
 // deployer:windowHours → deploy count
 const countCache    = new Map<string, { count: number; ts: number }>();
 
-// ── Internal: get who deployed a given token contract ─────────────────────────
-async function getTokenDeployer(tokenAddress: string): Promise<string | null> {
+// ── Public: get who deployed a given token contract (exported for reuse) ──────
+export async function getTokenDeployer(tokenAddress: string): Promise<string | null> {
     const key    = tokenAddress.toLowerCase();
     const cached = deployerCache.get(key);
     if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.deployer;

@@ -101,7 +101,9 @@ app.post('/api/settings', (req: Request, res: Response) => {
             dcaEnabled:       s.dcaEnabled,
             serialRuggerEnabled:     s.serialRuggerEnabled,
             serialRuggerMaxDeploys:  s.serialRuggerMaxDeploys,
-            serialRuggerWindowHours: s.serialRuggerWindowHours
+            serialRuggerWindowHours: s.serialRuggerWindowHours,
+            reputationEnabled:       s.reputationEnabled,
+            reputationMinScore:      s.reputationMinScore
         });
         res.json({ ok: true, message: 'Pengaturan berhasil diterapkan' });
     } catch (err: any) {
@@ -240,6 +242,21 @@ app.post('/api/telegram/test', async (_req: Request, res: Response) => {
     res.status(result.ok ? 200 : 400).json(result);
 });
 
+// ============ REPUTATION ENDPOINT ============
+app.get('/api/reputation/:address', async (req: Request, res: Response) => {
+    const { address } = req.params;
+    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' });
+        return;
+    }
+    try {
+        const result = await bot.checkDeployerReputation(address);
+        res.json(result);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ============ BLACKLIST ENDPOINTS ============
 app.get('/api/blacklist', (_req: Request, res: Response) => {
     res.json({ blacklist: bot.getBlacklist() });
@@ -288,7 +305,9 @@ app.get('/api/config', (_req: Request, res: Response) => {
         stopLoss:                rc.stopLoss,
         serialRuggerEnabled:     rc.serialRuggerEnabled,
         serialRuggerMaxDeploys:  String(rc.serialRuggerMaxDeploys),
-        serialRuggerWindowHours: String(rc.serialRuggerWindowHours)
+        serialRuggerWindowHours: String(rc.serialRuggerWindowHours),
+        reputationEnabled:       rc.reputationEnabled,
+        reputationMinScore:      String(rc.reputationMinScore)
     });
 });
 
