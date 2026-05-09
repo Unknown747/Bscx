@@ -14,48 +14,39 @@ app.use(express.json());
 app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Password');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
 });
 
-// ============ AUTH ============
-// Active tokens: Map<token, expiresAt>
-const activeSessions = new Map<string, number>();
-const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 jam
+// ============ PASSWORD AUTH ============
+// Every protected request must include header: X-Password: <your_password>
+function requirePassword(req: Request, res: Response, next: NextFunction): void {
+    const provided = req.headers['x-password'] as string || '';
+    const expected = process.env.APP_PASSWORD || '';
 
-function generateToken(): string {
-    return crypto.randomBytes(32).toString('hex');
-}
-
-function requireAuth(req: Request, res: Response, next: NextFunction): void {
-    const auth = req.headers['authorization'] || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-
-    if (!token) {
-        res.status(401).json({ error: 'Token required' });
+    if (!expected) {
+        res.status(500).json({ error: 'APP_PASSWORD belum dikonfigurasi di server' });
         return;
     }
 
-    const expiresAt = activeSessions.get(token);
-    if (!expiresAt || Date.now() > expiresAt) {
-        activeSessions.delete(token);
-        res.status(401).json({ error: 'Session expired, please login again' });
+    if (!provided) {
+        res.status(401).json({ error: 'Password diperlukan (header X-Password)' });
         return;
     }
 
-    // Refresh TTL on active use
-    activeSessions.set(token, Date.now() + SESSION_TTL_MS);
+    // Constant-time comparison to prevent timing attacks
+    const match =
+        provided.length === expected.length &&
+        crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+
+    if (!match) {
+        res.status(401).json({ error: 'Password salah' });
+        return;
+    }
+
     next();
 }
-
-// Clean up expired sessions every hour
-setInterval(() => {
-    const now = Date.now();
-    for (const [token, expiresAt] of activeSessions) {
-        if (now > expiresAt) activeSessions.delete(token);
-    }
-}, 60 * 60 * 1000);
 
 // ============ INITIALIZE COMPONENTS ============
 const scanner = new FlashblocksScanner();
@@ -67,7 +58,6 @@ async function startBot() {
     console.log(`💰 Capital Mode: ${process.env.TOTAL_CAPITAL_ETH || 0.006} ETH (100rb)`);
     console.log(`🐋 Copy Trading: ${process.env.COPY_TRADING_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
 
-    // Register event listeners BEFORE connecting
     scanner.on('pool-ready', async (pool) => {
         console.log(`\n🎯 POOL READY: ${pool.poolAddress}`);
     });
@@ -76,7 +66,6 @@ async function startBot() {
         console.log(`\n🔄 EXECUTING COPY TRADE:`);
         console.log(`   Token: ${data.tokenSymbol}`);
         console.log(`   Amount: ${data.amount} ETH`);
-        // Execute actual swap here using viem/ethers
     });
 
     await scanner.connect();
@@ -89,60 +78,36 @@ async function startBot() {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 }
 
-// ============ AUTH ENDPOINTS (public) ============
-
-// POST /api/auth/login — called by frontend on every WebView open
-app.post('/api/auth/login', (req: Request, res: Response) => {
+// ============ PUBLIC ENDPOINT ============
+// Frontend calls this to verify password before showing the UI
+app.post('/api/auth/verify', (req: Request, res: Response) => {
     const { password } = req.body;
+    const expected = process.env.APP_PASSWORD || '';
+
+    if (!expected) {
+        res.status(500).json({ error: 'APP_PASSWORD belum dikonfigurasi' });
+        return;
+    }
 
     if (!password) {
-        res.status(400).json({ error: 'Password required' });
+        res.status(400).json({ error: 'Password diperlukan' });
         return;
     }
 
-    const appPassword = process.env.APP_PASSWORD;
-    if (!appPassword) {
-        res.status(500).json({ error: 'APP_PASSWORD not configured on server' });
-        return;
-    }
-
-    // Constant-time comparison to prevent timing attacks
-    const inputBuf = Buffer.from(password);
-    const correctBuf = Buffer.from(appPassword);
     const match =
-        inputBuf.length === correctBuf.length &&
-        crypto.timingSafeEqual(inputBuf, correctBuf);
+        password.length === expected.length &&
+        crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expected));
 
     if (!match) {
-        res.status(401).json({ error: 'Password salah' });
+        res.status(401).json({ ok: false, error: 'Password salah' });
         return;
     }
 
-    const token = generateToken();
-    activeSessions.set(token, Date.now() + SESSION_TTL_MS);
-
-    res.json({
-        token,
-        expiresIn: SESSION_TTL_MS,
-        message: 'Login berhasil'
-    });
+    res.json({ ok: true });
 });
 
-// POST /api/auth/logout
-app.post('/api/auth/logout', requireAuth, (req: Request, res: Response) => {
-    const token = req.headers['authorization']!.slice(7);
-    activeSessions.delete(token);
-    res.json({ message: 'Logout berhasil' });
-});
-
-// GET /api/auth/check — frontend calls this on load to validate stored token
-app.get('/api/auth/check', requireAuth, (req: Request, res: Response) => {
-    res.json({ valid: true });
-});
-
-// ============ PROTECTED API ENDPOINTS ============
-
-app.get('/api/status', requireAuth, (req: Request, res: Response) => {
+// ============ PROTECTED ENDPOINTS ============
+app.get('/api/status', requirePassword, (req: Request, res: Response) => {
     res.json({
         connected: scanner.isConnectedToBase(),
         copyStats: copyMonitor.getStats(),
@@ -151,7 +116,7 @@ app.get('/api/status', requireAuth, (req: Request, res: Response) => {
     });
 });
 
-app.get('/api/config', requireAuth, (req: Request, res: Response) => {
+app.get('/api/config', requirePassword, (req: Request, res: Response) => {
     res.json({
         capital: process.env.TOTAL_CAPITAL_ETH,
         maxTrade: process.env.MAX_TRADE_AMOUNT,
@@ -170,7 +135,6 @@ app.listen(PORT, () => {
     startBot().catch(console.error);
 });
 
-// Handle both SIGINT (Ctrl+C) and SIGTERM (Docker/PM2)
 function gracefulShutdown() {
     console.log('\n🛑 Shutting down...');
     scanner.disconnect();
