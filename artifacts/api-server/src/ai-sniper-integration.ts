@@ -387,6 +387,48 @@ export class AISniperBot extends EventEmitter {
         return { ...this.runtimeConfig };
     }
 
+    // ============ KEY MANAGEMENT ============
+    updateKeys(keys: { privateKey?: string; groqKey?: string; geminiKey?: string; huggingfaceKey?: string }): void {
+        // Update AI provider keys hot
+        const aiKeys: { groq?: string; gemini?: string; huggingface?: string } = {};
+        if (keys.groqKey)        aiKeys.groq        = keys.groqKey;
+        if (keys.geminiKey)      aiKeys.gemini      = keys.geminiKey;
+        if (keys.huggingfaceKey) aiKeys.huggingface = keys.huggingfaceKey;
+        if (Object.keys(aiKeys).length > 0) this.ai.updateKeys(aiKeys);
+
+        // Re-init SwapExecutor if private key changed
+        if (keys.privateKey) {
+            process.env.PRIVATE_KEY = keys.privateKey;
+            try {
+                if (this.executor) this.executor.stop();
+                const { SwapExecutor } = require('./swap-executor');
+                this.executor = new SwapExecutor();
+                // Re-wire executor events
+                this.executor.on('buy-success',  (d: any) => { this.emit('buy-success',  d); this.addLog('buy-success',  `BUY ${d.tokenSymbol}`,                       `TX: ${d.txHash?.slice(0, 18)}...`); });
+                this.executor.on('buy-failed',   (d: any) => { this.emit('buy-failed',   d); this.addLog('buy-failed',   `BUY gagal: ${d.tokenAddress?.slice(0, 10)}...`, d.error); });
+                this.executor.on('sell-success', (d: any) => { this.emit('sell-success', d); this.addLog('sell-success', `SELL ${d.tokenSymbol} (${d.percentSold}%)`,     `TX: ${d.txHash?.slice(0, 18)}...`); });
+                this.executor.on('take-profit',  (d: any) => { this.emit('take-profit',  d); this.addLog('take-profit',  `TP${d.level} ${d.tokenSymbol} @ ${d.multiplier?.toFixed(2)}x`, 'Auto take profit triggered'); });
+                this.executor.on('stop-loss',    (d: any) => { this.emit('stop-loss',    d); this.addLog('stop-loss',    `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`,    'Auto stop loss triggered'); });
+                console.log('✅ SwapExecutor re-initialized with new private key');
+                this.addLog('info', 'Wallet terhubung', `Address: ${this.executor.getWalletAddress()}`);
+            } catch (err: any) {
+                console.warn(`⚠️  SwapExecutor re-init failed: ${err.message}`);
+                this.addLog('info', 'Wallet gagal terhubung', err.message);
+            }
+        }
+    }
+
+    getKeyStatus(): { privateKey: boolean; groqKey: boolean; geminiKey: boolean; huggingfaceKey: boolean; appPassword: boolean } {
+        const ai = this.ai.getKeyStatus();
+        return {
+            privateKey:     !!this.executor,
+            groqKey:        ai.groq,
+            geminiKey:      ai.gemini,
+            huggingfaceKey: ai.huggingface,
+            appPassword:    !!(process.env.APP_PASSWORD)
+        };
+    }
+
     getStatus() {
         return {
             connected:     this.scanner.isConnectedToBase(),

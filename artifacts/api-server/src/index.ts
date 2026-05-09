@@ -2,6 +2,8 @@ import express, { Request, Response, NextFunction } from 'express';
 import { AISniperBot } from './ai-sniper-integration';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 
@@ -103,6 +105,60 @@ app.post('/api/settings', (req: Request, res: Response) => {
     } catch (err: any) {
         res.status(500).json({ error: err.message });
     }
+});
+
+// ============ KEY MANAGEMENT ENDPOINTS ============
+app.get('/api/keys', (_req: Request, res: Response) => {
+    res.json(bot.getKeyStatus());
+});
+
+app.post('/api/keys', (req: Request, res: Response) => {
+    const { privateKey, groqKey, geminiKey, huggingfaceKey, appPassword } = req.body;
+
+    if (!privateKey && !groqKey && !geminiKey && !huggingfaceKey && !appPassword) {
+        res.status(400).json({ error: 'Tidak ada kunci yang diberikan' });
+        return;
+    }
+
+    // Write to .env file for persistence across restarts
+    const envPath = path.resolve(__dirname, '../.env');
+    let content = '';
+    try { content = fs.readFileSync(envPath, 'utf8'); } catch { content = ''; }
+
+    const lines = content.split('\n');
+    const lineIndex = new Map<string, number>();
+    lines.forEach((line, i) => {
+        const match = line.match(/^([A-Z_]+)=/);
+        if (match) lineIndex.set(match[1], i);
+    });
+
+    const updates: Record<string, string> = {};
+    if (privateKey)     updates['PRIVATE_KEY']         = privateKey;
+    if (groqKey)        updates['GROQ_API_KEY']         = groqKey;
+    if (geminiKey)      updates['GEMINI_API_KEY']       = geminiKey;
+    if (huggingfaceKey) updates['HUGGINGFACE_API_KEY']  = huggingfaceKey;
+    if (appPassword)    updates['APP_PASSWORD']         = appPassword;
+
+    for (const [key, value] of Object.entries(updates)) {
+        process.env[key] = value;
+        const escaped = value.includes(' ') ? `"${value}"` : value;
+        if (lineIndex.has(key)) {
+            lines[lineIndex.get(key)!] = `${key}=${escaped}`;
+        } else {
+            lines.push(`${key}=${escaped}`);
+        }
+    }
+
+    try {
+        fs.writeFileSync(envPath, lines.filter(l => l !== '').join('\n') + '\n');
+    } catch (err: any) {
+        console.warn('⚠️  Could not write .env file:', err.message);
+    }
+
+    // Apply keys to running bot without restart
+    bot.updateKeys({ privateKey, groqKey, geminiKey, huggingfaceKey });
+
+    res.json({ ok: true, status: bot.getKeyStatus() });
 });
 
 app.get('/api/logs', (_req: Request, res: Response) => {

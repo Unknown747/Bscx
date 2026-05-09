@@ -37,7 +37,7 @@ export class MultiAIProvider {
     private currentProvider: AIProvider = 'groq';
     private stats: Map<AIProvider, { success: number; fail: number; avgLatency: number }> = new Map();
 
-    private readonly API_KEYS = {
+    private API_KEYS = {
         GROQ: process.env.GROQ_API_KEY || '',
         GEMINI: process.env.GEMINI_API_KEY || '',
         HUGGINGFACE: process.env.HUGGINGFACE_API_KEY || ''
@@ -369,6 +369,40 @@ export class MultiAIProvider {
                 bestTime: new Date().toISOString()
             };
         }
+    }
+
+    // ============ HOT-RELOAD KEYS ============
+    updateKeys(keys: { groq?: string; gemini?: string; huggingface?: string }): void {
+        if (keys.groq) {
+            this.API_KEYS.GROQ = keys.groq;
+            this.groqClient = axios.create({
+                headers: { 'Authorization': `Bearer ${keys.groq}`, 'Content-Type': 'application/json' },
+                timeout: 5000
+            });
+        }
+        if (keys.gemini) {
+            this.API_KEYS.GEMINI = keys.gemini;
+        }
+        if (keys.huggingface) {
+            this.API_KEYS.HUGGINGFACE = keys.huggingface;
+            this.huggingfaceClient = axios.create({
+                headers: { 'Authorization': `Bearer ${keys.huggingface}`, 'Content-Type': 'application/json' },
+                timeout: 15000
+            });
+        }
+        console.log('🔑 AI keys updated:',
+            `Groq=${this.API_KEYS.GROQ ? '✅' : '❌'}`,
+            `Gemini=${this.API_KEYS.GEMINI ? '✅' : '❌'}`,
+            `HuggingFace=${this.API_KEYS.HUGGINGFACE ? '✅' : '❌'}`
+        );
+    }
+
+    getKeyStatus(): { groq: boolean; gemini: boolean; huggingface: boolean } {
+        return {
+            groq:         !!this.API_KEYS.GROQ,
+            gemini:       !!this.API_KEYS.GEMINI,
+            huggingface:  !!this.API_KEYS.HUGGINGFACE
+        };
     }
 
     // ============ MONITORING ============
