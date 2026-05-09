@@ -1,0 +1,454 @@
+import WebSocket from 'ws';
+import { EventEmitter } from 'events';
+import axios from 'axios';
+
+// ============ TYPES ============
+interface PoolData {
+    poolAddress: string;
+    token0: string;
+    token1: string;
+    liquidity: number;
+    createdAt: number;
+    txHash: string;
+    blockNumber: number;
+}
+
+interface TokenSafety {
+    isHoneypot: boolean;
+    buyTax: number;
+    sellTax: number;
+    isMintable: boolean;
+    canTakeBackOwnership: boolean;
+    safetyScore: number;
+}
+
+interface SnipeOpportunity {
+    pool: PoolData;
+    safety: TokenSafety;
+    estimatedGas: number;
+    score: number;
+}
+
+// ============ MAIN SCANNER CLASS ============
+export class FlashblocksScanner extends EventEmitter {
+    private ws: WebSocket | null = null;
+    private currentWsUrl: string;
+    private reconnectAttempts = 0;
+    private isConnected = false;
+    private pendingTransactions: Map<string, number> = new Map();
+    private lastPing = 0;
+    private readonly RPC_ENDPOINTS = [
+        { url: 'wss://mainnet-preconf.base.org', type: 'flashblocks', priority: 1 },
+        { url: 'wss://base.llamarpc.com', type: 'public', priority: 2 },
+        { url: 'wss://base-mainnet.g.alchemy.com/v2/demo', type: 'alchemy', priority: 3 },
+    ];
+    
+    // Konfigurasi modal 100rb (0.006 ETH)
+    private readonly CONFIG = {
+        MAX_TRADE_ETH: 0.0006,           // 10% dari modal
+        MIN_LIQUIDITY_ETH: 0.15,          // Minimal liquidity pool
+        MAX_LIQUIDITY_ETH: 2.0,           // Max liquidity (hindari gas war)
+        MAX_POOL_AGE_SECONDS: 60,         // Hanya pool < 1 menit
+        MAX_GAS_PRICE_GWEI: 2.0,          // Max gas untuk modal kecil
+        MIN_SAFETY_SCORE: 65,             // Minimal safety score
+        MAX_BUY_TAX_PERCENT: 10,          // Max tax beli
+        MAX_SELL_TAX_PERCENT: 10,         // Max tax jual
+        SCAN_INTERVAL_MS: 200,            // Scan tiap 200ms (Flashblocks speed)
+    };
+
+    constructor() {
+        super();
+        this.currentWsUrl = this.RPC_ENDPOINTS[0].url;
+    }
+
+    // ============ CONNECTION MANAGEMENT ============
+    async connect(): Promise<void> {
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🔥 BASE FLASHBLOCKS SCANNER v2.0');
+        console.log(`💰 Modal Mode: ${this.CONFIG.MAX_TRADE_ETH * 1000} USD (100rb)`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+        // Test all endpoints first
+        const fastestEndpoint = await this.findFastestEndpoint();
+        if (fastestEndpoint) {
+            this.currentWsUrl = fastestEndpoint.url;
+            console.log(`⚡ Using fastest endpoint: ${fastestEndpoint.type} (${fastestEndpoint.ping}ms)`);
+        }
+
+        await this.establishConnection();
+    }
+
+    private async findFastestEndpoint(): Promise<{ url: string; type: string; ping: number } | null> {
+        const results = await Promise.all(
+            this.RPC_ENDPOINTS.map(async (endpoint) => {
+                const start = Date.now();
+                try {
+                    await this.pingWebSocket(endpoint.url);
+                    const ping = Date.now() - start;
+                    return { ...endpoint, ping };
+                } catch {
+                    return { ...endpoint, ping: Infinity };
+                }
+            })
+        );
+        
+        const valid = results.filter(r => r.ping < 500);
+        if (valid.length === 0) return null;
+        return valid.sort((a, b) => a.ping - b.ping)[0];
+    }
+
+    private pingWebSocket(url: string): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const ws = new WebSocket(url);
+            const timeout = setTimeout(() => {
+                ws.close();
+                reject(new Error('Timeout'));
+            }, 3000);
+            
+            ws.on('open', () => {
+                clearTimeout(timeout);
+                ws.close();
+                resolve();
+            });
+            
+            ws.on('error', () => {
+                clearTimeout(timeout);
+                reject(new Error('Connection failed'));
+            });
+        });
+    }
+
+    private async establishConnection(): Promise<void> {
+        return new Promise((resolve, reject) => {
+            console.log(`🔌 Connecting to ${this.currentWsUrl}...`);
+            
+            this.ws = new WebSocket(this.currentWsUrl, {
+                handshakeTimeout: 10000,
+                timeout: 30000,
+            });
+            
+            const timeoutId = setTimeout(() => {
+                reject(new Error('Connection timeout'));
+            }, 15000);
+            
+            this.ws.on('open', async () => {
+                clearTimeout(timeoutId);
+                this.isConnected = true;
+                this.reconnectAttempts = 0;
+                this.lastPing = Date.now();
+                
+                console.log('✅ WebSocket CONNECTED!');
+                
+                // Subscribe ke newPendingTransactions (kunci deteksi koin baru)
+                this.subscribeToMempool();
+                
+                // Subscribe ke logs Uniswap V3 Factory
+                this.subscribeToPoolEvents();
+                
+                // Start keepalive ping
+                this.startKeepAlive();
+                
+                resolve();
+            });
+            
+            this.ws.on('error', (error) => {
+                console.error(`WebSocket error: ${error.message}`);
+                this.handleDisconnect();
+                reject(error);
+            });
+            
+            this.ws.on('close', () => {
+                console.log('WebSocket closed');
+                this.handleDisconnect();
+            });
+            
+            this.ws.on('message', (data) => {
+                this.handleMessage(data);
+            });
+        });
+    }
+
+    private subscribeToMempool(): void {
+        if (!this.ws) return;
+        
+        const subscribeMsg = JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'eth_subscribe',
+            params: ['newPendingTransactions']
+        });
+        
+        this.ws.send(subscribeMsg);
+        console.log('✅ Subscribed to newPendingTransactions');
+    }
+
+    private subscribeToPoolEvents(): void {
+        if (!this.ws) return;
+        
+        // Uniswap V3 Factory address on Base
+        const UNISWAP_V3_FACTORY = '0x33128a8fC17869897dcE68Ed026d694621fd6Df';
+        // PoolCreated event signature
+        const POOL_CREATED_SIG = '0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118';
+        
+        const subscribeMsg = JSON.stringify({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'eth_subscribe',
+            params: ['logs', {
+                address: UNISWAP_V3_FACTORY,
+                topics: [POOL_CREATED_SIG]
+            }]
+        });
+        
+        this.ws.send(subscribeMsg);
+        console.log('✅ Subscribed to pool creation events');
+    }
+
+    private startKeepAlive(): void {
+        setInterval(() => {
+            if (this.ws && this.isConnected) {
+                this.ws.send(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: Date.now(),
+                    method: 'net_version',
+                    params: []
+                }));
+            }
+        }, 15000);
+    }
+
+    private handleMessage(data: WebSocket.Data): void {
+        try {
+            const parsed = JSON.parse(data.toString());
+            
+            if (parsed.method === 'eth_subscription') {
+                const result = parsed.params.result;
+                
+                // Handle new pending transactions
+                if (typeof result === 'string' && result.startsWith('0x')) {
+                    this.onNewTransaction(result);
+                }
+                
+                // Handle new pool creation
+                if (result && result.address === '0x33128a8fC17869897dcE68Ed026d694621fd6Df') {
+                    this.onPoolCreated(result);
+                }
+            }
+        } catch (error) {
+            // Parse error - ignore malformed messages
+        }
+    }
+
+    // ============ TRANSACTION HANDLING ============
+    private onNewTransaction(txHash: string): void {
+        const now = Date.now();
+        
+        // Deduplicate transactions
+        if (this.pendingTransactions.has(txHash)) return;
+        this.pendingTransactions.set(txHash, now);
+        
+        // Clean old entries every 1000 txs
+        if (this.pendingTransactions.size > 1000) {
+            const cutoff = now - 30000; // 30 seconds
+            for (const [hash, time] of this.pendingTransactions) {
+                if (time < cutoff) this.pendingTransactions.delete(hash);
+            }
+        }
+        
+        // Emit untuk monitoring
+        this.emit('transaction', { hash: txHash, timestamp: now });
+        
+        // Log setiap 10 transaksi (biar ga spam)
+        if (this.pendingTransactions.size % 10 === 0) {
+            console.log(`📊 Mempool size: ${this.pendingTransactions.size} pending txs`);
+        }
+    }
+
+    private async onPoolCreated(logData: any): Promise<void> {
+        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🔥🔥🔥 NEW POOL DETECTED! 🔥🔥🔥');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+        
+        const poolData: PoolData = {
+            poolAddress: logData.address,
+            token0: '0x' + logData.topics[1].slice(-40),
+            token1: '0x' + logData.topics[2].slice(-40),
+            liquidity: 0,
+            createdAt: Date.now(),
+            txHash: logData.transactionHash,
+            blockNumber: parseInt(logData.blockNumber, 16)
+        };
+        
+        // Get pool liquidity
+        const liquidity = await this.getPoolLiquidity(poolData.poolAddress);
+        if (liquidity) {
+            poolData.liquidity = liquidity;
+        }
+        
+        // Check if pool meets criteria for modal kecil
+        const isValid = await this.validatePool(poolData);
+        
+        if (isValid) {
+            console.log('✅ POOL VALID - READY TO SNIPE!');
+            console.log(`📍 Pool: ${poolData.poolAddress}`);
+            console.log(`💧 Liquidity: ${poolData.liquidity.toFixed(3)} ETH`);
+            console.log(`⏱️ Created: ${Math.floor((Date.now() - poolData.createdAt) / 1000)}s ago`);
+            
+            this.emit('pool-ready', poolData);
+        } else {
+            console.log('❌ Pool rejected by filters');
+        }
+    }
+
+    private async validatePool(pool: PoolData): Promise<boolean> {
+        // Filter 1: Liquidity must be in range
+        if (pool.liquidity < this.CONFIG.MIN_LIQUIDITY_ETH) {
+            console.log(`   ❌ Liquidity too low: ${pool.liquidity.toFixed(3)} ETH (min: ${this.CONFIG.MIN_LIQUIDITY_ETH})`);
+            return false;
+        }
+        
+        if (pool.liquidity > this.CONFIG.MAX_LIQUIDITY_ETH) {
+            console.log(`   ❌ Liquidity too high: ${pool.liquidity.toFixed(3)} ETH (max: ${this.CONFIG.MAX_LIQUIDITY_ETH})`);
+            return false;
+        }
+        
+        // Filter 2: Pool age
+        const ageSeconds = (Date.now() - pool.createdAt) / 1000;
+        if (ageSeconds > this.CONFIG.MAX_POOL_AGE_SECONDS) {
+            console.log(`   ❌ Pool too old: ${ageSeconds.toFixed(0)}s (max: ${this.CONFIG.MAX_POOL_AGE_SECONDS}s)`);
+            return false;
+        }
+        
+        // Filter 3: Token safety check (most important!)
+        const safety = await this.checkTokenSafety(pool.token0);
+        if (!safety) return false;
+        
+        if (safety.isHoneypot) {
+            console.log(`   ❌ HONEYPOT DETECTED!`);
+            return false;
+        }
+        
+        if (safety.buyTax > this.CONFIG.MAX_BUY_TAX_PERCENT) {
+            console.log(`   ❌ Buy tax too high: ${safety.buyTax}% (max: ${this.CONFIG.MAX_BUY_TAX_PERCENT}%)`);
+            return false;
+        }
+        
+        if (safety.sellTax > this.CONFIG.MAX_SELL_TAX_PERCENT) {
+            console.log(`   ❌ Sell tax too high: ${safety.sellTax}% (max: ${this.CONFIG.MAX_SELL_TAX_PERCENT}%)`);
+            return false;
+        }
+        
+        if (safety.safetyScore < this.CONFIG.MIN_SAFETY_SCORE) {
+            console.log(`   ❌ Safety score too low: ${safety.safetyScore} (min: ${this.CONFIG.MIN_SAFETY_SCORE})`);
+            return false;
+        }
+        
+        console.log(`   ✅ Liquidity: OK | Age: OK | Safety: ${safety.safetyScore}`);
+        return true;
+    }
+
+    // ============ API INTEGRATIONS ============
+    private async getPoolLiquidity(poolAddress: string): Promise<number | null> {
+        try {
+            // Use DexScreener API (free, no key needed)
+            const response = await axios.get(
+                `https://api.dexscreener.com/latest/dex/search?q=${poolAddress}`,
+                { timeout: 5000 }
+            );
+            
+            if (response.data.pairs && response.data.pairs[0]) {
+                const liquidityUSD = parseFloat(response.data.pairs[0].liquidity?.usd || '0');
+                const ethPrice = await this.getEthPrice();
+                return liquidityUSD / ethPrice;
+            }
+            return null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    private async getEthPrice(): Promise<number> {
+        try {
+            const response = await axios.get(
+                'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd',
+                { timeout: 3000 }
+            );
+            return response.data.ethereum.usd;
+        } catch {
+            return 3000; // Fallback price
+        }
+    }
+
+    private async checkTokenSafety(tokenAddress: string): Promise<TokenSafety | null> {
+        try {
+            // Use GoPlus API (free)
+            const response = await axios.get(
+                `https://api.gopluslabs.io/api/v1/token_security/8453?contract_addresses=${tokenAddress}`,
+                { timeout: 8000 }
+            );
+            
+            const data = response.data.result[tokenAddress.toLowerCase()];
+            if (!data) return null;
+            
+            return {
+                isHoneypot: data.is_honeypot === '1',
+                buyTax: parseFloat(data.buy_tax || '0'),
+                sellTax: parseFloat(data.sell_tax || '0'),
+                isMintable: data.mintable === 'true',
+                canTakeBackOwnership: data.can_take_back_ownership === 'true',
+                safetyScore: this.calculateSafetyScore(data)
+            };
+        } catch (error) {
+            console.log(`   ⚠️ Safety check failed for ${tokenAddress.slice(0, 10)}...`);
+            return null;
+        }
+    }
+
+    private calculateSafetyScore(data: any): number {
+        let score = 100;
+        
+        if (data.is_honeypot === '1') score -= 50;
+        if (data.is_honeypot === '1') score -= 50;
+        if (data.mintable === 'true') score -= 20;
+        if (data.can_take_back_ownership === 'true') score -= 15;
+        
+        const buyTax = parseFloat(data.buy_tax || '0');
+        if (buyTax > 5) score -= buyTax;
+        
+        const sellTax = parseFloat(data.sell_tax || '0');
+        if (sellTax > 5) score -= sellTax;
+        
+        return Math.max(0, Math.min(100, score));
+    }
+
+    private handleDisconnect(): void {
+        this.isConnected = false;
+        this.reconnectAttempts++;
+        
+        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+        console.log(`🔄 Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})...`);
+        
+        setTimeout(() => {
+            this.connect().catch(console.error);
+        }, delay);
+    }
+
+    // ============ PUBLIC METHODS ============
+    getConfig() {
+        return this.CONFIG;
+    }
+    
+    isConnectedToBase(): boolean {
+        return this.isConnected;
+    }
+    
+    disconnect(): void {
+        if (this.ws) {
+            this.ws.close();
+            this.ws = null;
+        }
+        this.isConnected = false;
+    }
+}
+
+export default FlashblocksScanner;
