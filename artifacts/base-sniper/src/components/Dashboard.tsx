@@ -6,6 +6,7 @@ import Modal100k, { ModalSettings } from './Modal100k';
 import WalletConfigModal from './WalletConfigModal';
 import CopyWalletsModal from './CopyWalletsModal';
 import TradeHistory from './TradeHistory';
+import WhaleLeaderboard from './WhaleLeaderboard';
 
 interface Status {
     connected: boolean;
@@ -261,6 +262,8 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                                 ))}
                             </div>
                         </div>
+
+                        <WhaleLeaderboard apiUrl={apiUrl} />
 
                         {lastUpdate && (
                             <p className="text-center text-xs text-gray-700">Update terakhir: {lastUpdate}</p>
