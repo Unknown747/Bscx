@@ -21,6 +21,15 @@ const BLOCKSCOUT      = 'https://base.blockscout.com/api';
 const DEXSCREENER_URL = 'https://api.dexscreener.com/latest/dex/tokens/';
 const CACHE_TTL       = 30 * 60 * 1000; // 30 min
 
+export interface TokenCheck {
+    address:      string;
+    alive:        boolean | null; // null = API error / skipped
+    liquidityUsd: number;
+    tokenName?:   string;
+    tokenSymbol?: string;
+    pairUrl?:     string;
+}
+
 export interface ReputationResult {
     score:       number | null;          // 0-100, or null = not enough data
     label:       'trusted' | 'neutral' | 'risky' | 'unknown';
@@ -30,6 +39,7 @@ export interface ReputationResult {
     deployer:    string;                 // the deployer address scored
     skipped:     boolean;                // true when API was unreachable
     checkedAt:   number;
+    tokenChecks: TokenCheck[];           // per-token detail for the DeployerCard UI
 }
 
 // ── Cache: deployer address → result ─────────────────────────────────────────
@@ -60,8 +70,8 @@ async function getDeployerTokenContracts(deployerAddress: string, limit = 10): P
     }
 }
 
-// ── Internal: check if a token still has active liquidity on Base ─────────────
-async function isTokenAlive(tokenAddress: string): Promise<boolean | null> {
+// ── Internal: full DexScreener check for one token ────────────────────────────
+async function checkToken(tokenAddress: string): Promise<TokenCheck> {
     try {
         const res = await axios.get(`${DEXSCREENER_URL}${tokenAddress}`, {
             timeout: 4000
@@ -70,15 +80,30 @@ async function isTokenAlive(tokenAddress: string): Promise<boolean | null> {
         const pairs: any[] = res.data?.pairs ?? [];
         const basePairs = pairs.filter((p: any) => p.chainId === 'base');
 
-        if (basePairs.length === 0) return false;  // no pairs = likely rug
+        if (basePairs.length === 0) {
+            return { address: tokenAddress, alive: false, liquidityUsd: 0 };
+        }
 
-        const totalLiquidity = basePairs.reduce((sum: number, p: any) => {
-            return sum + (parseFloat(p.liquidity?.usd ?? '0') || 0);
-        }, 0);
+        // Sort by liquidity desc; use the top pair for name/symbol/url
+        basePairs.sort((a: any, b: any) =>
+            (parseFloat(b.liquidity?.usd ?? '0') || 0) - (parseFloat(a.liquidity?.usd ?? '0') || 0)
+        );
+        const main = basePairs[0];
+        const totalLiquidity = basePairs.reduce(
+            (sum: number, p: any) => sum + (parseFloat(p.liquidity?.usd ?? '0') || 0),
+            0
+        );
 
-        return totalLiquidity >= 500; // $500 threshold — dead rugs have $0
+        return {
+            address:      tokenAddress,
+            alive:        totalLiquidity >= 500,
+            liquidityUsd: Math.round(totalLiquidity),
+            tokenName:    main.baseToken?.name,
+            tokenSymbol:  main.baseToken?.symbol,
+            pairUrl:      main.url
+        };
     } catch {
-        return null; // API error — skip this token
+        return { address: tokenAddress, alive: null, liquidityUsd: 0 };
     }
 }
 
@@ -91,7 +116,7 @@ export async function getDeployerReputation(deployerAddress: string): Promise<Re
     const UNKNOWN: ReputationResult = {
         score: null, label: 'unknown', totalTokens: 0,
         aliveTokens: 0, deadTokens: 0, deployer: key,
-        skipped: true, checkedAt: Date.now()
+        skipped: true, checkedAt: Date.now(), tokenChecks: []
     };
 
     const contracts = await getDeployerTokenContracts(key);
@@ -102,15 +127,15 @@ export async function getDeployerReputation(deployerAddress: string): Promise<Re
     }
 
     // Check up to 5 most recent token contracts in parallel
-    const toCheck  = contracts.slice(0, 5);
-    const checks   = await Promise.all(toCheck.map(isTokenAlive));
+    const toCheck    = contracts.slice(0, 5);
+    const tokenChecks = await Promise.all(toCheck.map(checkToken));
 
     let aliveTokens = 0;
     let deadTokens  = 0;
-    for (const result of checks) {
-        if (result === true)  aliveTokens++;
-        else if (result === false) deadTokens++;
-        // null = API error → skip
+    for (const tc of tokenChecks) {
+        if (tc.alive === true)  aliveTokens++;
+        else if (tc.alive === false) deadTokens++;
+        // null = API error → skip from scoring
     }
 
     const checked = aliveTokens + deadTokens;
@@ -130,9 +155,10 @@ export async function getDeployerReputation(deployerAddress: string): Promise<Re
         totalTokens: contracts.length,
         aliveTokens,
         deadTokens,
-        deployer:   key,
-        skipped:    false,
-        checkedAt:  Date.now()
+        deployer:    key,
+        skipped:     false,
+        checkedAt:   Date.now(),
+        tokenChecks
     };
 
     reputationCache.set(key, { result: rep, ts: Date.now() });
@@ -146,7 +172,7 @@ export async function getReputationForToken(tokenAddress: string): Promise<Reput
         return {
             score: null, label: 'unknown', totalTokens: 0,
             aliveTokens: 0, deadTokens: 0, deployer: tokenAddress.toLowerCase(),
-            skipped: true, checkedAt: Date.now()
+            skipped: true, checkedAt: Date.now(), tokenChecks: []
         };
     }
     return getDeployerReputation(deployer);
