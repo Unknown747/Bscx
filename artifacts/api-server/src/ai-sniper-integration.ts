@@ -424,6 +424,19 @@ export class AISniperBot extends EventEmitter {
         return this.executor.getLivePnL();
     }
 
+    // ============ MANUAL SELL ============
+    async manualSell(tokenAddress: string, percent: number): Promise<{ success: boolean; txHash?: string; error?: string }> {
+        if (!this.executor) return { success: false, error: 'Executor belum siap (PRIVATE_KEY belum dikonfigurasi)' };
+        const pct = Math.max(1, Math.min(100, Math.round(percent)));
+        const result = await this.executor.sell(tokenAddress as `0x${string}`, pct);
+        if (result.success) {
+            this.addLog('sell-success', `Manual sell ${pct}%`, tokenAddress);
+        } else {
+            this.addLog('info', `Manual sell gagal: ${result.error}`, tokenAddress);
+        }
+        return { success: result.success, txHash: result.txHash as string | undefined, error: result.error };
+    }
+
     // ============ COPY WALLET MANAGEMENT ============
     getCopyWallets() { return this.copyMonitor.getWallets(); }
 

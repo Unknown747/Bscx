@@ -117,6 +117,22 @@ app.get('/api/pnl', async (_req: Request, res: Response) => {
     }
 });
 
+// ============ MANUAL SELL ENDPOINT ============
+app.post('/api/sell', async (req: Request, res: Response) => {
+    const { tokenAddress, percent } = req.body;
+    if (!tokenAddress || typeof tokenAddress !== 'string' || !tokenAddress.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'tokenAddress tidak valid' });
+        return;
+    }
+    const pct = typeof percent === 'number' ? percent : 100;
+    try {
+        const result = await bot.manualSell(tokenAddress, pct);
+        res.json(result);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ============ COPY WALLET MANAGEMENT ENDPOINTS ============
 app.get('/api/wallets', (_req: Request, res: Response) => {
     res.json({ wallets: bot.getCopyWallets() });
