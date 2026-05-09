@@ -820,6 +820,30 @@ export class AISniperBot extends EventEmitter {
         };
     }
 
+    // ============ MANUAL BLACKLIST ============
+    getBlacklist(): { address: string; addedAt: number; label?: string }[] {
+        return this._blacklistMeta ? [...this._blacklistMeta.values()] : [];
+    }
+
+    addToBlacklist(address: string, label?: string): void {
+        const addr = address.toLowerCase();
+        this.blacklist.add(addr);
+        if (!this._blacklistMeta) this._blacklistMeta = new Map();
+        this._blacklistMeta.set(addr, { address: addr, addedAt: Date.now(), label });
+        this.addLog('info', `🚫 Token diblacklist manual`, `${label ? label + ' ' : ''}${address}`);
+        console.log(`🚫 Manual blacklist: ${address}${label ? ` (${label})` : ''}`);
+    }
+
+    removeFromBlacklist(address: string): void {
+        const addr = address.toLowerCase();
+        this.blacklist.delete(addr);
+        if (this._blacklistMeta) this._blacklistMeta.delete(addr);
+        this.addLog('info', `✅ Token dihapus dari blacklist`, address);
+        console.log(`✅ Removed from blacklist: ${address}`);
+    }
+
+    private _blacklistMeta: Map<string, { address: string; addedAt: number; label?: string }> = new Map();
+
     getKeyStatus(): { privateKey: boolean; groqKey: boolean; geminiKey: boolean; huggingfaceKey: boolean; appPassword: boolean; telegramToken: boolean; telegramChatId: boolean } {
         const ai = this.ai.getKeyStatus();
         return {

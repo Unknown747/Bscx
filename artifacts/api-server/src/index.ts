@@ -237,6 +237,27 @@ app.post('/api/telegram/test', async (_req: Request, res: Response) => {
     res.status(result.ok ? 200 : 400).json(result);
 });
 
+// ============ BLACKLIST ENDPOINTS ============
+app.get('/api/blacklist', (_req: Request, res: Response) => {
+    res.json({ blacklist: bot.getBlacklist() });
+});
+
+app.post('/api/blacklist', (req: Request, res: Response) => {
+    const { address, label } = req.body;
+    if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat token tidak valid (harus format 0x...)' });
+        return;
+    }
+    bot.addToBlacklist(address, label?.trim() || undefined);
+    res.json({ ok: true, blacklist: bot.getBlacklist() });
+});
+
+app.delete('/api/blacklist/:address', (req: Request, res: Response) => {
+    const { address } = req.params;
+    bot.removeFromBlacklist(address);
+    res.json({ ok: true, blacklist: bot.getBlacklist() });
+});
+
 app.get('/api/logs', (_req: Request, res: Response) => {
     res.json({
         logs:      bot.getActivityLog(),

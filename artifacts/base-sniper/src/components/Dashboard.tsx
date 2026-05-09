@@ -5,6 +5,7 @@ import Portfolio from './Portfolio';
 import Modal100k, { ModalSettings } from './Modal100k';
 import WalletConfigModal from './WalletConfigModal';
 import CopyWalletsModal from './CopyWalletsModal';
+import BlacklistModal from './BlacklistModal';
 import TradeHistory from './TradeHistory';
 import WhaleLeaderboard from './WhaleLeaderboard';
 
@@ -61,6 +62,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const [showSettings, setShowSettings]       = useState(false);
     const [showWalletConfig, setShowWalletConfig]   = useState(false);
     const [showCopyWallets, setShowCopyWallets]     = useState(false);
+    const [showBlacklist, setShowBlacklist]         = useState(false);
     const [saveStatus, setSaveStatus]           = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
     const fetchData = useCallback(async () => {
@@ -141,6 +143,15 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         <div className={`w-2 h-2 rounded-full ${status?.connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
                         <span className="text-xs text-gray-400">{status?.connected ? 'Live' : 'Offline'}</span>
                     </div>
+
+                    {/* Blacklist button */}
+                    <button
+                        onClick={() => setShowBlacklist(true)}
+                        className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                    >
+                        <span>🚫</span>
+                        <span>Blokir</span>
+                    </button>
 
                     {/* Copy wallets button */}
                     <button
@@ -306,6 +317,14 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 <CopyWalletsModal
                     apiUrl={apiUrl}
                     onClose={() => setShowCopyWallets(false)}
+                />
+            )}
+
+            {/* Blacklist Manager */}
+            {showBlacklist && (
+                <BlacklistModal
+                    apiUrl={apiUrl}
+                    onClose={() => setShowBlacklist(false)}
                 />
             )}
 
