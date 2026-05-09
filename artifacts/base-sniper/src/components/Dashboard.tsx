@@ -110,7 +110,6 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     <span className="text-3xl">🔥</span>
                     <div>
                         <h1 className="text-xl font-bold text-white leading-tight">Base Sniper</h1>
-                        <p className="text-xs text-gray-500">Modal 0.006 ETH · 100rb</p>
                     </div>
                 </div>
 
@@ -197,16 +196,6 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 {activeTab === 'overview' && (
                     <div className="space-y-4">
                         <div className="grid grid-cols-2 gap-3">
-                            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                                <p className="text-xs text-gray-500 mb-1">Modal Total</p>
-                                <p className="text-lg font-bold text-green-400">{config?.capital || '—'} ETH</p>
-                                <p className="text-xs text-gray-600">≈ Rp 100.000</p>
-                            </div>
-                            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                                <p className="text-xs text-gray-500 mb-1">Max Per Trade</p>
-                                <p className="text-lg font-bold text-yellow-400">{config?.maxTrade || '—'} ETH</p>
-                                <p className="text-xs text-gray-600">10% dari modal</p>
-                            </div>
                             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                                 <p className="text-xs text-gray-500 mb-1">Copy Hari Ini</p>
                                 <p className="text-lg font-bold text-white">
