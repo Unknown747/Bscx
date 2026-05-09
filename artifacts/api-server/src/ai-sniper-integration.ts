@@ -79,15 +79,15 @@ export class AISniperBot extends EventEmitter {
         maxTradeAmount:   parseFloat(process.env.MAX_TRADE_AMOUNT             || '0.0006'),
         minLiquidity:     parseFloat(process.env.MIN_LIQUIDITY_ETH            || '0.15'),
         maxSlippage:      parseFloat(process.env.MAX_SLIPPAGE_PERCENT         || '15'),
-        tp1Multiplier:    parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER     || '1.5'),
+        tp1Multiplier:    parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER     || '2.0'),  // was 1.5
         tp1Percentage:    parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE     || '50'),
-        tp2Multiplier:    parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER     || '2.5'),
+        tp2Multiplier:    parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER     || '5.0'),  // was 2.5
         tp2Percentage:    parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE     || '50'),
-        stopLoss:         parseFloat(process.env.STOP_LOSS_PERCENTAGE         || '30'),
-        maxPriorityFee:   parseFloat(process.env.MAX_PRIORITY_FEE_GWEI        || '0.5'),
-        maxFeePerGas:     parseFloat(process.env.MAX_FEE_PER_GAS_GWEI         || '1.5'),
-        copyEnabled:      process.env.COPY_TRADING_ENABLED === 'true',
-        copyAmount:       parseFloat(process.env.COPY_TRADING_AMOUNT          || '0.0003'),
+        stopLoss:         parseFloat(process.env.STOP_LOSS_PERCENTAGE         || '20'),   // was 30
+        maxPriorityFee:   parseFloat(process.env.MAX_PRIORITY_FEE_GWEI        || '0.005'), // was 0.5 — Base L2
+        maxFeePerGas:     parseFloat(process.env.MAX_FEE_PER_GAS_GWEI         || '0.05'),  // Base L2 (was 1.5 — Ethereum mainnet setting)
+        copyEnabled:      process.env.COPY_TRADING_ENABLED === 'true',  // default false via env
+        copyAmount:       parseFloat(process.env.COPY_TRADING_AMOUNT          || '0.002'),  // was 0.0003 — unviable (gas > trade)
         copyDelay:        parseFloat(process.env.COPY_TRADING_DELAY_SECONDS   || '2'),
         copyMaxPerDay:    parseInt  (process.env.COPY_TRADING_MAX_PER_DAY     || '10'),
         minSafetyScore:   parseInt  (process.env.MIN_SAFETY_SCORE             || '65'),

@@ -49,7 +49,7 @@ export class FlashblocksScanner extends EventEmitter {
         MIN_LIQUIDITY_ETH: 0.15,
         MAX_LIQUIDITY_ETH: 2.0,
         MAX_POOL_AGE_SECONDS: 60,
-        MAX_GAS_PRICE_GWEI: 2.0,
+        MAX_GAS_PRICE_GWEI: 0.05, // Base L2 actual fee ceiling (was 2.0 — Ethereum mainnet)
         MIN_SAFETY_SCORE: 65,
         MAX_BUY_TAX_PERCENT: 10,
         MAX_SELL_TAX_PERCENT: 10,

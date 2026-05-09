@@ -48,12 +48,13 @@ const ROUTER_ABI = [
 
 // ERC20 ABI (minimal)
 const ERC20_ABI = [
-    { name: 'balanceOf',  type: 'function', inputs: [{ name: 'account', type: 'address' }],                                                                           outputs: [{ name: '', type: 'uint256' }] },
-    { name: 'decimals',   type: 'function', inputs: [],                                                                                                                outputs: [{ name: '', type: 'uint8'   }] },
-    { name: 'symbol',     type: 'function', inputs: [],                                                                                                                outputs: [{ name: '', type: 'string'  }] },
-    { name: 'name',       type: 'function', inputs: [],                                                                                                                outputs: [{ name: '', type: 'string'  }] },
-    { name: 'approve',    type: 'function', inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }],                                      outputs: [{ name: '', type: 'bool'    }] },
-    { name: 'transfer',   type: 'function', inputs: [{ name: 'to',      type: 'address' }, { name: 'amount', type: 'uint256' }],                                      outputs: [{ name: '', type: 'bool'    }] }
+    { name: 'balanceOf',  type: 'function', inputs: [{ name: 'account', type: 'address' }],                                                                                                              outputs: [{ name: '', type: 'uint256' }] },
+    { name: 'decimals',   type: 'function', inputs: [],                                                                                                                                                   outputs: [{ name: '', type: 'uint8'   }] },
+    { name: 'symbol',     type: 'function', inputs: [],                                                                                                                                                   outputs: [{ name: '', type: 'string'  }] },
+    { name: 'name',       type: 'function', inputs: [],                                                                                                                                                   outputs: [{ name: '', type: 'string'  }] },
+    { name: 'approve',    type: 'function', inputs: [{ name: 'spender', type: 'address' }, { name: 'amount',   type: 'uint256' }],                                                                       outputs: [{ name: '', type: 'bool'    }] },
+    { name: 'allowance',  type: 'function', inputs: [{ name: 'owner',   type: 'address' }, { name: 'spender', type: 'address' }],                                                                       outputs: [{ name: '', type: 'uint256' }] },
+    { name: 'transfer',   type: 'function', inputs: [{ name: 'to',      type: 'address' }, { name: 'amount',   type: 'uint256' }],                                                                       outputs: [{ name: '', type: 'bool'    }] }
 ] as const;
 
 // ============ TYPES ============
@@ -100,21 +101,30 @@ export class SwapExecutor extends EventEmitter {
     private isReady = false;
 
     private readonly CONFIG = {
-        DEFAULT_SLIPPAGE:           parseFloat(process.env.MAX_SLIPPAGE_PERCENT      || '15'),
-        TAKE_PROFIT_1_X:            parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER  || '1.5'),
+        // ── Slippage ──────────────────────────────────────────────────────────
+        DEFAULT_SLIPPAGE:           parseFloat(process.env.MAX_SLIPPAGE_PERCENT      || '8'),   // 8% (was 15%)
+        // ── Take Profit — tuned for small capital (need bigger wins to beat gas) ──
+        TAKE_PROFIT_1_X:            parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER  || '2.0'), // 2x (was 1.5x)
         TAKE_PROFIT_1_PCT:          parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE  || '50'),
-        TAKE_PROFIT_2_X:            parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER  || '2.5'),
+        TAKE_PROFIT_2_X:            parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER  || '5.0'), // 5x (was 2.5x)
         TAKE_PROFIT_2_PCT:          parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE  || '50'),
-        STOP_LOSS_PCT:              parseFloat(process.env.STOP_LOSS_PERCENTAGE       || '30'),
-        MAX_PRIORITY_FEE_GWEI:      parseFloat(process.env.MAX_PRIORITY_FEE_GWEI     || '0.5'),
-        MAX_FEE_GWEI:               parseFloat(process.env.MAX_FEE_PER_GAS_GWEI      || '1.5'),
-        GAS_MODE:                   process.env.GAS_MODE                             || 'economy',
+        // ── Stop Loss ────────────────────────────────────────────────────────
+        STOP_LOSS_PCT:              parseFloat(process.env.STOP_LOSS_PERCENTAGE       || '20'), // 20% (was 30%)
+        // ── Gas — calibrated for Base L2 (NOT Ethereum mainnet) ──────────────
+        // Base typical base fee: 0.001–0.005 gwei. Priority fee: 0.001 gwei is enough.
+        MAX_PRIORITY_FEE_GWEI:      parseFloat(process.env.MAX_PRIORITY_FEE_GWEI     || '0.005'), // was 0.5 — 100x too high
+        MAX_FEE_GWEI:               parseFloat(process.env.MAX_FEE_PER_GAS_GWEI      || '0.05'),  // was 1.5 — 30x too high
+        GAS_MODE:                   process.env.GAS_MODE                             || 'auto',   // auto reads actual Base fee
+        // ── Position Monitor ─────────────────────────────────────────────────
         MONITOR_INTERVAL_MS:        5000,
-        TRAILING_SL_ACTIVATE_MULT:  1.20,   // start trailing after 20% profit
-        TRAILING_SL_FROM_PEAK_PCT:  15,     // sell when 15% drop from peak
-        MAX_PRICE_IMPACT_PCT:       5,      // skip if trade > 5% of pool liquidity
-        DCA_TRIGGER_MULT:           0.98,   // DCA if falls back to 98% of entry after TP1
-        DCA_ENABLED:                process.env.DCA_ENABLED !== 'false', // toggle DCA on/off
+        // ── Trailing Stop Loss ───────────────────────────────────────────────
+        TRAILING_SL_ACTIVATE_MULT:  1.50,  // start trailing after 50% profit (was 20%)
+        TRAILING_SL_FROM_PEAK_PCT:  12,    // sell if drops 12% from peak (was 15%)
+        // ── Price Impact ─────────────────────────────────────────────────────
+        MAX_PRICE_IMPACT_PCT:       5,
+        // ── DCA ─ disabled for small capital (gas cost > benefit) ────────────
+        DCA_TRIGGER_MULT:           0.98,
+        DCA_ENABLED:                process.env.DCA_ENABLED === 'true', // default OFF (was default ON)
     };
 
     constructor() {
@@ -143,24 +153,37 @@ export class SwapExecutor extends EventEmitter {
     }
 
     // ============ GAS PRICE ============
+    // Base L2 reality: base fee is 0.001–0.01 gwei, NOT 1–2 gwei like Ethereum mainnet.
+    // A full swap on Base costs ~150k gas × 0.005 gwei = ~$0.002. Calibrate accordingly.
     private async getGasPrice(): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
-        const gwei = BigInt(1_000_000_000);
-
         if (this.CONFIG.GAS_MODE === 'economy') {
+            // Use configured caps — already set to Base-appropriate values
             return {
                 maxFeePerGas:         BigInt(Math.floor(this.CONFIG.MAX_FEE_GWEI * 1e9)),
                 maxPriorityFeePerGas: BigInt(Math.floor(this.CONFIG.MAX_PRIORITY_FEE_GWEI * 1e9))
             };
         }
 
-        // 'auto' mode — fetch current network gas and add small tip
-        const block = await this.publicClient.getBlock({ blockTag: 'latest' });
-        const baseFee = block.baseFeePerGas ?? gwei;
-        const priorityFee = gwei / 2n; // 0.5 gwei tip
-        return {
-            maxFeePerGas:         baseFee * 2n + priorityFee,
-            maxPriorityFeePerGas: priorityFee
-        };
+        // 'auto' mode — read actual Base network fee and add minimal tip
+        try {
+            const block = await this.publicClient.getBlock({ blockTag: 'latest' });
+            const baseFee    = block.baseFeePerGas ?? 1_000_000n; // fallback 0.001 gwei
+            // On Base a 0.001 gwei tip is more than enough to get included
+            const priorityFee = 1_000_000n; // 0.001 gwei
+            // Cap total at configured max to prevent runaway fees
+            const maxConfigFee = BigInt(Math.floor(this.CONFIG.MAX_FEE_GWEI * 1e9));
+            const computed     = baseFee + priorityFee * 2n;
+            return {
+                maxFeePerGas:         computed < maxConfigFee ? computed : maxConfigFee,
+                maxPriorityFeePerGas: priorityFee
+            };
+        } catch {
+            // Fallback to economy caps
+            return {
+                maxFeePerGas:         BigInt(Math.floor(this.CONFIG.MAX_FEE_GWEI * 1e9)),
+                maxPriorityFeePerGas: BigInt(Math.floor(this.CONFIG.MAX_PRIORITY_FEE_GWEI * 1e9))
+            };
+        }
     }
 
     // ============ ETH BALANCE CHECK ============
@@ -180,8 +203,9 @@ export class SwapExecutor extends EventEmitter {
 
         try {
             // ── Balance check ──
+            // Reserve 0.0001 ETH (~$0.30) for gas — Base L2 is very cheap (was 0.002 ETH = $6)
             const { wei: balance } = await this.getBalance();
-            const gasReserve = parseEther('0.002');
+            const gasReserve = parseEther('0.0001');
             if (balance < amountIn + gasReserve) {
                 return { success: false, amountIn, amountOut: 0n, error: `Insufficient balance: ${formatEther(balance)} ETH` };
             }
@@ -291,17 +315,46 @@ export class SwapExecutor extends EventEmitter {
 
             const amountIn = (tokenBalance * BigInt(percentToSell)) / 100n;
 
-            // Approve router to spend tokens
             const gasPrice = await this.getGasPrice();
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const approveTx = await (this.walletClient as any).writeContract({
-                address: tokenAddress,
-                abi: ERC20_ABI,
-                functionName: 'approve',
-                args: [UNISWAP_V3_ROUTER, MAX_UINT256],
-                ...gasPrice
-            });
-            await this.publicClient.waitForTransactionReceipt({ hash: approveTx, timeout: 20_000 });
+
+            // ── Skip approve if router already has sufficient allowance (saves 1 TX = ~$0.001) ──
+            const allowance = await this.publicClient.readContract({
+                address:      tokenAddress,
+                abi:          ERC20_ABI,
+                functionName: 'allowance',
+                args:         [this.account.address, UNISWAP_V3_ROUTER]
+            }) as bigint;
+
+            if (allowance < amountIn) {
+                console.log(`   📝 Approving router (first time for this token)...`);
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const approveTx = await (this.walletClient as any).writeContract({
+                    address:      tokenAddress,
+                    abi:          ERC20_ABI,
+                    functionName: 'approve',
+                    args:         [UNISWAP_V3_ROUTER, MAX_UINT256],
+                    ...gasPrice
+                });
+                await this.publicClient.waitForTransactionReceipt({ hash: approveTx, timeout: 20_000 });
+            } else {
+                console.log(`   ✅ Router already approved — skipping approve TX (saved ~$0.001)`);
+            }
+
+            // ── Auto-detect best fee tier for this token ──
+            const bestFee = await this.getBestFeeTier(tokenAddress);
+            console.log(`   ⛽ Sell using fee tier: ${bestFee / 10000}%`);
+
+            // ── Slippage protection: estimate current ETH value, set minimum output ──
+            // Prevents sandwich attacks on exit (previously was 0n — no protection at all)
+            let amountOutMinimum = 0n;
+            try {
+                const estimatedEth = await this.estimateTokenValueEth(tokenAddress, amountIn);
+                if (estimatedEth && estimatedEth > 0) {
+                    const slippage = this.CONFIG.DEFAULT_SLIPPAGE;
+                    amountOutMinimum = BigInt(Math.floor(estimatedEth * (1 - slippage / 100) * 1e18));
+                    console.log(`   🛡️ Sell min output: ${formatEther(amountOutMinimum)} ETH (${slippage}% max slippage)`);
+                }
+            } catch { /* use 0n as safe fallback if price estimate unavailable */ }
 
             // Execute sell
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -312,10 +365,10 @@ export class SwapExecutor extends EventEmitter {
                 args: [{
                     tokenIn:           tokenAddress,
                     tokenOut:          WETH_BASE,
-                    fee:               3000,
+                    fee:               bestFee,
                     recipient:         this.account.address,
                     amountIn,
-                    amountOutMinimum:  0n,
+                    amountOutMinimum,
                     sqrtPriceLimitX96: 0n
                 }],
                 ...gasPrice
@@ -660,7 +713,7 @@ export class SwapExecutor extends EventEmitter {
         try {
             const value = parseEther(amountEth.toString());
             const { wei: balance } = await this.getBalance();
-            if (balance < value + parseEther('0.001')) {
+            if (balance < value + parseEther('0.0001')) {
                 return { success: false, error: `Saldo tidak cukup: ${formatEther(balance)} ETH` };
             }
             const gasPrice = await this.getGasPrice();
