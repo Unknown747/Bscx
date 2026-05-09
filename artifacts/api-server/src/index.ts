@@ -76,11 +76,12 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
         return;
     }
     const { password } = req.body;
-    const expected = process.env.APP_PASSWORD || '';
+    const expected = (process.env.APP_PASSWORD || '').trim();
     if (!expected) { res.status(500).json({ error: 'APP_PASSWORD belum dikonfigurasi' }); return; }
     if (!password) { res.status(400).json({ ok: false, error: 'Password diperlukan' }); return; }
-    const match = password.length === expected.length &&
-        crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expected));
+    const trimmedPassword = String(password).trim();
+    const match = trimmedPassword.length === expected.length &&
+        crypto.timingSafeEqual(Buffer.from(trimmedPassword), Buffer.from(expected));
     if (match) {
         const token = crypto.randomBytes(32).toString('hex');
         sessions.set(token, Date.now() + SESSION_TTL);
