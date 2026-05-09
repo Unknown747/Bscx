@@ -14,39 +14,10 @@ app.use(express.json());
 app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Password');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
 });
-
-// ============ PASSWORD AUTH ============
-// Every protected request must include header: X-Password: <your_password>
-function requirePassword(req: Request, res: Response, next: NextFunction): void {
-    const provided = req.headers['x-password'] as string || '';
-    const expected = process.env.APP_PASSWORD || '';
-
-    if (!expected) {
-        res.status(500).json({ error: 'APP_PASSWORD belum dikonfigurasi di server' });
-        return;
-    }
-
-    if (!provided) {
-        res.status(401).json({ error: 'Password diperlukan (header X-Password)' });
-        return;
-    }
-
-    // Constant-time comparison to prevent timing attacks
-    const match =
-        provided.length === expected.length &&
-        crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
-
-    if (!match) {
-        res.status(401).json({ error: 'Password salah' });
-        return;
-    }
-
-    next();
-}
 
 // ============ INITIALIZE COMPONENTS ============
 const scanner = new FlashblocksScanner();
@@ -78,8 +49,8 @@ async function startBot() {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 }
 
-// ============ PUBLIC ENDPOINT ============
-// Frontend calls this to verify password before showing the UI
+// ============ AUTH ENDPOINT ============
+// Frontend calls this once on open to verify password before showing UI
 app.post('/api/auth/verify', (req: Request, res: Response) => {
     const { password } = req.body;
     const expected = process.env.APP_PASSWORD || '';
@@ -90,24 +61,22 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
     }
 
     if (!password) {
-        res.status(400).json({ error: 'Password diperlukan' });
+        res.status(400).json({ ok: false, error: 'Password diperlukan' });
         return;
     }
 
+    // Constant-time comparison to prevent timing attacks
     const match =
         password.length === expected.length &&
         crypto.timingSafeEqual(Buffer.from(password), Buffer.from(expected));
 
-    if (!match) {
-        res.status(401).json({ ok: false, error: 'Password salah' });
-        return;
-    }
-
-    res.json({ ok: true });
+    res.status(match ? 200 : 401).json(
+        match ? { ok: true } : { ok: false, error: 'Password salah' }
+    );
 });
 
-// ============ PROTECTED ENDPOINTS ============
-app.get('/api/status', requirePassword, (req: Request, res: Response) => {
+// ============ API ENDPOINTS (no password required) ============
+app.get('/api/status', (req: Request, res: Response) => {
     res.json({
         connected: scanner.isConnectedToBase(),
         copyStats: copyMonitor.getStats(),
@@ -116,7 +85,7 @@ app.get('/api/status', requirePassword, (req: Request, res: Response) => {
     });
 });
 
-app.get('/api/config', requirePassword, (req: Request, res: Response) => {
+app.get('/api/config', (req: Request, res: Response) => {
     res.json({
         capital: process.env.TOTAL_CAPITAL_ETH,
         maxTrade: process.env.MAX_TRADE_AMOUNT,
