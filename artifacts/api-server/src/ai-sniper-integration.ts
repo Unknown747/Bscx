@@ -20,7 +20,23 @@ interface LogEntry {
     timestamp: number;
 }
 
-const MAX_LOG_ENTRIES = 100;
+const MAX_LOG_ENTRIES   = 100;
+const MAX_TRADE_HISTORY = 200;
+
+// ============ CLOSED TRADE RECORD ============
+interface ClosedTrade {
+    id: string;
+    tokenAddress: string;
+    tokenSymbol: string;
+    entryEth: number;
+    profitPct: number | null;
+    percentSold: number;
+    closedAt: number;
+    holdMs: number;
+    txHash: string;
+    reason: 'take-profit' | 'stop-loss' | 'manual' | 'dca';
+    tpLevel?: number;
+}
 
 // Mutable runtime config — mirrors env vars but can be updated via API
 interface RuntimeConfig {
@@ -50,6 +66,10 @@ export class AISniperBot extends EventEmitter {
     private ai: MultiAIProvider;
     private executor: SwapExecutor | null = null;
     private activityLog: LogEntry[] = [];
+    private closedTrades: ClosedTrade[] = [];
+    private blacklist: Set<string> = new Set();
+    private telegramToken  = process.env.TELEGRAM_BOT_TOKEN || '';
+    private telegramChatId = process.env.TELEGRAM_CHAT_ID   || '';
     private sentimentInterval: NodeJS.Timeout | null = null;
 
     // Single source of truth for all runtime config
@@ -117,6 +137,51 @@ export class AISniperBot extends EventEmitter {
         return this.activityLog;
     }
 
+    // ============ TELEGRAM NOTIFICATIONS ============
+    private async sendTelegram(message: string): Promise<void> {
+        if (!this.telegramToken || !this.telegramChatId) return;
+        try {
+            const { default: axios } = await import('axios');
+            await axios.post(`https://api.telegram.org/bot${this.telegramToken}/sendMessage`, {
+                chat_id: this.telegramChatId,
+                text: message,
+                parse_mode: 'HTML'
+            }, { timeout: 5000 });
+        } catch { /* silent — don't block trading on Telegram failure */ }
+    }
+
+    // ============ HONEYPOT DETECTION (GoPlus API) ============
+    private async checkHoneypot(tokenAddress: string): Promise<{ safe: boolean; reason?: string; sellTax?: number; buyTax?: number }> {
+        try {
+            const { default: axios } = await import('axios');
+            const res = await axios.get(
+                `https://api.gopluslabs.io/api/v1/token_security/8453?contract_addresses=${tokenAddress}`,
+                { timeout: 6000 }
+            );
+            const data = res.data?.result?.[tokenAddress.toLowerCase()];
+            if (!data) return { safe: true };
+
+            const sellTax = parseFloat(data.sell_tax || '0');
+            const buyTax  = parseFloat(data.buy_tax  || '0');
+
+            if (data.is_honeypot  === '1') return { safe: false, reason: '🍯 Honeypot detected' };
+            if (data.cannot_sell_all === '1') return { safe: false, reason: 'Cannot sell all — rug risk' };
+            if (sellTax > 15)               return { safe: false, reason: `Sell tax too high: ${sellTax}%`, sellTax };
+            if (buyTax  > 15)               return { safe: false, reason: `Buy tax too high: ${buyTax}%`,  buyTax  };
+
+            const warnings: string[] = [];
+            if (data.is_mintable === '1' && data.owner_address) warnings.push('Mintable');
+            if (data.is_blacklisted === '1')                    warnings.push('Has blacklist');
+            if (sellTax > 5)  warnings.push(`Sell tax ${sellTax}%`);
+            if (buyTax  > 5)  warnings.push(`Buy tax ${buyTax}%`);
+
+            if (warnings.length > 0) console.log(`   ⚠️  Token warnings: ${warnings.join(', ')}`);
+            return { safe: true, sellTax, buyTax };
+        } catch {
+            return { safe: true }; // If GoPlus is down, don't block trade
+        }
+    }
+
     private setupEventHandlers(): void {
         // ============ EVENT: Pool Baru Ditemukan ============
         this.scanner.on('pool-ready', async (pool) => {
@@ -172,29 +237,8 @@ export class AISniperBot extends EventEmitter {
             }
         });
 
-        // Forward swap events + record to activity log
-        if (this.executor) {
-            this.executor.on('buy-success', (d) => {
-                this.emit('buy-success', d);
-                this.addLog('buy-success', `BUY ${d.tokenSymbol}`, `TX: ${d.txHash?.slice(0, 18)}...`);
-            });
-            this.executor.on('buy-failed', (d) => {
-                this.emit('buy-failed', d);
-                this.addLog('buy-failed', `BUY gagal: ${d.tokenAddress?.slice(0, 10)}...`, d.error);
-            });
-            this.executor.on('sell-success', (d) => {
-                this.emit('sell-success', d);
-                this.addLog('sell-success', `SELL ${d.tokenSymbol} (${d.percentSold}%)`, `TX: ${d.txHash?.slice(0, 18)}...`);
-            });
-            this.executor.on('take-profit', (d) => {
-                this.emit('take-profit', d);
-                this.addLog('take-profit', `TP${d.level} ${d.tokenSymbol} @ ${d.multiplier?.toFixed(2)}x`, 'Auto take profit triggered');
-            });
-            this.executor.on('stop-loss', (d) => {
-                this.emit('stop-loss', d);
-                this.addLog('stop-loss', `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`, 'Auto stop loss triggered');
-            });
-        }
+        // Forward swap events + Telegram alerts + closedTrades tracking + auto-blacklist
+        this.wireExecutorEvents();
 
         // ============ Periodic Market Sentiment (every 5 min) ============
         // Store reference so we can clear it in stop()
@@ -204,6 +248,121 @@ export class AISniperBot extends EventEmitter {
             console.log(`   ⛽ Gas Advice: ${sentiment.gasAdvice}`);
             console.log(`   ⏰ Best Time: ${sentiment.bestTime}`);
         }, 300_000);
+    }
+
+    // ============ EXECUTOR EVENT WIRING (centralised, reusable) ============
+    private wireExecutorEvents(): void {
+        if (!this.executor) return;
+
+        this.executor.on('buy-success', (d) => {
+            this.emit('buy-success', d);
+            this.addLog('buy-success', `BUY ${d.tokenSymbol}`, `TX: ${d.txHash?.slice(0, 18)}...`);
+            this.sendTelegram(
+                `✅ <b>BUY berhasil</b>\n` +
+                `Token: <code>${d.tokenSymbol}</code>\n` +
+                `Modal: ${d.amountIn ? (parseFloat(d.amountIn.toString()) / 1e18).toFixed(5) : '?'} ETH\n` +
+                `TX: <a href="https://basescan.org/tx/${d.txHash}">${d.txHash?.slice(0, 18)}...</a>`
+            );
+        });
+
+        this.executor.on('buy-failed', (d) => {
+            this.emit('buy-failed', d);
+            this.addLog('buy-failed', `BUY gagal: ${d.tokenAddress?.slice(0, 10)}...`, d.error);
+        });
+
+        this.executor.on('sell-success', (d) => {
+            this.emit('sell-success', d);
+            this.addLog('sell-success', `SELL ${d.tokenSymbol} (${d.percentSold}%)`, `TX: ${d.txHash?.slice(0, 18)}...`);
+            // Record closed trade
+            const trade: ClosedTrade = {
+                id:           require('crypto').randomBytes(6).toString('hex'),
+                tokenAddress: d.tokenAddress || '',
+                tokenSymbol:  d.tokenSymbol  || 'UNKNOWN',
+                entryEth:     d.amountIn     ? parseFloat(d.amountIn.toString()) / 1e18 : 0,
+                profitPct:    d.profitPct    ?? null,
+                percentSold:  d.percentSold  ?? 100,
+                closedAt:     Date.now(),
+                holdMs:       d.holdMs       ?? 0,
+                txHash:       d.txHash       || '',
+                reason:       'manual'
+            };
+            this.closedTrades.unshift(trade);
+            if (this.closedTrades.length > MAX_TRADE_HISTORY) this.closedTrades.length = MAX_TRADE_HISTORY;
+            this.sendTelegram(
+                `💰 <b>SELL manual</b>\n` +
+                `Token: <code>${d.tokenSymbol}</code> (${d.percentSold}%)\n` +
+                `TX: <a href="https://basescan.org/tx/${d.txHash}">${d.txHash?.slice(0, 18)}...</a>`
+            );
+        });
+
+        this.executor.on('take-profit', (d) => {
+            this.emit('take-profit', d);
+            this.addLog('take-profit', `TP${d.level} ${d.tokenSymbol} @ ${d.multiplier?.toFixed(2)}x`, 'Auto take profit triggered');
+            const trade: ClosedTrade = {
+                id:           require('crypto').randomBytes(6).toString('hex'),
+                tokenAddress: d.tokenAddress || '',
+                tokenSymbol:  d.tokenSymbol  || 'UNKNOWN',
+                entryEth:     0,
+                profitPct:    d.profitPct    ?? (d.multiplier ? (d.multiplier - 1) * 100 : null),
+                percentSold:  d.level === 1 ? 50 : 100,
+                closedAt:     Date.now(),
+                holdMs:       d.holdMs       ?? 0,
+                txHash:       d.txHash       || '',
+                reason:       'take-profit',
+                tpLevel:      d.level
+            };
+            this.closedTrades.unshift(trade);
+            if (this.closedTrades.length > MAX_TRADE_HISTORY) this.closedTrades.length = MAX_TRADE_HISTORY;
+            this.sendTelegram(
+                `🎯 <b>TAKE PROFIT TP${d.level}</b>\n` +
+                `Token: <code>${d.tokenSymbol}</code>\n` +
+                `Multiplier: ${d.multiplier?.toFixed(2)}x\n` +
+                `Profit: +${((d.multiplier ?? 1) - 1) * 100 | 0}%`
+            );
+        });
+
+        this.executor.on('stop-loss', (d) => {
+            this.emit('stop-loss', d);
+            this.addLog('stop-loss', `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`, d.reason || 'Auto stop loss triggered');
+            // Auto-blacklist token that hit SL
+            if (d.tokenAddress) {
+                this.blacklist.add(d.tokenAddress.toLowerCase());
+                this.addLog('info', `Auto-blacklisted: ${d.tokenSymbol}`, 'Hit stop loss — token blacklisted');
+                console.log(`🚫 Auto-blacklisted: ${d.tokenAddress} (${d.tokenSymbol})`);
+            }
+            const trade: ClosedTrade = {
+                id:           require('crypto').randomBytes(6).toString('hex'),
+                tokenAddress: d.tokenAddress || '',
+                tokenSymbol:  d.tokenSymbol  || 'UNKNOWN',
+                entryEth:     0,
+                profitPct:    d.profitPct    ?? null,
+                percentSold:  100,
+                closedAt:     Date.now(),
+                holdMs:       d.holdMs       ?? 0,
+                txHash:       d.txHash       || '',
+                reason:       'stop-loss'
+            };
+            this.closedTrades.unshift(trade);
+            if (this.closedTrades.length > MAX_TRADE_HISTORY) this.closedTrades.length = MAX_TRADE_HISTORY;
+            this.sendTelegram(
+                `🛑 <b>STOP LOSS</b>\n` +
+                `Token: <code>${d.tokenSymbol}</code>\n` +
+                `Loss: ${d.profitPct?.toFixed(1)}%\n` +
+                `Alasan: ${d.reason || 'Fixed SL'}\n` +
+                `Token auto-blacklisted ✓`
+            );
+        });
+
+        this.executor.on('dca-signal', async (d) => {
+            console.log(`\n📉 DCA signal: buying ${d.dcaAmount} ETH more of ${d.tokenSymbol}`);
+            this.addLog('info', `DCA: beli lagi ${d.dcaAmount} ETH ${d.tokenSymbol}`, 'Harga balik ke entry setelah TP1');
+            await this.executeBuy(d.tokenAddress, d.dcaAmount);
+            this.sendTelegram(
+                `📉 <b>DCA triggered</b>\n` +
+                `Token: <code>${d.tokenSymbol}</code>\n` +
+                `DCA Amount: ${d.dcaAmount} ETH`
+            );
+        });
     }
 
     // ============ TRADE DECISION LOGIC ============
@@ -235,6 +394,24 @@ export class AISniperBot extends EventEmitter {
             return;
         }
 
+        // ── Blacklist check ──
+        if (this.blacklist.has(tokenAddress.toLowerCase())) {
+            console.log(`   🚫 Token blacklisted — skipping buy`);
+            this.addLog('info', `Blacklisted token skipped`, tokenAddress);
+            return;
+        }
+
+        // ── Honeypot check (GoPlus) ──
+        console.log('   🔍 Checking token safety (GoPlus)...');
+        const safety = await this.checkHoneypot(tokenAddress);
+        if (!safety.safe) {
+            console.log(`   🚫 UNSAFE TOKEN: ${safety.reason} — skipping`);
+            this.addLog('info', `Token tidak aman: ${safety.reason}`, tokenAddress);
+            await this.sendTelegram(`🚫 <b>Token Ditolak</b>\n${tokenAddress.slice(0,10)}...\nAlasan: ${safety.reason}`);
+            return;
+        }
+        console.log(`   ✅ Token safety OK${safety.sellTax ? ` (sell tax: ${safety.sellTax}%)` : ''}`);
+
         const result = await this.executor.buy({ tokenAddress, amountInEth: amountEth });
 
         if (result.success) {
@@ -250,9 +427,31 @@ export class AISniperBot extends EventEmitter {
             return;
         }
 
-        // Use runtime config so updates from POST /api/settings take effect immediately
-        const copyAmount = this.runtimeConfig.copyAmount;
+        // ── Blacklist check ──
+        const addr = (opportunity.tokenAddress as string).toLowerCase();
+        if (this.blacklist.has(addr)) {
+            console.log(`   🚫 Blacklisted token — skip copy`);
+            return;
+        }
 
+        // ── Copy filter: skip if whale trade too small ──
+        const minCopySize = this.runtimeConfig.copyAmount * 0.5;
+        if (opportunity.buyAmount && opportunity.buyAmount < minCopySize) {
+            console.log(`   ⚠️  Whale trade too small (${opportunity.buyAmount} ETH) — skip`);
+            this.addLog('info', `Copy skipped: trade too small`, `${opportunity.buyAmount} ETH < min ${minCopySize}`);
+            return;
+        }
+
+        // ── Honeypot check ──
+        console.log('   🔍 Copy trade safety check...');
+        const safety = await this.checkHoneypot(opportunity.tokenAddress);
+        if (!safety.safe) {
+            console.log(`   🚫 UNSAFE: ${safety.reason} — skip copy`);
+            this.addLog('info', `Copy trade ditolak: ${safety.reason}`, opportunity.tokenAddress);
+            return;
+        }
+
+        const copyAmount = this.runtimeConfig.copyAmount;
         const result = await this.executor.buy({
             tokenAddress: opportunity.tokenAddress as Address,
             amountInEth:  copyAmount

@@ -83,6 +83,8 @@ interface OpenPosition {
     txHash: Hex;
     takeProfit1Hit: boolean;
     takeProfit2Hit: boolean;
+    peakValueEth: number;
+    dcaDone: boolean;
 }
 
 // ============ SWAP EXECUTOR ============
@@ -96,16 +98,20 @@ export class SwapExecutor extends EventEmitter {
     private isReady = false;
 
     private readonly CONFIG = {
-        DEFAULT_SLIPPAGE:       parseFloat(process.env.MAX_SLIPPAGE_PERCENT   || '15'),
-        TAKE_PROFIT_1_X:        parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER || '1.5'),
-        TAKE_PROFIT_1_PCT:      parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE || '50'),
-        TAKE_PROFIT_2_X:        parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER  || '2.5'),
-        TAKE_PROFIT_2_PCT:      parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE  || '50'),
-        STOP_LOSS_PCT:          parseFloat(process.env.STOP_LOSS_PERCENTAGE       || '30'),
-        MAX_PRIORITY_FEE_GWEI:  parseFloat(process.env.MAX_PRIORITY_FEE_GWEI      || '0.5'),
-        MAX_FEE_GWEI:           parseFloat(process.env.MAX_FEE_PER_GAS_GWEI       || '1.5'),
-        GAS_MODE:               process.env.GAS_MODE                               || 'economy',
-        MONITOR_INTERVAL_MS:    5000
+        DEFAULT_SLIPPAGE:           parseFloat(process.env.MAX_SLIPPAGE_PERCENT      || '15'),
+        TAKE_PROFIT_1_X:            parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER  || '1.5'),
+        TAKE_PROFIT_1_PCT:          parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE  || '50'),
+        TAKE_PROFIT_2_X:            parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER  || '2.5'),
+        TAKE_PROFIT_2_PCT:          parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE  || '50'),
+        STOP_LOSS_PCT:              parseFloat(process.env.STOP_LOSS_PERCENTAGE       || '30'),
+        MAX_PRIORITY_FEE_GWEI:      parseFloat(process.env.MAX_PRIORITY_FEE_GWEI     || '0.5'),
+        MAX_FEE_GWEI:               parseFloat(process.env.MAX_FEE_PER_GAS_GWEI      || '1.5'),
+        GAS_MODE:                   process.env.GAS_MODE                             || 'economy',
+        MONITOR_INTERVAL_MS:        5000,
+        TRAILING_SL_ACTIVATE_MULT:  1.20,   // start trailing after 20% profit
+        TRAILING_SL_FROM_PEAK_PCT:  15,     // sell when 15% drop from peak
+        MAX_PRICE_IMPACT_PCT:       5,      // skip if trade > 5% of pool liquidity
+        DCA_TRIGGER_MULT:           0.98,   // DCA if falls back to 98% of entry after TP1
     };
 
     constructor() {
@@ -170,16 +176,26 @@ export class SwapExecutor extends EventEmitter {
         console.log(`\n🛒 BUY: ${amountInEth} ETH → ${tokenAddress.slice(0, 10)}...`);
 
         try {
-            // Check balance
+            // ── Balance check ──
             const { wei: balance } = await this.getBalance();
-            const gasReserve = parseEther('0.002'); // keep 0.002 ETH for gas
+            const gasReserve = parseEther('0.002');
             if (balance < amountIn + gasReserve) {
                 return { success: false, amountIn, amountOut: 0n, error: `Insufficient balance: ${formatEther(balance)} ETH` };
             }
 
-            // Accept any amount out for new tokens (no price history for slippage calc)
-            const amountOutMinimum = 0n;
+            // ── Price impact check ──
+            const impact = await this.checkPriceImpact(tokenAddress, amountInEth);
+            if (!impact.ok) {
+                console.log(`   ⚠️  Price impact too high: ${impact.impact.toFixed(1)}% (max ${this.CONFIG.MAX_PRICE_IMPACT_PCT}%) — skipping`);
+                return { success: false, amountIn, amountOut: 0n, error: `Price impact too high: ${impact.impact.toFixed(1)}% (pool liq: $${impact.liquidityUsd.toFixed(0)})` };
+            }
+            console.log(`   ✅ Price impact: ${impact.impact.toFixed(2)}% — OK`);
 
+            // ── Auto-detect best fee tier ──
+            const bestFee = await this.getBestFeeTier(tokenAddress);
+            console.log(`   ⛽ Using fee tier: ${bestFee / 10000}%`);
+
+            const amountOutMinimum = 0n;
             const gasPrice = await this.getGasPrice();
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -190,7 +206,7 @@ export class SwapExecutor extends EventEmitter {
                 args: [{
                     tokenIn:           WETH_BASE,
                     tokenOut:          tokenAddress,
-                    fee:               feeTier,
+                    fee:               bestFee,
                     recipient:         this.account.address,
                     amountIn,
                     amountOutMinimum,
@@ -228,7 +244,9 @@ export class SwapExecutor extends EventEmitter {
                 openedAt: Date.now(),
                 txHash,
                 takeProfit1Hit: false,
-                takeProfit2Hit: false
+                takeProfit2Hit: false,
+                peakValueEth:   amountInEth,
+                dcaDone:        false
             });
 
             this.knownTokens.add(tokenAddress.toLowerCase() as Address);
@@ -368,12 +386,28 @@ export class SwapExecutor extends EventEmitter {
 
         const holdMins = ((Date.now() - position.openedAt) / 60000).toFixed(1);
 
-        console.log(`📊 ${position.tokenSymbol}: ${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(1)}% | ${multiplier.toFixed(2)}x | ${holdMins}m`);
+        // ── Update peak value for trailing SL ──
+        if (currentValueEth > (position.peakValueEth || entryEth)) {
+            position.peakValueEth = currentValueEth;
+        }
+        const peakMult     = position.peakValueEth / entryEth;
+        const dropFromPeak = position.peakValueEth > 0
+            ? ((position.peakValueEth - currentValueEth) / position.peakValueEth) * 100
+            : 0;
+        const useTrailingSL = peakMult >= this.CONFIG.TRAILING_SL_ACTIVATE_MULT;
+        const slTriggered   = useTrailingSL
+            ? dropFromPeak  >= this.CONFIG.TRAILING_SL_FROM_PEAK_PCT
+            : profitPct     <= -this.CONFIG.STOP_LOSS_PCT;
 
-        // ─── STOP LOSS ───
-        if (profitPct <= -this.CONFIG.STOP_LOSS_PCT) {
-            console.log(`🛑 STOP LOSS triggered at ${profitPct.toFixed(1)}% — selling 100%`);
-            this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct });
+        console.log(`📊 ${position.tokenSymbol}: ${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(1)}% | ${multiplier.toFixed(2)}x | peak ${peakMult.toFixed(2)}x | ${holdMins}m`);
+
+        // ─── STOP LOSS (Fixed or Trailing) ───
+        if (slTriggered) {
+            const reason = useTrailingSL
+                ? `Trailing SL: -${dropFromPeak.toFixed(1)}% from peak`
+                : `Fixed SL: ${profitPct.toFixed(1)}%`;
+            console.log(`🛑 STOP LOSS triggered (${reason}) — selling 100%`);
+            this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult });
             await this.sell(tokenAddress, 100);
             return;
         }
@@ -390,9 +424,19 @@ export class SwapExecutor extends EventEmitter {
         // ─── TAKE PROFIT 2 ───
         if (position.takeProfit1Hit && !position.takeProfit2Hit && multiplier >= this.CONFIG.TAKE_PROFIT_2_X) {
             console.log(`🎯 TAKE PROFIT 2 at ${multiplier.toFixed(2)}x — selling remaining ${this.CONFIG.TAKE_PROFIT_2_PCT}%`);
-            this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 2, multiplier });
+            this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 2, multiplier, profitPct, holdMs: Date.now() - position.openedAt });
             await this.sell(tokenAddress, 100);
             position.takeProfit2Hit = true;
+            return;
+        }
+
+        // ─── DCA ON DIP ─── (After TP1 hit, price drops back near entry — buy more once)
+        if (position.takeProfit1Hit && !position.takeProfit2Hit && !position.dcaDone
+            && multiplier <= this.CONFIG.DCA_TRIGGER_MULT) {
+            const dcaAmount = parseFloat(formatEther(position.amountIn)) * 0.5;
+            console.log(`📉 DCA: ${position.tokenSymbol} at ${multiplier.toFixed(3)}x — signal to buy ${dcaAmount} ETH more`);
+            this.emit('dca-signal', { tokenAddress, tokenSymbol: position.tokenSymbol, dcaAmount });
+            position.dcaDone = true;
         }
     }
 
@@ -492,6 +536,61 @@ export class SwapExecutor extends EventEmitter {
             }) as string;
         } catch {
             return 'UNKNOWN';
+        }
+    }
+
+    // ============ BEST FEE TIER DETECTION ============
+    private async getBestFeeTier(tokenAddress: Address): Promise<500 | 3000 | 10000> {
+        try {
+            const { default: axios } = await import('axios');
+            const res = await axios.get(
+                `https://api.dexscreener.com/latest/dex/search?q=${tokenAddress}`,
+                { timeout: 4000 }
+            );
+            const pairs: any[] = res.data?.pairs || [];
+
+            let bestLiq  = 0;
+            let bestFee: 500 | 3000 | 10000 = 3000;
+
+            for (const pair of pairs) {
+                if (pair.chainId !== 'base') continue;
+                if (!pair.dexId?.toLowerCase().includes('uniswap')) continue;
+                const liq = parseFloat(pair.liquidity?.usd || '0');
+                if (liq > bestLiq) {
+                    bestLiq = liq;
+                    const rawFee = pair.feeTier || pair.fee || 3000;
+                    const feeNum = typeof rawFee === 'string' ? parseInt(rawFee) : rawFee;
+                    if (feeNum === 500 || feeNum === 10000) bestFee = feeNum as 500 | 10000;
+                    else bestFee = 3000;
+                }
+            }
+            return bestFee;
+        } catch {
+            return 3000;
+        }
+    }
+
+    // ============ PRICE IMPACT CHECK ============
+    private async checkPriceImpact(tokenAddress: Address, amountEth: number): Promise<{ ok: boolean; impact: number; liquidityUsd: number }> {
+        try {
+            const { default: axios } = await import('axios');
+            const res = await axios.get(
+                `https://api.dexscreener.com/latest/dex/search?q=${tokenAddress}`,
+                { timeout: 4000 }
+            );
+            const pair = res.data?.pairs?.[0];
+            if (!pair) return { ok: true, impact: 0, liquidityUsd: 0 }; // No data — allow trade
+
+            const liqUsd     = parseFloat(pair.liquidity?.usd || '0');
+            if (liqUsd === 0) return { ok: false, impact: 100, liquidityUsd: 0 };
+
+            const ethPriceUsd = await this.getEthPriceUsd();
+            const tradeUsd    = amountEth * ethPriceUsd;
+            const impact      = (tradeUsd / liqUsd) * 100;
+
+            return { ok: impact < this.CONFIG.MAX_PRICE_IMPACT_PCT, impact, liquidityUsd: liqUsd };
+        } catch {
+            return { ok: true, impact: 0, liquidityUsd: 0 }; // Assume OK if check fails
         }
     }
 
