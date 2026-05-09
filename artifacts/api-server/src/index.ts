@@ -393,10 +393,10 @@ app.get('/api/whale/all', (_req: Request, res: Response) => {
     res.json({ candidates: bot.getAllWhales() });
 });
 
-// POST /api/whale/scan — trigger manual scan now
+// POST /api/whale/scan — trigger manual scan now (always bypasses cooldown)
 app.post('/api/whale/scan', async (_req: Request, res: Response) => {
     try {
-        const candidates = await bot.runWhaleScan();
+        const candidates = await bot.runWhaleScan(true);
         res.json({ ok: true, found: candidates.length, candidates });
     } catch (err: any) {
         res.status(500).json({ error: err.message });

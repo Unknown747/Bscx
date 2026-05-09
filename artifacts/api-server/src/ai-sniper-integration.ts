@@ -673,8 +673,8 @@ export class AISniperBot extends EventEmitter {
     }
 
     // ============ WHALE FINDER — PUBLIC METHODS ============
-    async runWhaleScan(): Promise<WhaleCandidate[]> {
-        const candidates = await runWhaleScan();
+    async runWhaleScan(forceManual = false): Promise<WhaleCandidate[]> {
+        const candidates = await runWhaleScan(forceManual);
         for (const c of candidates) {
             await this.sendTelegram(formatWhaleTelegramMsg(c, candidates.indexOf(c)));
         }
@@ -760,7 +760,7 @@ export class AISniperBot extends EventEmitter {
         if (this.whaleAutoScanInterval) return;
         console.log('🔍 Whale auto-scan enabled (every 15 min)');
         this.whaleAutoScanInterval = setInterval(async () => {
-            const candidates = await this.runWhaleScan();
+            const candidates = await this.runWhaleScan(false);
             if (candidates.length > 0) {
                 this.addLog('info', `🐋 ${candidates.length} whale kandidat baru ditemukan`, 'Periksa Telegram untuk approval');
             }
