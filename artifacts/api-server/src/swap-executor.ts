@@ -390,6 +390,51 @@ export class SwapExecutor extends EventEmitter {
         }
     }
 
+    // ============ LIVE PnL ============
+    async getLivePnL(): Promise<Array<{
+        tokenAddress: string;
+        tokenSymbol: string;
+        entryEth: number;
+        currentValueEth: number | null;
+        profitPct: number | null;
+        multiplier: number | null;
+        holdMs: number;
+    }>> {
+        const results = [];
+        for (const [addr, pos] of this.openPositions) {
+            const entryEth = parseFloat(formatEther(pos.amountIn));
+            let currentValueEth: number | null = null;
+            let profitPct: number | null       = null;
+            let multiplier: number | null      = null;
+
+            try {
+                const balance = await this.publicClient.readContract({
+                    address: addr, abi: ERC20_ABI, functionName: 'balanceOf',
+                    args: [this.account.address]
+                }) as bigint;
+
+                if (balance > 0n) {
+                    currentValueEth = await this.estimateTokenValueEth(addr, balance);
+                    if (currentValueEth !== null && entryEth > 0) {
+                        profitPct  = ((currentValueEth - entryEth) / entryEth) * 100;
+                        multiplier = currentValueEth / entryEth;
+                    }
+                }
+            } catch { /* silent */ }
+
+            results.push({
+                tokenAddress: addr,
+                tokenSymbol:  pos.tokenSymbol,
+                entryEth,
+                currentValueEth,
+                profitPct,
+                multiplier,
+                holdMs: Date.now() - pos.openedAt
+            });
+        }
+        return results;
+    }
+
     // ============ PRICE ESTIMATION ============
     private async estimateTokenValueEth(tokenAddress: Address, tokenAmount: bigint): Promise<number | null> {
         try {

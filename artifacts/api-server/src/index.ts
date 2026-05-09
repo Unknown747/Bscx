@@ -107,6 +107,16 @@ app.post('/api/settings', (req: Request, res: Response) => {
     }
 });
 
+// ============ LIVE PnL ENDPOINT ============
+app.get('/api/pnl', async (_req: Request, res: Response) => {
+    try {
+        const pnl = await bot.getLivePnL();
+        res.json({ pnl, timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ============ COPY WALLET MANAGEMENT ENDPOINTS ============
 app.get('/api/wallets', (_req: Request, res: Response) => {
     res.json({ wallets: bot.getCopyWallets() });

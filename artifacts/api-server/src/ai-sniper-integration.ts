@@ -418,6 +418,12 @@ export class AISniperBot extends EventEmitter {
         }
     }
 
+    // ============ LIVE PnL ============
+    async getLivePnL() {
+        if (!this.executor) return [];
+        return this.executor.getLivePnL();
+    }
+
     // ============ COPY WALLET MANAGEMENT ============
     getCopyWallets() { return this.copyMonitor.getWallets(); }
 
