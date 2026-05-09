@@ -26,7 +26,7 @@ interface WhaleCandidate {
     discoveredAt: number;
     score: number;
     tokens: string[];
-    status: 'pending' | 'approved' | 'rejected';
+    status: 'pending' | 'approved' | 'rejected' | 'monitoring';
 }
 
 interface SimResult {
@@ -437,8 +437,9 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                         <div
                                             key={c.address}
                                             className={`border rounded-xl p-4 transition-all ${
-                                                c.status === 'approved' ? 'border-green-700 bg-green-900/10' :
-                                                c.status === 'rejected' ? 'border-gray-800 bg-gray-900/20 opacity-50' :
+                                                c.status === 'approved'   ? 'border-green-700 bg-green-900/10' :
+                                                c.status === 'rejected'   ? 'border-gray-800 bg-gray-900/20 opacity-50' :
+                                                c.status === 'monitoring' ? 'border-purple-800/60 bg-purple-900/10' :
                                                 'border-blue-800/50 bg-blue-900/10'
                                             }`}
                                         >
@@ -447,11 +448,15 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                     <div className="flex items-center gap-2 flex-wrap">
                                                         <p className="text-xs font-mono text-gray-400 truncate">{c.address.slice(0, 14)}...{c.address.slice(-6)}</p>
                                                         <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${
-                                                            c.status === 'approved' ? 'text-green-400 border-green-700 bg-green-900/30' :
-                                                            c.status === 'rejected' ? 'text-gray-500 border-gray-700 bg-gray-800' :
+                                                            c.status === 'approved'   ? 'text-green-400 border-green-700 bg-green-900/30' :
+                                                            c.status === 'rejected'   ? 'text-gray-500 border-gray-700 bg-gray-800' :
+                                                            c.status === 'monitoring' ? 'text-purple-400 border-purple-700 bg-purple-900/30' :
                                                             'text-blue-400 border-blue-700 bg-blue-900/30'
                                                         }`}>
-                                                            {c.status === 'approved' ? '✅ Approved' : c.status === 'rejected' ? '❌ Ditolak' : '⏳ Waitlist'}
+                                                            {c.status === 'approved'   ? '✅ Approved' :
+                                                             c.status === 'rejected'   ? '❌ Ditolak' :
+                                                             c.status === 'monitoring' ? '🔬 Monitoring' :
+                                                             '⏳ Waitlist'}
                                                         </span>
                                                     </div>
                                                 </div>
@@ -481,6 +486,12 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                 </div>
                                             </div>
 
+                                            {c.status === 'monitoring' && (
+                                                <div className="bg-purple-900/20 border border-purple-800/40 rounded-lg px-3 py-2 text-xs text-purple-300 flex items-center gap-2">
+                                                    <span>🔬</span>
+                                                    <span>Bot sedang mengamati trade wallet ini. Buka tab <strong className="text-purple-200">🔬 Monitor</strong> di dashboard untuk evaluasi AI.</span>
+                                                </div>
+                                            )}
                                             {c.status === 'pending' && (
                                                 <div className="flex gap-2">
                                                     <button

@@ -276,7 +276,7 @@ const WhaleDetailModal: React.FC<Props> = ({ apiUrl, address, name, onClose, onA
                                             disabled={!!actionLoading}
                                             className="flex-1 bg-green-700 hover:bg-green-600 text-white py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
                                         >
-                                            {actionLoading === 'approve' ? '...' : '✅ Setujui & Copy'}
+                                            {actionLoading === 'approve' ? '...' : '🔬 Setujui untuk Monitor'}
                                         </button>
                                     )}
                                 </div>

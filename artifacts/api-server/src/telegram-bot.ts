@@ -209,15 +209,15 @@ export class TelegramBot {
 
         if (!full) { await this.send('❌ Kandidat tidak ditemukan.'); return; }
 
-        const approved = this.bot.approveWhale(full);
-        if (!approved) {
+        const ok = this.bot.addToMonitoring(full);
+        if (!ok) {
             await this.send(`❌ Kandidat tidak ditemukan atau sudah diproses:\n<code>${full}</code>`);
         } else {
             await this.send(
-                `✅ <b>Whale Disetujui!</b>\n\n` +
-                `<code>${approved.address}</code>\n` +
-                `Skor: ${approved.score}/100 | WR: ${approved.estimatedWinRate}%\n` +
-                `Ditambahkan ke copy trading list.`
+                `🔬 <b>Whale Masuk Monitoring!</b>\n\n` +
+                `<code>${full}</code>\n\n` +
+                `Bot akan mengamati trade wallet ini.\n` +
+                `Gunakan dashboard → 🔬 Monitor untuk evaluasi AI & promosikan ke copy.`
             );
         }
     }

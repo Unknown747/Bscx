@@ -47,7 +47,7 @@ export interface WhaleCandidate {
     discoveredAt:     number;
     score:            number;
     tokens:           string[];
-    status:           'pending' | 'approved' | 'rejected';
+    status:           'pending' | 'approved' | 'rejected' | 'monitoring';
     approvedAt?:      number;
 }
 

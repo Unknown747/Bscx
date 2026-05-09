@@ -404,17 +404,17 @@ app.post('/api/whale/scan', async (_req: Request, res: Response) => {
     }
 });
 
-// POST /api/whale/approve — approve a pending candidate (add to copy list)
+// POST /api/whale/approve — (legacy alias) redirect to monitoring flow
 app.post('/api/whale/approve', (req: Request, res: Response) => {
-    const { address } = req.body;
+    const { address, name } = req.body;
     if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
         res.status(400).json({ error: 'Alamat tidak valid' }); return;
     }
-    const approved = bot.approveWhale(address);
-    if (!approved) {
+    const ok = bot.addToMonitoring(address, name);
+    if (!ok) {
         res.status(404).json({ error: 'Kandidat tidak ditemukan atau sudah diproses' }); return;
     }
-    res.json({ ok: true, candidate: approved, wallets: bot.getCopyWallets() });
+    res.json({ ok: true, message: 'Wallet masuk monitoring — bot akan mengamati trade-nya sebelum copy' });
 });
 
 // POST /api/whale/reject — reject a candidate
