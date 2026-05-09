@@ -32,6 +32,17 @@ export interface ModalSettings {
     // DCA
     dcaEnabled: boolean;
 
+    // Dynamic Sizing
+    dynamicSizingEnabled: boolean;
+    tradeBalancePct: number;
+
+    // GeckoTerminal Token Scanner
+    geckoScannerEnabled: boolean;
+
+    // Whale Validation & Auto-Scan
+    whaleValidationEnabled: boolean;
+    whaleAutoScanEnabled: boolean;
+
     // Serial Rugger Detection
     serialRuggerEnabled:    boolean;
     serialRuggerMaxDeploys: number;
@@ -62,6 +73,11 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
         copyAmount: 0.0003,
         copyDelay: 2,
         dcaEnabled: true,
+        dynamicSizingEnabled: true,
+        tradeBalancePct: 10,
+        geckoScannerEnabled: true,
+        whaleValidationEnabled: true,
+        whaleAutoScanEnabled: false,
         serialRuggerEnabled:    true,
         serialRuggerMaxDeploys: 3,
         serialRuggerWindowHours: 24,
@@ -434,6 +450,170 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                         )}
                     </div>
 
+                    {/* ========== DYNAMIC SIZING ========== */}
+                    <div className="bg-gray-800/50 rounded-xl p-5 border border-cyan-900/40">
+                        <div className="flex justify-between items-center mb-3">
+                            <div>
+                                <h3 className="text-lg font-semibold text-white">📊 Dynamic Position Sizing</h3>
+                                <p className="text-xs text-gray-400 mt-0.5">Ukuran trade menyesuaikan saldo WETH otomatis — makin besar saldo, makin besar posisi</p>
+                            </div>
+                            <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.dynamicSizingEnabled}
+                                    onChange={(e) => setSettings({...settings, dynamicSizingEnabled: e.target.checked})}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-600"></div>
+                            </label>
+                        </div>
+                        {settings.dynamicSizingEnabled && (
+                            <div className="space-y-3">
+                                <div>
+                                    <label className="block text-sm text-gray-400 mb-1">% Saldo per Trade</label>
+                                    <div className="flex items-center gap-3">
+                                        <input
+                                            type="range"
+                                            min="3"
+                                            max="25"
+                                            step="1"
+                                            value={settings.tradeBalancePct}
+                                            onChange={(e) => setSettings({...settings, tradeBalancePct: parseInt(e.target.value)})}
+                                            className="flex-1 accent-cyan-500"
+                                        />
+                                        <span className="text-cyan-400 font-bold w-12 text-right">{settings.tradeBalancePct}%</span>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                                    <div className="p-2 bg-cyan-900/20 rounded border border-cyan-800/40">
+                                        <div className="text-gray-400">Modal $6 (~0.002 ETH)</div>
+                                        <div className="text-cyan-300 font-bold mt-1">≈ ${(6 * settings.tradeBalancePct / 100).toFixed(2)} per trade</div>
+                                    </div>
+                                    <div className="p-2 bg-cyan-900/20 rounded border border-cyan-800/40">
+                                        <div className="text-gray-400">Jika tumbuh ke $30</div>
+                                        <div className="text-cyan-300 font-bold mt-1">≈ ${(30 * settings.tradeBalancePct / 100).toFixed(2)} per trade</div>
+                                    </div>
+                                    <div className="p-2 bg-cyan-900/20 rounded border border-cyan-800/40">
+                                        <div className="text-gray-400">Jika tumbuh ke $100</div>
+                                        <div className="text-cyan-300 font-bold mt-1">≈ ${(100 * settings.tradeBalancePct / 100).toFixed(2)} per trade</div>
+                                    </div>
+                                </div>
+                                <div className="p-3 bg-cyan-900/20 rounded-lg border border-cyan-800/40">
+                                    <p className="text-xs text-cyan-300">💡 AI confidence multiplier diterapkan: kepercayaan tinggi (≥90%) = 1.5x, rendah = 0.6x. Maks 30% saldo, min 0.001 ETH.</p>
+                                </div>
+                            </div>
+                        )}
+                        {!settings.dynamicSizingEnabled && (
+                            <div className="p-3 bg-yellow-900/20 rounded-lg border border-yellow-800/40">
+                                <p className="text-xs text-yellow-300">⚠️ Dynamic sizing dinonaktifkan. Bot akan pakai nilai <strong>Max Trade per Snipe</strong> yang tetap.</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ========== GECKOTERMINAL SCANNER ========== */}
+                    <div className="bg-gray-800/50 rounded-xl p-5 border border-emerald-900/40">
+                        <div className="flex justify-between items-center mb-3">
+                            <div>
+                                <h3 className="text-lg font-semibold text-white">🦎 GeckoTerminal Token Scanner</h3>
+                                <p className="text-xs text-gray-400 mt-0.5">Pindai token baru & trending di Base secara independen dari copy trading</p>
+                            </div>
+                            <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.geckoScannerEnabled}
+                                    onChange={(e) => setSettings({...settings, geckoScannerEnabled: e.target.checked})}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                            </label>
+                        </div>
+                        {settings.geckoScannerEnabled ? (
+                            <div className="space-y-2">
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                    <div className="p-2 bg-emerald-900/20 rounded border border-emerald-800/40">
+                                        <div className="text-emerald-400 font-semibold">🔄 Pool Baru</div>
+                                        <div className="text-gray-400 mt-0.5">Scan setiap 30 detik</div>
+                                    </div>
+                                    <div className="p-2 bg-emerald-900/20 rounded border border-emerald-800/40">
+                                        <div className="text-emerald-400 font-semibold">📈 Trending</div>
+                                        <div className="text-gray-400 mt-0.5">Scan setiap 2 menit</div>
+                                    </div>
+                                    <div className="p-2 bg-emerald-900/20 rounded border border-emerald-800/40">
+                                        <div className="text-emerald-400 font-semibold">🛡️ GoPlus Safety</div>
+                                        <div className="text-gray-400 mt-0.5">Cek honeypot & rug</div>
+                                    </div>
+                                    <div className="p-2 bg-emerald-900/20 rounded border border-emerald-800/40">
+                                        <div className="text-emerald-400 font-semibold">🤖 AI Seleksi</div>
+                                        <div className="text-gray-400 mt-0.5">Min score {settings.geckoScannerEnabled ? '75' : '—'}/100</div>
+                                    </div>
+                                </div>
+                                <div className="p-3 bg-emerald-900/20 rounded-lg border border-emerald-800/40">
+                                    <p className="text-xs text-emerald-300">✅ Scanner aktif: bot tidak hanya bergantung pada copy trade. Token yang ditemukan dianalisis AI sebelum dibeli. Tidak serakah — ambil untung di target, stop loss ketat.</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-3 bg-yellow-900/20 rounded-lg border border-yellow-800/40">
+                                <p className="text-xs text-yellow-300">⚠️ Scanner dinonaktifkan. Bot hanya akan trading melalui copy trade whale.</p>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ========== WHALE VALIDATION & AUTO-SCAN ========== */}
+                    <div className="bg-gray-800/50 rounded-xl p-5 border border-purple-900/40">
+                        <h3 className="text-lg font-semibold text-white mb-4">🐋 Whale Finder & Validasi</h3>
+                        <div className="space-y-4">
+                            {/* Validation Gate */}
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <p className="text-sm text-white font-medium">🔒 Gate Validasi Manual</p>
+                                    <p className="text-xs text-gray-400 mt-0.5">Wallet whale harus disetujui oleh kamu sebelum di-copy</p>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.whaleValidationEnabled}
+                                        onChange={(e) => setSettings({...settings, whaleValidationEnabled: e.target.checked})}
+                                        className="sr-only peer"
+                                    />
+                                    <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                </label>
+                            </div>
+                            {/* Auto-Scan */}
+                            <div className="flex justify-between items-center">
+                                <div>
+                                    <p className="text-sm text-white font-medium">🔍 Auto Whale Scan</p>
+                                    <p className="text-xs text-gray-400 mt-0.5">Cari wallet whale otomatis via GeckoTerminal (cooldown 15 menit)</p>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
+                                    <input
+                                        type="checkbox"
+                                        checked={settings.whaleAutoScanEnabled}
+                                        onChange={(e) => setSettings({...settings, whaleAutoScanEnabled: e.target.checked})}
+                                        className="sr-only peer"
+                                    />
+                                    <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                </label>
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                                <div className="p-2 bg-purple-900/20 rounded border border-purple-800/40">
+                                    <div className="text-purple-400 font-semibold">Win Rate</div>
+                                    <div className="text-gray-300 mt-0.5">≥ 55%</div>
+                                </div>
+                                <div className="p-2 bg-purple-900/20 rounded border border-purple-800/40">
+                                    <div className="text-purple-400 font-semibold">Min Trades</div>
+                                    <div className="text-gray-300 mt-0.5">≥ 8 trade</div>
+                                </div>
+                                <div className="p-2 bg-purple-900/20 rounded border border-purple-800/40">
+                                    <div className="text-purple-400 font-semibold">Min Score</div>
+                                    <div className="text-gray-300 mt-0.5">≥ 60/100</div>
+                                </div>
+                            </div>
+                            <div className="p-3 bg-purple-900/20 rounded-lg border border-purple-800/40">
+                                <p className="text-xs text-purple-300">🐋 Kelola wallet whale di tombol <strong>Whale</strong> di header — tab Auto Finder untuk approve/reject kandidat yang ditemukan bot.</p>
+                            </div>
+                        </div>
+                    </div>
+
                     {/* ========== SERIAL RUGGER DETECTION ========== */}
                     <div className="bg-gray-800/50 rounded-xl p-5 border border-red-900/40">
                         <div className="flex justify-between items-center mb-4">
@@ -517,7 +697,7 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                             <div>
                                 <h3 className="text-lg font-semibold text-white">⭐ Skor Reputasi Deployer</h3>
                                 <p className="text-xs text-gray-400 mt-0.5">
-                                    Cek riwayat token deployer via DexScreener — token mati = rug → skor rendah → tolak
+                                    Cek riwayat token deployer via GeckoTerminal — token mati = rug → skor rendah → tolak
                                 </p>
                             </div>
                             <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
@@ -572,7 +752,7 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                 </div>
                                 <div className="p-3 bg-purple-900/20 rounded-lg border border-purple-800/40">
                                     <p className="text-xs text-purple-300">
-                                        ⭐ Bot memeriksa hingga 5 token terakhir deployer di DexScreener. Token dengan likuiditas &gt; $500 = hidup. Token tanpa likuiditas = mati (kemungkinan rug). Skor = 50 + (hidup × 15) − (mati × 20). Jika data kurang dari 2 token, cek dilewati (fail-open).
+                                        ⭐ Bot memeriksa hingga 5 token terakhir deployer di GeckoTerminal. Token dengan likuiditas &gt; $500 = hidup. Token tanpa likuiditas = mati (kemungkinan rug). Skor = 50 + (hidup × 15) − (mati × 20). Jika data kurang dari 2 token, cek dilewati (fail-open).
                                     </p>
                                 </div>
                             </div>
@@ -587,13 +767,18 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
 
                     {/* ========== STRATEGY CARD ========== */}
                     <div className="bg-gradient-to-r from-green-900/20 to-blue-900/20 rounded-xl p-5 border border-green-500/20">
-                        <h4 className="font-bold text-white mb-2">🎯 Strategi Modal 100rb</h4>
+                        <h4 className="font-bold text-white mb-3">🎯 Strategi Modal di Bawah $10 (Base Network)</h4>
                         <div className="text-sm text-gray-300 space-y-2">
-                            <p>✅ 1. <strong>FOKUS COPY TRADING</strong> - Jangan snipe langsung, ikuti whale</p>
-                            <p>✅ 2. <strong>Ambil untung di 1.5x - 2x</strong> - Jangan serakah</p>
-                            <p>✅ 3. <strong>Potong rugi di -30%</strong> - Lindungi modal</p>
-                            <p>✅ 4. <strong>Maksimal 10 kali copy per hari</strong> - Spread risk</p>
-                            <p>✅ 5. <strong>Jangan all-in</strong> - Selalu sisakan untuk gas</p>
+                            <p>✅ 1. <strong>COPY TRADING + GECKO SCANNER</strong> — Dua sumber peluang, bukan satu</p>
+                            <p>✅ 2. <strong>Dynamic sizing</strong> — Modal $6 beli kecil, tumbuh ke $30 beli lebih besar otomatis</p>
+                            <p>✅ 3. <strong>Ambil untung di TP1 ({settings.tp1Multiplier}x) - TP2 ({settings.tp2Multiplier}x)</strong> — Jangan serakah</p>
+                            <p>✅ 4. <strong>Stop loss ketat -{settings.stopLoss}%</strong> — Lindungi modal utama</p>
+                            <p>✅ 5. <strong>Validasi whale manual</strong> — Kamu yang putuskan, bot tidak sembarangan copy</p>
+                            <p>✅ 6. <strong>Gas Base sangat murah</strong> — ~$0.01 per swap, jauh lebih hemat dari Ethereum</p>
+                            <p>✅ 7. <strong>Simulasi sebelum copy</strong> — Estimasi profit/loss ditampilkan sebelum eksekusi</p>
+                        </div>
+                        <div className="mt-3 p-3 bg-green-900/30 rounded-lg border border-green-700/40">
+                            <p className="text-xs text-green-300">💡 Semua data harga dari <strong>GeckoTerminal</strong> (Base network). Uniswap V3 Router Base: gas ~150,000 units ≈ $0.01 per trade.</p>
                         </div>
                     </div>
                     
