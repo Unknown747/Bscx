@@ -62,6 +62,7 @@ export interface SwapParams {
     amountInEth: number;
     slippagePercent?: number;
     feeTier?: 500 | 3000 | 10000;
+    sourceWallet?: string;
 }
 
 export interface SwapResult {
@@ -85,6 +86,7 @@ interface OpenPosition {
     takeProfit2Hit: boolean;
     peakValueEth: number;
     dcaDone: boolean;
+    sourceWallet?: string;
 }
 
 // ============ SWAP EXECUTOR ============
@@ -247,7 +249,8 @@ export class SwapExecutor extends EventEmitter {
                 takeProfit1Hit: false,
                 takeProfit2Hit: false,
                 peakValueEth:   amountInEth,
-                dcaDone:        false
+                dcaDone:        false,
+                sourceWallet:   params.sourceWallet
             });
 
             this.knownTokens.add(tokenAddress.toLowerCase() as Address);
@@ -325,10 +328,12 @@ export class SwapExecutor extends EventEmitter {
                 return { success: false, amountIn, amountOut: 0n, txHash, error: 'Sell transaction reverted' };
             }
 
-            const tokenSymbol = this.openPositions.get(tokenAddress)?.tokenSymbol || '???';
+            const _sellPos = this.openPositions.get(tokenAddress);
+            const tokenSymbol = _sellPos?.tokenSymbol || '???';
+            const _sellSw = _sellPos?.sourceWallet;
             console.log(`   ✅ SELL SUCCESS: ${formatEther(amountIn)} ${tokenSymbol} (${percentToSell}%)`);
 
-            this.emit('sell-success', { tokenAddress, tokenSymbol, amountIn, percentSold: percentToSell, txHash });
+            this.emit('sell-success', { tokenAddress, tokenSymbol, amountIn, percentSold: percentToSell, txHash, sourceWallet: _sellSw });
 
             // Remove position if fully sold
             if (percentToSell >= 100) {
@@ -408,7 +413,7 @@ export class SwapExecutor extends EventEmitter {
                 ? `Trailing SL: -${dropFromPeak.toFixed(1)}% from peak`
                 : `Fixed SL: ${profitPct.toFixed(1)}%`;
             console.log(`🛑 STOP LOSS triggered (${reason}) — selling 100%`);
-            this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult });
+            this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult, sourceWallet: position.sourceWallet });
             await this.sell(tokenAddress, 100);
             return;
         }
@@ -416,7 +421,7 @@ export class SwapExecutor extends EventEmitter {
         // ─── TAKE PROFIT 1 ───
         if (!position.takeProfit1Hit && multiplier >= this.CONFIG.TAKE_PROFIT_1_X) {
             console.log(`🎯 TAKE PROFIT 1 at ${multiplier.toFixed(2)}x — selling ${this.CONFIG.TAKE_PROFIT_1_PCT}%`);
-            this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 1, multiplier });
+            this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 1, multiplier, sourceWallet: position.sourceWallet });
             await this.sell(tokenAddress, this.CONFIG.TAKE_PROFIT_1_PCT);
             position.takeProfit1Hit = true;
             return;
@@ -425,7 +430,7 @@ export class SwapExecutor extends EventEmitter {
         // ─── TAKE PROFIT 2 ───
         if (position.takeProfit1Hit && !position.takeProfit2Hit && multiplier >= this.CONFIG.TAKE_PROFIT_2_X) {
             console.log(`🎯 TAKE PROFIT 2 at ${multiplier.toFixed(2)}x — selling remaining ${this.CONFIG.TAKE_PROFIT_2_PCT}%`);
-            this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 2, multiplier, profitPct, holdMs: Date.now() - position.openedAt });
+            this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 2, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
             await this.sell(tokenAddress, 100);
             position.takeProfit2Hit = true;
             return;

@@ -8,11 +8,22 @@ interface Wallet {
     lastBuyToken: string;
     totalPnL: number;
     winRate: number;
+    copiedTrades: number;
+    wins: number;
+    losses: number;
+    autoPaused: boolean;
 }
 
 interface CopyWalletsModalProps {
     apiUrl: string;
     onClose: () => void;
+}
+
+function winRateColor(wr: number, trades: number): string {
+    if (trades === 0) return 'text-gray-500 border-gray-700 bg-gray-800/40';
+    if (wr >= 60)    return 'text-green-400 border-green-800 bg-green-900/30';
+    if (wr >= 40)    return 'text-yellow-400 border-yellow-800 bg-yellow-900/20';
+    return 'text-red-400 border-red-800 bg-red-900/20';
 }
 
 const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) => {
@@ -95,7 +106,8 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
         setEditName(w.name);
     };
 
-    const activeCount = wallets.filter(w => w.isActive).length;
+    const activeCount   = wallets.filter(w => w.isActive).length;
+    const pausedByBot   = wallets.filter(w => w.autoPaused).length;
 
     return (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
@@ -107,6 +119,9 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                         <h2 className="text-lg font-bold text-white">🐋 Whale Wallets</h2>
                         <p className="text-xs text-gray-500 mt-0.5">
                             {activeCount} aktif · {wallets.length} total
+                            {pausedByBot > 0 && (
+                                <span className="ml-2 text-orange-400">· {pausedByBot} auto-paused</span>
+                            )}
                         </p>
                     </div>
                     <button onClick={onClose} className="text-gray-500 hover:text-white text-2xl leading-none transition-colors">&times;</button>
@@ -154,7 +169,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                     </div>
 
                     {/* Wallet list */}
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                         {loading ? (
                             <div className="text-center py-8 text-gray-600 text-sm">Memuat...</div>
                         ) : wallets.length === 0 ? (
@@ -164,9 +179,13 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                         ) : wallets.map(w => (
                             <div
                                 key={w.address}
-                                className={`border rounded-xl p-4 transition-all ${w.isActive
-                                    ? 'bg-gray-800/50 border-gray-700'
-                                    : 'bg-gray-900/30 border-gray-800 opacity-60'}`}
+                                className={`border rounded-xl p-4 transition-all ${
+                                    w.autoPaused
+                                        ? 'bg-orange-950/20 border-orange-800/50'
+                                        : w.isActive
+                                            ? 'bg-gray-800/50 border-gray-700'
+                                            : 'bg-gray-900/30 border-gray-800 opacity-60'
+                                }`}
                             >
                                 <div className="flex items-start gap-3">
                                     {/* Active toggle */}
@@ -196,17 +215,51 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                 <button onClick={() => setEditingAddr(null)} className="text-gray-500 hover:text-gray-300 text-xs px-1">✗</button>
                                             </div>
                                         ) : (
-                                            <div className="flex items-center gap-2 mb-1">
+                                            <div className="flex items-center gap-2 mb-1 flex-wrap">
                                                 <span className="text-sm font-semibold text-white truncate">{w.name}</span>
                                                 <button
                                                     onClick={() => startEdit(w)}
                                                     className="text-gray-600 hover:text-gray-400 text-xs flex-shrink-0 transition-colors"
                                                     title="Ganti nama"
                                                 >✏️</button>
+                                                {w.autoPaused && (
+                                                    <span className="text-xs px-2 py-0.5 rounded-full border bg-orange-900/40 text-orange-400 border-orange-700 flex-shrink-0">
+                                                        ⏸ Auto-paused
+                                                    </span>
+                                                )}
                                             </div>
                                         )}
+
                                         <p className="text-xs text-gray-500 font-mono truncate">{w.address}</p>
-                                        {w.lastBuyToken && (
+
+                                        {/* Per-whale stats row */}
+                                        {w.copiedTrades > 0 ? (
+                                            <div className="flex items-center gap-2 mt-2 flex-wrap">
+                                                {/* Win rate badge */}
+                                                <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${winRateColor(w.winRate, w.copiedTrades)}`}>
+                                                    {w.winRate.toFixed(0)}% WR
+                                                </span>
+                                                {/* Trade count */}
+                                                <span className="text-xs text-gray-500">
+                                                    {w.wins}W / {w.losses}L
+                                                </span>
+                                                {/* Total PnL */}
+                                                <span className={`text-xs font-medium ${w.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                    {w.totalPnL >= 0 ? '+' : ''}{w.totalPnL.toFixed(1)}% P&L
+                                                </span>
+                                            </div>
+                                        ) : (
+                                            <p className="text-xs text-gray-600 mt-1.5 italic">Belum ada copy trade tercatat</p>
+                                        )}
+
+                                        {/* Auto-pause hint */}
+                                        {w.autoPaused && (
+                                            <p className="text-xs text-orange-500/80 mt-1">
+                                                Win rate turun di bawah 30% — toggle untuk aktifkan kembali
+                                            </p>
+                                        )}
+
+                                        {w.lastBuyToken && !w.autoPaused && (
                                             <p className="text-xs text-gray-600 mt-1">
                                                 Terakhir beli: <span className="text-gray-500 font-mono">{w.lastBuyToken.slice(0, 12)}...</span>
                                             </p>
@@ -215,10 +268,14 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
 
                                     {/* Status & delete */}
                                     <div className="flex items-center gap-2 flex-shrink-0">
-                                        <span className={`text-xs px-2 py-0.5 rounded-full border ${w.isActive
-                                            ? 'bg-green-900/40 text-green-400 border-green-800'
-                                            : 'bg-gray-800 text-gray-500 border-gray-700'}`}>
-                                            {w.isActive ? 'Aktif' : 'Jeda'}
+                                        <span className={`text-xs px-2 py-0.5 rounded-full border ${
+                                            w.autoPaused
+                                                ? 'bg-orange-900/30 text-orange-400 border-orange-800'
+                                                : w.isActive
+                                                    ? 'bg-green-900/40 text-green-400 border-green-800'
+                                                    : 'bg-gray-800 text-gray-500 border-gray-700'
+                                        }`}>
+                                            {w.autoPaused ? 'Auto-Pause' : w.isActive ? 'Aktif' : 'Jeda'}
                                         </span>
                                         <button
                                             onClick={() => handleRemove(w.address)}
@@ -232,14 +289,17 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                     </div>
 
                     {/* Info box */}
-                    {wallets.length > 0 && (
-                        <div className="bg-blue-900/20 border border-blue-800/40 rounded-xl p-4 flex gap-3">
-                            <span className="text-lg">💡</span>
-                            <p className="text-xs text-blue-300 leading-relaxed">
-                                Wallet yang dijeda tidak akan di-copy trade tapi tetap tersimpan. Gunakan toggle untuk mengaktifkan/menonaktifkan sementara.
-                            </p>
+                    <div className="bg-blue-900/20 border border-blue-800/40 rounded-xl p-4 space-y-2">
+                        <div className="flex gap-3">
+                            <span className="text-lg">📊</span>
+                            <div className="text-xs text-blue-300 leading-relaxed space-y-1">
+                                <p><span className="text-green-400 font-semibold">Win Rate ≥ 60%</span> — whale performa bagus</p>
+                                <p><span className="text-yellow-400 font-semibold">Win Rate 40–60%</span> — performa sedang</p>
+                                <p><span className="text-red-400 font-semibold">Win Rate &lt; 40%</span> — hati-hati</p>
+                                <p className="text-orange-400 font-semibold">⏸ Auto-paused jika WR &lt; 30% setelah 5 trade</p>
+                            </div>
                         </div>
-                    )}
+                    </div>
                 </div>
 
                 {/* Footer */}

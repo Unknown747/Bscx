@@ -275,6 +275,10 @@ export class AISniperBot extends EventEmitter {
         this.executor.on('sell-success', (d) => {
             this.emit('sell-success', d);
             this.addLog('sell-success', `SELL ${d.tokenSymbol} (${d.percentSold}%)`, `TX: ${d.txHash?.slice(0, 18)}...`);
+            // Record whale outcome on full manual sell
+            if (d.sourceWallet && (d.percentSold ?? 100) >= 100) {
+                this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
+            }
             // Record closed trade
             const trade: ClosedTrade = {
                 id:           require('crypto').randomBytes(6).toString('hex'),
@@ -300,6 +304,10 @@ export class AISniperBot extends EventEmitter {
         this.executor.on('take-profit', (d) => {
             this.emit('take-profit', d);
             this.addLog('take-profit', `TP${d.level} ${d.tokenSymbol} @ ${d.multiplier?.toFixed(2)}x`, 'Auto take profit triggered');
+            // Record whale outcome on final TP (level 2 = full position closed, profitPct available)
+            if (d.sourceWallet && d.level === 2 && d.profitPct != null) {
+                this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct);
+            }
             const trade: ClosedTrade = {
                 id:           require('crypto').randomBytes(6).toString('hex'),
                 tokenAddress: d.tokenAddress || '',
@@ -326,6 +334,10 @@ export class AISniperBot extends EventEmitter {
         this.executor.on('stop-loss', (d) => {
             this.emit('stop-loss', d);
             this.addLog('stop-loss', `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`, d.reason || 'Auto stop loss triggered');
+            // Record whale outcome — stop loss always fully closes position
+            if (d.sourceWallet) {
+                this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
+            }
             // Auto-blacklist token that hit SL
             if (d.tokenAddress) {
                 this.blacklist.add(d.tokenAddress.toLowerCase());
@@ -390,7 +402,7 @@ export class AISniperBot extends EventEmitter {
     }
 
     // ============ EXECUTION ============
-    private async executeBuy(tokenAddress: Address, amountEth: number): Promise<void> {
+    private async executeBuy(tokenAddress: Address, amountEth: number, sourceWallet?: string): Promise<void> {
         if (!this.executor) {
             console.warn('   ⚠️  Live trading disabled (no PRIVATE_KEY)');
             return;
@@ -414,7 +426,7 @@ export class AISniperBot extends EventEmitter {
         }
         console.log(`   ✅ Token safety OK${safety.sellTax ? ` (sell tax: ${safety.sellTax}%)` : ''}`);
 
-        const result = await this.executor.buy({ tokenAddress, amountInEth: amountEth });
+        const result = await this.executor.buy({ tokenAddress, amountInEth: amountEth, sourceWallet });
 
         if (result.success) {
             console.log(`   ✅ BUY SUCCESS | TX: ${result.txHash}`);
@@ -456,7 +468,8 @@ export class AISniperBot extends EventEmitter {
         const copyAmount = this.runtimeConfig.copyAmount;
         const result = await this.executor.buy({
             tokenAddress: opportunity.tokenAddress as Address,
-            amountInEth:  copyAmount
+            amountInEth:  copyAmount,
+            sourceWallet: opportunity.walletAddress
         });
 
         if (result.success) {

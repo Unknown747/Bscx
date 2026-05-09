@@ -10,6 +10,10 @@ interface WalletTarget {
     totalPnL: number;
     winRate: number;
     isActive: boolean;
+    copiedTrades: number;
+    wins: number;
+    losses: number;
+    autoPaused: boolean;
 }
 
 interface CopyTradeOpportunity {
@@ -30,7 +34,11 @@ const WHALE_WALLETS: WalletTarget[] = [
         lastBuyToken: '',
         totalPnL: 0,
         winRate: 0,
-        isActive: true
+        isActive: true,
+        copiedTrades: 0,
+        wins: 0,
+        losses: 0,
+        autoPaused: false
     },
     {
         address: '0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B',
@@ -39,7 +47,11 @@ const WHALE_WALLETS: WalletTarget[] = [
         lastBuyToken: '',
         totalPnL: 0,
         winRate: 0,
-        isActive: true
+        isActive: true,
+        copiedTrades: 0,
+        wins: 0,
+        losses: 0,
+        autoPaused: false
     },
     {
         address: '0x15b2Cf6A1F54D4FEd458B0C4412a0d643aE7e625',
@@ -48,7 +60,11 @@ const WHALE_WALLETS: WalletTarget[] = [
         lastBuyToken: '',
         totalPnL: 0,
         winRate: 0,
-        isActive: true
+        isActive: true,
+        copiedTrades: 0,
+        wins: 0,
+        losses: 0,
+        autoPaused: false
     }
 ];
 
@@ -66,6 +82,8 @@ export class CopyTradeMonitor extends EventEmitter {
         MIN_WALLET_SCORE: 60,
         BLACKLIST_TOKENS: new Set<string>(),
         SCAN_INTERVAL_MS: 2000,
+        MIN_WIN_RATE_TO_STAY_ACTIVE: 30,   // auto-pause if win rate drops below this %
+        MIN_TRADES_BEFORE_SCORE: 5,        // min tracked trades before auto-pause kicks in
     };
     
     private dailyCopyCount = 0;
@@ -339,7 +357,11 @@ export class CopyTradeMonitor extends EventEmitter {
             lastBuyToken: '',
             totalPnL: 0,
             winRate: 0,
-            isActive: true
+            isActive: true,
+            copiedTrades: 0,
+            wins: 0,
+            losses: 0,
+            autoPaused: false
         });
         console.log(`✅ Added wallet: ${name} (${address.slice(0, 10)}...)`);
     }
@@ -356,8 +378,52 @@ export class CopyTradeMonitor extends EventEmitter {
         const w = this.wallets.find(w => w.address.toLowerCase() === address.toLowerCase());
         if (w) {
             w.isActive = active;
+            // If manually reactivated, clear autoPaused flag
+            if (active) w.autoPaused = false;
             console.log(`${active ? '✅' : '⏸️'} Wallet ${active ? 'activated' : 'paused'}: ${address.slice(0, 10)}...`);
         }
+    }
+
+    // ============ RECORD TRADE OUTCOME (per-whale profitability) ============
+    recordTradeOutcome(walletAddress: string | undefined, profitPct: number | null): void {
+        if (!walletAddress) return;
+        const w = this.wallets.find(w => w.address.toLowerCase() === walletAddress.toLowerCase());
+        if (!w) return;
+
+        w.copiedTrades++;
+        const isWin = (profitPct ?? 0) > 0;
+        if (isWin) {
+            w.wins++;
+        } else {
+            w.losses++;
+        }
+
+        if (profitPct !== null) {
+            w.totalPnL = parseFloat(((w.totalPnL || 0) + profitPct).toFixed(2));
+        }
+
+        // Recalculate win rate
+        const total = w.wins + w.losses;
+        w.winRate = total > 0 ? parseFloat(((w.wins / total) * 100).toFixed(1)) : 0;
+
+        // Auto-pause if win rate drops below threshold after minimum trades
+        if (
+            total >= this.CONFIG.MIN_TRADES_BEFORE_SCORE &&
+            w.winRate < this.CONFIG.MIN_WIN_RATE_TO_STAY_ACTIVE &&
+            !w.autoPaused
+        ) {
+            w.isActive  = false;
+            w.autoPaused = true;
+            console.log(
+                `⏸️  Auto-paused whale ${w.name} (${w.address.slice(0, 10)}...): ` +
+                `win rate ${w.winRate}% < ${this.CONFIG.MIN_WIN_RATE_TO_STAY_ACTIVE}% after ${total} trades`
+            );
+        }
+
+        console.log(
+            `📊 Whale ${w.name}: ${w.wins}W/${w.losses}L ` +
+            `(${w.winRate}% WR) | P&L: ${w.totalPnL >= 0 ? '+' : ''}${w.totalPnL.toFixed(1)}%`
+        );
     }
 
     renameWallet(address: string, name: string): void {
