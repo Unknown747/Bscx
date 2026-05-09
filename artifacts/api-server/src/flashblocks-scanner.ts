@@ -27,7 +27,8 @@ interface TokenSafety {
 // FIX: Removed unused SnipeOpportunity interface
 
 // Constant to avoid hardcoding in multiple places
-const UNISWAP_V3_FACTORY = '0x33128a8fC17869897dcE68Ed026d694621fd6Df';
+// Uniswap V3 Factory on Base mainnet (verified: 42 hex chars)
+const UNISWAP_V3_FACTORY = '0x33128a8fC17869897dcE68Ed026d694621f6FDfD';
 const POOL_CREATED_SIG = '0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118';
 
 // ============ MAIN SCANNER CLASS ============

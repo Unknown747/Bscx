@@ -51,12 +51,16 @@ export interface ScannerConfig {
 
 export class GeckoTokenScanner extends EventEmitter {
     private scanInterval: NodeJS.Timeout | null = null;
+    private pruneInterval: NodeJS.Timeout | null = null;
     private seenTokens   = new Set<string>();
+    private seenTokenTs  = new Map<string, number>(); // addr → discoveredAt ms
     private isScanning   = false;
     private lastNewPoolScan    = 0;
     private lastTrendingScan   = 0;
     private readonly NEW_POOL_INTERVAL_MS    = 30_000;  // every 30s
     private readonly TRENDING_INTERVAL_MS    = 120_000; // every 2 min
+    private readonly SEEN_TOKEN_TTL_MS       = 6 * 60 * 60 * 1000; // prune after 6h
+    private readonly PRUNE_INTERVAL_MS       = 60 * 60 * 1000;     // prune every 1h
 
     private config: ScannerConfig = {
         minLiquidityUsd:  3_000,    // $3k min liquidity
@@ -88,6 +92,9 @@ export class GeckoTokenScanner extends EventEmitter {
         this.scanInterval = setInterval(() => {
             this.scan().catch(console.error);
         }, this.config.scanIntervalMs);
+
+        // Prune seenTokens periodically to prevent memory leak
+        this.pruneInterval = setInterval(() => this.pruneSeenTokens(), this.PRUNE_INTERVAL_MS);
     }
 
     stop(): void {
@@ -95,7 +102,24 @@ export class GeckoTokenScanner extends EventEmitter {
             clearInterval(this.scanInterval);
             this.scanInterval = null;
         }
+        if (this.pruneInterval) {
+            clearInterval(this.pruneInterval);
+            this.pruneInterval = null;
+        }
         console.log('🛑 [GeckoScanner] Token scanner stopped');
+    }
+
+    private pruneSeenTokens(): void {
+        const cutoff = Date.now() - this.SEEN_TOKEN_TTL_MS;
+        let pruned = 0;
+        for (const [addr, ts] of this.seenTokenTs) {
+            if (ts < cutoff) {
+                this.seenTokens.delete(addr);
+                this.seenTokenTs.delete(addr);
+                pruned++;
+            }
+        }
+        if (pruned > 0) console.log(`🦎 [GeckoScanner] Pruned ${pruned} stale tokens (${this.seenTokens.size} remaining)`);
     }
 
     updateConfig(updates: Partial<ScannerConfig>): void {
@@ -161,8 +185,9 @@ export class GeckoTokenScanner extends EventEmitter {
             if (bsRatio > this.config.maxBuySellRatio) return;
         }
 
-        // Mark as seen immediately to prevent duplicate events
+        // Mark as seen immediately (with timestamp for TTL pruning)
         this.seenTokens.add(addr);
+        this.seenTokenTs.set(addr, Date.now());
 
         // Safety check (GoPlus)
         const safety = await this.checkSafety(addr);

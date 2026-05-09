@@ -139,7 +139,7 @@ export class CopyTradeMonitor extends EventEmitter {
 
             if (this.recentTrades.has(txHash))    continue;
             if (txTime === 0)                      continue;
-            if (now - txTime > 10000)              continue;
+            if (now - txTime > 30000)              continue;
 
             const tokenAddress = this.extractTokenAddress(tx);
             if (tokenAddress === wallet.lastBuyToken) continue;
