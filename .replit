@@ -61,33 +61,29 @@ args = "API Server"
 name = "Start application"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd artifacts/base-sniper && npm run dev -- --port 5000"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/base-sniper && node_modules/.bin/vite --port 5000 --host"
+waitForPort = 5000
 
 [[workflows.workflow]]
 name = "API Server"
 author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd artifacts/api-server && npm run dev"
 waitForPort = 8080
 
-[workflows.workflow.metadata]
-outputType = "console"
-
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 5001
-externalPort = 3001
 
 [[ports]]
 localPort = 8080
