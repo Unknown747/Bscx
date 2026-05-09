@@ -22,18 +22,62 @@ interface LogEntry {
 
 const MAX_LOG_ENTRIES = 100;
 
+// Mutable runtime config — mirrors env vars but can be updated via API
+interface RuntimeConfig {
+    totalCapital:    number;
+    maxTradeAmount:  number;
+    minLiquidity:    number;
+    maxSlippage:     number;
+    tp1Multiplier:   number;
+    tp1Percentage:   number;
+    tp2Multiplier:   number;
+    tp2Percentage:   number;
+    stopLoss:        number;
+    maxPriorityFee:  number;
+    maxFeePerGas:    number;
+    copyEnabled:     boolean;
+    copyAmount:      number;
+    copyDelay:       number;
+    copyMaxPerDay:   number;
+    minSafetyScore:  number;
+    maxPoolAgeSeconds: number;
+    aiEnabled:       boolean;
+}
+
 export class AISniperBot extends EventEmitter {
     private scanner: FlashblocksScanner;
     private copyMonitor: CopyTradeMonitor;
     private ai: MultiAIProvider;
     private executor: SwapExecutor | null = null;
     private activityLog: LogEntry[] = [];
+    private sentimentInterval: NodeJS.Timeout | null = null;
+
+    // Single source of truth for all runtime config
+    private runtimeConfig: RuntimeConfig = {
+        totalCapital:     parseFloat(process.env.TOTAL_CAPITAL_ETH            || '0.006'),
+        maxTradeAmount:   parseFloat(process.env.MAX_TRADE_AMOUNT             || '0.0006'),
+        minLiquidity:     parseFloat(process.env.MIN_LIQUIDITY_ETH            || '0.15'),
+        maxSlippage:      parseFloat(process.env.MAX_SLIPPAGE_PERCENT         || '15'),
+        tp1Multiplier:    parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER     || '1.5'),
+        tp1Percentage:    parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE     || '50'),
+        tp2Multiplier:    parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER     || '2.5'),
+        tp2Percentage:    parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE     || '50'),
+        stopLoss:         parseFloat(process.env.STOP_LOSS_PERCENTAGE         || '30'),
+        maxPriorityFee:   parseFloat(process.env.MAX_PRIORITY_FEE_GWEI        || '0.5'),
+        maxFeePerGas:     parseFloat(process.env.MAX_FEE_PER_GAS_GWEI         || '1.5'),
+        copyEnabled:      process.env.COPY_TRADING_ENABLED === 'true',
+        copyAmount:       parseFloat(process.env.COPY_TRADING_AMOUNT          || '0.0003'),
+        copyDelay:        parseFloat(process.env.COPY_TRADING_DELAY_SECONDS   || '2'),
+        copyMaxPerDay:    parseInt  (process.env.COPY_TRADING_MAX_PER_DAY     || '10'),
+        minSafetyScore:   parseInt  (process.env.MIN_SAFETY_SCORE             || '65'),
+        maxPoolAgeSeconds:parseInt  (process.env.MAX_POOL_AGE_SECONDS         || '60'),
+        aiEnabled:        process.env.AI_ENABLED === 'true'
+    };
 
     private readonly CONFIG = {
-        TOTAL_CAPITAL:              parseFloat(process.env.TOTAL_CAPITAL_ETH           || '0.006'),
-        MIN_AI_CONFIDENCE:          parseInt  (process.env.MIN_AI_CONFIDENCE           || '65'),
-        AUTO_COPY_SCORE_THRESHOLD:  parseInt  (process.env.AUTO_COPY_SCORE_THRESHOLD   || '75'),
-        ENABLE_GROQ_PRIMARY:        true
+        MIN_AI_CONFIDENCE:         parseInt(process.env.MIN_AI_CONFIDENCE        || '65'),
+        AUTO_COPY_SCORE_THRESHOLD: parseInt(process.env.AUTO_COPY_SCORE_THRESHOLD || '75'),
+        ENABLE_GROQ_PRIMARY:       true
     };
 
     constructor() {
@@ -153,7 +197,8 @@ export class AISniperBot extends EventEmitter {
         }
 
         // ============ Periodic Market Sentiment (every 5 min) ============
-        setInterval(async () => {
+        // Store reference so we can clear it in stop()
+        this.sentimentInterval = setInterval(async () => {
             const sentiment = await this.ai.getMarketSentiment();
             console.log(`\n📊 Market Sentiment: ${sentiment.sentiment}/100`);
             console.log(`   ⛽ Gas Advice: ${sentiment.gasAdvice}`);
@@ -179,8 +224,8 @@ export class AISniperBot extends EventEmitter {
         if      (analysis.riskLevel === 'LOW')  pct *= 1.2;
         else if (analysis.riskLevel === 'HIGH') pct *= 0.7;
 
-        // Cap at 0.001 ETH for safety with small capital
-        return Math.min(this.CONFIG.TOTAL_CAPITAL * pct, 0.001);
+        // Cap at maxTradeAmount from runtime config
+        return Math.min(this.runtimeConfig.totalCapital * pct, this.runtimeConfig.maxTradeAmount);
     }
 
     // ============ EXECUTION ============
@@ -205,7 +250,8 @@ export class AISniperBot extends EventEmitter {
             return;
         }
 
-        const copyAmount = parseFloat(process.env.COPY_TRADING_AMOUNT || '0.0003');
+        // Use runtime config so updates from POST /api/settings take effect immediately
+        const copyAmount = this.runtimeConfig.copyAmount;
 
         const result = await this.executor.buy({
             tokenAddress: opportunity.tokenAddress as Address,
@@ -252,7 +298,7 @@ export class AISniperBot extends EventEmitter {
     async start(): Promise<void> {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🤖 AI-POWERED BASE SNIPER (Groq + Gemini)');
-        console.log(`💰 Modal: ${this.CONFIG.TOTAL_CAPITAL} ETH (~100rb)`);
+        console.log(`💰 Modal: ${this.runtimeConfig.totalCapital} ETH (~100rb)`);
         console.log(`💼 Wallet: ${this.executor?.getWalletAddress() ?? 'NOT CONFIGURED'}`);
         console.log(`⚡ Primary AI: Groq (${this.CONFIG.ENABLE_GROQ_PRIMARY ? 'ACTIVE' : 'DISABLED'})`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
@@ -266,7 +312,8 @@ export class AISniperBot extends EventEmitter {
 
         await this.scanner.connect();
 
-        if (process.env.COPY_TRADING_ENABLED === 'true') {
+        // Use runtime config (not env) so hot-reload via POST /api/settings works
+        if (this.runtimeConfig.copyEnabled) {
             this.copyMonitor.start();
         }
 
@@ -277,6 +324,10 @@ export class AISniperBot extends EventEmitter {
     }
 
     async stop(): Promise<void> {
+        if (this.sentimentInterval) {
+            clearInterval(this.sentimentInterval);
+            this.sentimentInterval = null;
+        }
         this.scanner.disconnect();
         this.copyMonitor.stop();
         this.executor?.stop();
@@ -284,49 +335,56 @@ export class AISniperBot extends EventEmitter {
     }
 
     // ============ RUNTIME CONFIG UPDATE ============
-    updateRuntimeConfig(s: {
-        totalCapital?:   number;
-        maxTradeAmount?: number;
-        minLiquidity?:   number;
-        maxSlippage?:    number;
-        tp1Multiplier?:  number;
-        tp1Percentage?:  number;
-        tp2Multiplier?:  number;
-        tp2Percentage?:  number;
-        stopLoss?:       number;
-        maxPriorityFee?: number;
-        maxFeePerGas?:   number;
-        copyEnabled?:    boolean;
-        copyAmount?:     number;
-        copyDelay?:      number;
-    }): void {
-        // Update bot-level capital/confidence thresholds
-        if (s.totalCapital  != null) (this.CONFIG as any).TOTAL_CAPITAL  = s.totalCapital;
+    updateRuntimeConfig(s: Partial<RuntimeConfig>): void {
+        // Update the single source-of-truth runtimeConfig object
+        if (s.totalCapital     != null) this.runtimeConfig.totalCapital     = s.totalCapital;
+        if (s.maxTradeAmount   != null) this.runtimeConfig.maxTradeAmount   = s.maxTradeAmount;
+        if (s.minLiquidity     != null) this.runtimeConfig.minLiquidity     = s.minLiquidity;
+        if (s.maxSlippage      != null) this.runtimeConfig.maxSlippage      = s.maxSlippage;
+        if (s.tp1Multiplier    != null) this.runtimeConfig.tp1Multiplier    = s.tp1Multiplier;
+        if (s.tp1Percentage    != null) this.runtimeConfig.tp1Percentage    = s.tp1Percentage;
+        if (s.tp2Multiplier    != null) this.runtimeConfig.tp2Multiplier    = s.tp2Multiplier;
+        if (s.tp2Percentage    != null) this.runtimeConfig.tp2Percentage    = s.tp2Percentage;
+        if (s.stopLoss         != null) this.runtimeConfig.stopLoss         = s.stopLoss;
+        if (s.maxPriorityFee   != null) this.runtimeConfig.maxPriorityFee   = s.maxPriorityFee;
+        if (s.maxFeePerGas     != null) this.runtimeConfig.maxFeePerGas     = s.maxFeePerGas;
+        if (s.copyEnabled      != null) this.runtimeConfig.copyEnabled      = s.copyEnabled;
+        if (s.copyAmount       != null) this.runtimeConfig.copyAmount       = s.copyAmount;
+        if (s.copyDelay        != null) this.runtimeConfig.copyDelay        = s.copyDelay;
+        if (s.copyMaxPerDay    != null) this.runtimeConfig.copyMaxPerDay    = s.copyMaxPerDay;
+        if (s.minSafetyScore   != null) this.runtimeConfig.minSafetyScore   = s.minSafetyScore;
+        if (s.maxPoolAgeSeconds!= null) this.runtimeConfig.maxPoolAgeSeconds= s.maxPoolAgeSeconds;
+        if (s.aiEnabled        != null) this.runtimeConfig.aiEnabled        = s.aiEnabled;
 
         // Push trading params to SwapExecutor
         if (this.executor) {
             this.executor.updateConfig({
-                maxSlippage:    s.maxSlippage,
-                tp1Multiplier:  s.tp1Multiplier,
-                tp1Percentage:  s.tp1Percentage,
-                tp2Multiplier:  s.tp2Multiplier,
-                tp2Percentage:  s.tp2Percentage,
-                stopLoss:       s.stopLoss,
-                maxPriorityFee: s.maxPriorityFee,
-                maxFeePerGas:   s.maxFeePerGas
+                maxSlippage:    this.runtimeConfig.maxSlippage,
+                tp1Multiplier:  this.runtimeConfig.tp1Multiplier,
+                tp1Percentage:  this.runtimeConfig.tp1Percentage,
+                tp2Multiplier:  this.runtimeConfig.tp2Multiplier,
+                tp2Percentage:  this.runtimeConfig.tp2Percentage,
+                stopLoss:       this.runtimeConfig.stopLoss,
+                maxPriorityFee: this.runtimeConfig.maxPriorityFee,
+                maxFeePerGas:   this.runtimeConfig.maxFeePerGas
             });
         }
 
         // Push copy trading params to CopyTradeMonitor
         this.copyMonitor.updateConfig({
-            copyEnabled:  s.copyEnabled,
-            copyAmount:   s.copyAmount,
-            copyDelay:    s.copyDelay,
-            minLiquidity: s.minLiquidity
+            copyEnabled:  this.runtimeConfig.copyEnabled,
+            copyAmount:   this.runtimeConfig.copyAmount,
+            copyDelay:    this.runtimeConfig.copyDelay,
+            minLiquidity: this.runtimeConfig.minLiquidity
         });
 
-        this.addLog('info', 'Pengaturan diperbarui via UI', `Capital: ${s.totalCapital ?? '—'} ETH`);
-        console.log('⚙️  Runtime config updated:', s);
+        this.addLog('info', 'Pengaturan diperbarui via UI', `Capital: ${this.runtimeConfig.totalCapital} ETH`);
+        console.log('⚙️  Runtime config updated:', this.runtimeConfig);
+    }
+
+    // Expose runtime config for /api/config endpoint
+    getRuntimeConfig(): RuntimeConfig {
+        return { ...this.runtimeConfig };
     }
 
     getStatus() {

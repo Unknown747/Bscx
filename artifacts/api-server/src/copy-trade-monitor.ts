@@ -55,6 +55,7 @@ const WHALE_WALLETS: WalletTarget[] = [
 export class CopyTradeMonitor extends EventEmitter {
     private wallets: WalletTarget[];
     private scanInterval: NodeJS.Timeout | null = null;
+    private resetInterval: NodeJS.Timeout | null = null;
     private recentTrades: Map<string, number> = new Map();
     private isScanning = false;
     
@@ -91,7 +92,9 @@ export class CopyTradeMonitor extends EventEmitter {
     }
     
     private resetDailyCounter(): void {
-        setInterval(() => {
+        // Guard: only create one interval — prevent duplicate on repeated start()
+        if (this.resetInterval) return;
+        this.resetInterval = setInterval(() => {
             const today = new Date().toDateString();
             if (today !== this.lastResetDate) {
                 this.dailyCopyCount = 0;
@@ -351,6 +354,10 @@ export class CopyTradeMonitor extends EventEmitter {
         if (this.scanInterval) {
             clearInterval(this.scanInterval);
             this.scanInterval = null;
+        }
+        if (this.resetInterval) {
+            clearInterval(this.resetInterval);
+            this.resetInterval = null;
         }
         console.log('🛑 Copy Trade Monitor stopped');
     }

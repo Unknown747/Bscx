@@ -80,20 +80,24 @@ app.post('/api/settings', (req: Request, res: Response) => {
 
     try {
         bot.updateRuntimeConfig({
-            totalCapital:    s.totalCapital,
-            maxTradeAmount:  s.maxTradeAmount,
-            minLiquidity:    s.minLiquidity,
-            maxSlippage:     s.maxSlippage,
-            tp1Multiplier:   s.tp1Multiplier,
-            tp1Percentage:   s.tp1Percentage,
-            tp2Multiplier:   s.tp2Multiplier,
-            tp2Percentage:   s.tp2Percentage,
-            stopLoss:        s.stopLoss,
-            maxPriorityFee:  s.maxPriorityFee,
-            maxFeePerGas:    s.maxFeePerGas,
-            copyEnabled:     s.copyEnabled,
-            copyAmount:      s.copyAmount,
-            copyDelay:       s.copyDelay
+            totalCapital:     s.totalCapital,
+            maxTradeAmount:   s.maxTradeAmount,
+            minLiquidity:     s.minLiquidity,
+            maxSlippage:      s.maxSlippage,
+            tp1Multiplier:    s.tp1Multiplier,
+            tp1Percentage:    s.tp1Percentage,
+            tp2Multiplier:    s.tp2Multiplier,
+            tp2Percentage:    s.tp2Percentage,
+            stopLoss:         s.stopLoss,
+            maxPriorityFee:   s.maxPriorityFee,
+            maxFeePerGas:     s.maxFeePerGas,
+            copyEnabled:      s.copyEnabled,
+            copyAmount:       s.copyAmount,
+            copyDelay:        s.copyDelay,
+            copyMaxPerDay:    s.copyMaxPerDay,
+            minSafetyScore:   s.minSafetyScore,
+            maxPoolAgeSeconds:s.maxPoolAgeSeconds,
+            aiEnabled:        s.aiEnabled
         });
         res.json({ ok: true, message: 'Pengaturan berhasil diterapkan' });
     } catch (err: any) {
@@ -109,16 +113,23 @@ app.get('/api/logs', (_req: Request, res: Response) => {
 });
 
 app.get('/api/config', (_req: Request, res: Response) => {
+    // Return runtime config — reflects changes from POST /api/settings immediately
+    const rc = bot.getRuntimeConfig();
     res.json({
-        capital: process.env.TOTAL_CAPITAL_ETH,
-        maxTrade: process.env.MAX_TRADE_AMOUNT,
-        copyEnabled: process.env.COPY_TRADING_ENABLED === 'true',
-        copyAmount: process.env.COPY_TRADING_AMOUNT,
-        copyDelaySeconds: process.env.COPY_TRADING_DELAY_SECONDS,
-        copyMaxPerDay: process.env.COPY_TRADING_MAX_PER_DAY,
-        minSafetyScore: process.env.MIN_SAFETY_SCORE,
-        maxPoolAgeSeconds: process.env.MAX_POOL_AGE_SECONDS,
-        aiEnabled: process.env.AI_ENABLED === 'true'
+        capital:           String(rc.totalCapital),
+        maxTrade:          String(rc.maxTradeAmount),
+        copyEnabled:       rc.copyEnabled,
+        copyAmount:        String(rc.copyAmount),
+        copyDelaySeconds:  String(rc.copyDelay),
+        copyMaxPerDay:     String(rc.copyMaxPerDay),
+        minSafetyScore:    String(rc.minSafetyScore),
+        maxPoolAgeSeconds: String(rc.maxPoolAgeSeconds),
+        aiEnabled:         rc.aiEnabled,
+        tp1Multiplier:     rc.tp1Multiplier,
+        tp1Percentage:     rc.tp1Percentage,
+        tp2Multiplier:     rc.tp2Multiplier,
+        tp2Percentage:     rc.tp2Percentage,
+        stopLoss:          rc.stopLoss
     });
 });
 

@@ -172,9 +172,8 @@ export class SwapExecutor extends EventEmitter {
                 return { success: false, amountIn, amountOut: 0n, error: `Insufficient balance: ${formatEther(balance)} ETH` };
             }
 
-            // Estimate amount out (using 0 for amountOutMinimum = no price check, then apply slippage)
-            const slippageFactor = BigInt(Math.floor((100 - slippagePercent) * 100));
-            const amountOutMinimum = 0n; // For new tokens with no price history, accept any amount out
+            // Accept any amount out for new tokens (no price history for slippage calc)
+            const amountOutMinimum = 0n;
 
             const gasPrice = await this.getGasPrice();
 
