@@ -170,6 +170,88 @@ app.post('/api/settings', (req: Request, res: Response) => {
     }
 });
 
+// ============ CHART (OHLCV via GeckoTerminal) ============
+
+// Simple in-process cache: tokenAddress → { data, expiresAt }
+const chartCache = new Map<string, { data: unknown; expiresAt: number }>();
+const CHART_TTL_MS = 10_000; // 10-second cache
+
+app.get('/api/chart/:tokenAddress', async (req: Request, res: Response) => {
+    const { tokenAddress } = req.params;
+    if (!tokenAddress.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat token tidak valid' }); return;
+    }
+    const cacheKey = tokenAddress.toLowerCase();
+    const cached   = chartCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+        res.json(cached.data); return;
+    }
+    try {
+        const { default: axios } = await import('axios');
+        const GT = 'https://api.geckoterminal.com/api/v2';
+        const headers = { 'Accept': 'application/json;version=20230302' };
+
+        // Step 1: find the best pool for this token on Base
+        const poolsRes = await axios.get(
+            `${GT}/networks/base/tokens/${tokenAddress}/pools?page=1`,
+            { headers, timeout: 8000 }
+        );
+        const pools: any[] = poolsRes.data?.data ?? [];
+        if (!pools.length) {
+            res.status(404).json({ error: 'Pool tidak ditemukan untuk token ini' }); return;
+        }
+        // Pick the pool with the highest liquidity
+        const bestPool = pools.reduce((best: any, p: any) => {
+            const liq = parseFloat(p.attributes?.reserve_in_usd ?? '0');
+            return liq > parseFloat(best.attributes?.reserve_in_usd ?? '0') ? p : best;
+        }, pools[0]);
+        const poolAddress = bestPool.attributes?.address;
+        if (!poolAddress) {
+            res.status(404).json({ error: 'Alamat pool tidak tersedia' }); return;
+        }
+
+        // Step 2: fetch 5-minute OHLCV candles (last 40)
+        const ohlcvRes = await axios.get(
+            `${GT}/networks/base/pools/${poolAddress}/ohlcv/minute?aggregate=5&limit=40&currency=usd`,
+            { headers, timeout: 8000 }
+        );
+        const rawList: number[][] = ohlcvRes.data?.data?.attributes?.ohlcv_list ?? [];
+        // GeckoTerminal returns newest-first — reverse to oldest-first
+        const candles = [...rawList].reverse().map(([ts, o, h, l, c, v]) => ({
+            t: ts * 1000, // ms
+            o, h, l, c, v
+        }));
+
+        const result = {
+            poolAddress,
+            poolName: bestPool.attributes?.name ?? poolAddress,
+            liquidityUsd: parseFloat(bestPool.attributes?.reserve_in_usd ?? '0'),
+            candles,
+            fetchedAt: Date.now()
+        };
+        chartCache.set(cacheKey, { data: result, expiresAt: Date.now() + CHART_TTL_MS });
+        res.json(result);
+    } catch (err: any) {
+        const status = err.response?.status;
+        if (status === 404) {
+            res.status(404).json({ error: 'Token tidak ditemukan di GeckoTerminal' });
+        } else {
+            res.status(500).json({ error: err.message ?? 'Gagal fetch data chart' });
+        }
+    }
+});
+
+// ============ ETH PRICE ============
+app.get('/api/eth-price', async (_req: Request, res: Response) => {
+    try {
+        const { getEthPriceUsd } = await import('./price-oracle');
+        const price = await getEthPriceUsd();
+        res.json({ usd: price, timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ============ LIVE PnL & PORTFOLIO ============
 app.get('/api/pnl', async (_req: Request, res: Response) => {
     try { res.json({ pnl: await bot.getLivePnL(), timestamp: Date.now() }); }

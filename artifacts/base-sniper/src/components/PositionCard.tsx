@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { authFetch } from '../lib/authFetch';
+import MiniChart from './MiniChart';
 
 interface Position {
     tokenAddress: string;
@@ -83,15 +84,17 @@ function progressPct(current: number, start: number, target: number): number {
 const SELL_PRESETS = [25, 50, 75, 100];
 
 const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
-    const [data, setData]             = useState<PositionsData | null>(null);
-    const [pnlMap, setPnlMap]         = useState<Map<string, PnLEntry>>(new Map());
-    const [tpsl, setTpsl]             = useState<TpSlConfig>({ tp1Multiplier: 1.5, tp2Multiplier: 2.5, stopLoss: 30 });
-    const [error, setError]           = useState('');
-    const [pnlLoading, setPnlLoading] = useState(false);
-    const [flashSet, setFlashSet]     = useState<Set<string>>(new Set());
-    const [sellState, setSellState]   = useState<SellState | null>(null);
-    const prevPnlRef                  = useRef<Map<string, number | null>>(new Map());
-    const [tick, setTick]             = useState(0);
+    const [data, setData]               = useState<PositionsData | null>(null);
+    const [pnlMap, setPnlMap]           = useState<Map<string, PnLEntry>>(new Map());
+    const [tpsl, setTpsl]               = useState<TpSlConfig>({ tp1Multiplier: 1.5, tp2Multiplier: 2.5, stopLoss: 30 });
+    const [error, setError]             = useState('');
+    const [pnlLoading, setPnlLoading]   = useState(false);
+    const [flashSet, setFlashSet]       = useState<Set<string>>(new Set());
+    const [sellState, setSellState]     = useState<SellState | null>(null);
+    const [expandedCharts, setExpandedCharts] = useState<Set<string>>(new Set());
+    const [ethPriceUsd, setEthPriceUsd] = useState<number>(3000);
+    const prevPnlRef                    = useRef<Map<string, number | null>>(new Map());
+    const [tick, setTick]               = useState(0);
 
     const fetchPositions = useCallback(async () => {
         try {
@@ -112,6 +115,22 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
             setError('Gagal memuat posisi');
         }
     }, [apiUrl]);
+
+    const fetchEthPrice = useCallback(async () => {
+        try {
+            const res  = await authFetch(`${apiUrl}/api/eth-price`);
+            const json = await res.json();
+            if (json.usd && json.usd > 0) setEthPriceUsd(json.usd);
+        } catch { /* use fallback */ }
+    }, [apiUrl]);
+
+    const toggleChart = useCallback((addr: string) => {
+        setExpandedCharts(prev => {
+            const next = new Set(prev);
+            next.has(addr) ? next.delete(addr) : next.add(addr);
+            return next;
+        });
+    }, []);
 
     const fetchPnL = useCallback(async () => {
         setPnlLoading(true);
@@ -167,6 +186,12 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
         const pi = setInterval(fetchPnL, 5000);
         return () => clearInterval(pi);
     }, [fetchPnL]);
+
+    useEffect(() => {
+        fetchEthPrice();
+        const pi = setInterval(fetchEthPrice, 60_000);
+        return () => clearInterval(pi);
+    }, [fetchEthPrice]);
 
     useEffect(() => {
         const t = setInterval(() => setTick(n => n + 1), 1000);
@@ -229,6 +254,8 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
                 const tp2Prog = mult !== null && pos.takeProfit1Hit
                     ? progressPct(mult, tpsl.tp1Multiplier, tpsl.tp2Multiplier)
                     : 0;
+                const chartOpen       = expandedCharts.has(key);
+                const entryPriceUsd   = pos.entryPrice * ethPriceUsd;
 
                 return (
                     <div
@@ -243,7 +270,23 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
                                 <span className="text-white font-bold">{pos.tokenSymbol}</span>
                                 <span className="ml-2 text-xs text-gray-500">{shortAddr(pos.tokenAddress)}</span>
                             </div>
-                            <span className="text-xs text-gray-500">⏱ {holdTime(holdMs)}</span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => toggleChart(key)}
+                                    className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-md border transition-all
+                                        ${chartOpen
+                                            ? 'border-blue-600 text-blue-400 bg-blue-900/30'
+                                            : 'border-gray-700 text-gray-500 hover:border-blue-700 hover:text-blue-400'
+                                        }`}
+                                    title={chartOpen ? 'Tutup chart' : 'Lihat chart harga'}
+                                >
+                                    <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                        <polyline points="1,9 4,5 7,7 11,2" strokeLinejoin="round" strokeLinecap="round"/>
+                                    </svg>
+                                    Chart
+                                </button>
+                                <span className="text-xs text-gray-500">⏱ {holdTime(holdMs)}</span>
+                            </div>
                         </div>
 
                         {/* PnL hero row */}
@@ -324,6 +367,20 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
                                         </div>
                                     </div>
                                 )}
+                            </div>
+                        )}
+
+                        {/* ── PRICE CHART ── */}
+                        {chartOpen && (
+                            <div className="transition-all duration-300">
+                                <MiniChart
+                                    apiUrl={apiUrl}
+                                    tokenAddress={pos.tokenAddress}
+                                    tokenSymbol={pos.tokenSymbol}
+                                    entryPrice={entryPriceUsd}
+                                    width={280}
+                                    height={110}
+                                />
                             </div>
                         )}
 
