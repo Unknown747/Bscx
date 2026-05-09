@@ -1,0 +1,697 @@
+## 🔧 UPDATE 1: FILE KONFIGURASI PRO
+
+### 📁 `artifacts/api-server/.env.pro` (Tambahkan parameter baru)
+
+```env
+# ========== TRADING PARAMETERS PRO ==========
+MAX_TRADE_AMOUNT=0.0008
+MAX_SLIPPAGE_PERCENT=12
+MAX_OPEN_POSITIONS=1
+MAX_HOLD_MINUTES=15
+
+# ========== EXIT STRATEGY PRO ==========
+TAKE_PROFIT_1_MULTIPLIER=1.5
+TAKE_PROFIT_2_MULTIPLIER=3.0
+STOP_LOSS_PERCENTAGE=12
+TRAILING_ACTIVATION_PERCENT=25
+EARLY_EXIT_MULTIPLIER=1.3
+
+# ========== RISK MANAGEMENT PRO ==========
+MAX_DAILY_LOSS_ETH=0.0015
+MAX_CONSECUTIVE_LOSSES=3
+COOLDOWN_AFTER_BIG_PROFIT_MINUTES=15
+REINVEST_PERCENT=50
+
+# ========== SNIPING PARAMETERS ==========
+SNIPE_BLOCK_RANGE=3
+MIN_LIQUIDITY_USD=5000
+MAX_TOKEN_AGE_SECONDS=300
+ENABLE_SIMULATION_GATE=false
+MIN_AI_CONFIDENCE=65
+
+# ========== GAS OPTIMIZATION ==========
+GAS_MODE=economy
+MAX_PRIORITY_FEE_GWEI=0.003
+MAX_FEE_PER_GAS_GWEI=0.03
+
+# ========== TELEGRAM ==========
+TELEGRAM_VERBOSE=false
+```
+
+---
+
+## 🐋 UPDATE 2: WHALE COPY TRADING PINTAR
+
+### 📁 `artifacts/api-server/src/whale-analyzer-pro.ts` (FILE BARU)
+
+```typescript
+// FILE BARU: Tambahkan ini sebagai whale-analyzer-pro.ts
+
+export interface WhaleQualityScore {
+  totalScore: number;
+  sharpeRatio: number;
+  avgEntryTiming: number;
+  realizedPnL_7d: number;
+  copyCatRatio: number;
+  mevInteraction: boolean;
+  rugHistory: boolean;
+}
+
+export class ProWhaleAnalyzer {
+  private whaleHistory = new Map<string, any>();
+  
+  async analyzeWhale(whaleAddress: string): Promise<WhaleQualityScore> {
+    // Ambil 30 transaction terakhir
+    const txs = await this.getWhaleTransactions(whaleAddress, 30);
+    
+    // Filter hanya transaksi Uniswap
+    const swaps = txs.filter(tx => tx.method === 'swap');
+    
+    // Hitung realized profit 7 hari
+    const last7DaysProfit = this.calculate7DayProfit(swaps);
+    
+    // Hitung timing entry (beli di awal pump?)
+    const entryTiming = this.calculateEntryTiming(swaps);
+    
+    // Deteksi MEV (sandwich attack)
+    const mevDetected = this.detectMEV(swaps);
+    
+    // Hitung total score
+    const score = this.calculateScore({
+      sharpeRatio: this.calculateSharpeRatio(swaps),
+      avgEntryTiming: entryTiming,
+      realizedPnL_7d: last7DaysProfit,
+      copyCatRatio: await this.getCopyCatRatio(whaleAddress),
+      mevInteraction: mevDetected,
+      rugHistory: await this.checkRugHistory(whaleAddress)
+    });
+    
+    return score;
+  }
+  
+  async crowdCopySignal(whaleAddresses: string[], token: string): Promise<number> {
+    let totalScore = 0;
+    for (const whale of whaleAddresses) {
+      const isBuying = await this.isWhaleBuyingToken(whale, token);
+      if (isBuying) {
+        const score = await this.getWhaleScore(whale);
+        totalScore += score;
+      }
+    }
+    return totalScore; // Threshold: 350 untuk execute
+  }
+  
+  private calculateSharpeRatio(txs: any[]): number {
+    const returns = txs.map(tx => (tx.profitPercent || 0) / 100);
+    const avgReturn = returns.reduce((a,b) => a+b, 0) / returns.length;
+    const variance = returns.map(r => Math.pow(r - avgReturn, 2)).reduce((a,b) => a+b, 0) / returns.length;
+    const stdDev = Math.sqrt(variance);
+    return stdDev === 0 ? 0 : avgReturn / stdDev;
+  }
+  
+  private calculateEntryTiming(txs: any[]): number {
+    // Logic: beli di 20% pertama pump = 100 score
+    let totalTiming = 0;
+    for (const tx of txs) {
+      const pumpStage = await this.getPumpStage(tx.token, tx.blockNumber);
+      totalTiming += Math.max(0, 100 - (pumpStage * 100));
+    }
+    return totalTiming / txs.length;
+  }
+  
+  private async getCopyCatRatio(whaleAddress: string): Promise<number> {
+    // Berapa banyak trader lain mengikuti whale ini
+    const followers = await this.getCopyTraders(whaleAddress);
+    return Math.min(followers.length / 100, 1);
+  }
+  
+  private async getPumpStage(token: string, blockNumber: number): Promise<number> {
+    // 0 = awal pump, 1 = akhir pump
+    const currentPrice = await this.getPrice(token);
+    const initialBlocks = await this.getFirstBlocks(token);
+    const blocksPassed = blockNumber - initialBlocks;
+    return Math.min(blocksPassed / 30, 1); // 30 block = pump selesai
+  }
+}
+```
+
+---
+
+## ⏱️ UPDATE 3: MEMPOOL FRONTRUNNING
+
+### 📁 `artifacts/api-server/src/mempool-analyzer.ts` (FILE BARU)
+
+```typescript
+// FILE BARU: Tambahkan ini sebagai mempool-analyzer.ts
+
+export class MempoolAnalyzer {
+  private pendingTransactions: Map<string, any> = new Map();
+  
+  async detectWhalePending(whaleAddress: string): Promise<any | null> {
+    const pendingTxs = await this.getPendingTransactions();
+    const whaleTx = pendingTxs.find(tx => 
+      tx.from.toLowerCase() === whaleAddress.toLowerCase() &&
+      (tx.to === UNISWAP_ROUTER || tx.data.includes('0x414bf389'))
+    );
+    
+    if (whaleTx) {
+      return {
+        token: this.extractTokenFromData(whaleTx.data),
+        amount: whaleTx.value,
+        gasPrice: whaleTx.gasPrice,
+        blockNumber: whaleTx.blockNumber
+      };
+    }
+    return null;
+  }
+  
+  async executeFrontrun(whaleTx: any, myCapital: number): Promise<boolean> {
+    // Eksekusi dengan gas price 20% lebih tinggi
+    const myGasPrice = BigInt(whaleTx.gasPrice) * BigInt(120) / BigInt(100);
+    
+    const tx = {
+      to: UNISWAP_ROUTER,
+      data: this.buildSwapData(whaleTx.token, myCapital),
+      gasPrice: myGasPrice,
+      gasLimit: 300000
+    };
+    
+    return await this.sendTransaction(tx);
+  }
+  
+  async waitForPullback(token: string, whaleBuyPrice: number): Promise<boolean> {
+    // Tunggu harga turun 3-5% dari harga beli whale
+    return new Promise((resolve) => {
+      const interval = setInterval(async () => {
+        const currentPrice = await this.getTokenPrice(token);
+        const dropPercent = (whaleBuyPrice - currentPrice) / whaleBuyPrice;
+        
+        if (dropPercent >= 0.03) { // 3% drop
+          clearInterval(interval);
+          resolve(true);
+        }
+      }, 1000);
+      
+      // Timeout 2 menit
+      setTimeout(() => {
+        clearInterval(interval);
+        resolve(false);
+      }, 120000);
+    });
+  }
+  
+  private async getPendingTransactions() {
+    // Gunakan RPC yang support pending transactions
+    const provider = new ethers.WebSocketProvider('wss://base.llamarpc.com');
+    const pending = await provider.send('eth_getBlockByNumber', ['pending', true]);
+    return pending.transactions;
+  }
+}
+```
+
+---
+
+## 📈 UPDATE 4: EXIT STRATEGY DINAMIS
+
+### 📁 `artifacts/api-server/src/dynamic-exit.ts` (FILE BARU)
+
+```typescript
+// FILE BARU: Tambahkan ini sebagai dynamic-exit.ts
+
+export interface Position {
+  token: string;
+  entryPrice: number;
+  currentPrice: number;
+  profitPercent: number;
+  entryTime: Date;
+}
+
+export class DynamicExitStrategy {
+  async calculateExit(position: Position): Promise<string> {
+    const momentum1m = await this.getPriceMomentum(position.token, 60);
+    const volumeMomentum = await this.getVolumeMomentum(position.token, 60);
+    
+    // PROFIT BESAR >30%
+    if (position.profitPercent > 30) {
+      // Panic sell if price drops >5% in 1 minute
+      if (momentum1m < -5) {
+        return "SELL_ALL_PANIC";
+      }
+      // Exit half if price drops >2% AND volume drops >30%
+      if (momentum1m < -2 && volumeMomentum < -30) {
+        return "SELL_50_PERCENT";
+      }
+    }
+    
+    // SCALING OUT (ambil profit bertahap)
+    if (position.profitPercent >= 40) {
+      return "SELL_25_PERCENT";
+    }
+    if (position.profitPercent >= 80) {
+      return "SELL_50_PERCENT";
+    }
+    if (position.profitPercent >= 150) {
+      return "SELL_ALL";
+    }
+    
+    // DYNAMIC STOP LOSS (tighten jika profit)
+    let trailingPercent = 15; // default
+    if (position.profitPercent > 20) {
+      trailingPercent = 8;
+    } else if (position.profitPercent > 0) {
+      trailingPercent = 12;
+    }
+    
+    // Check trailing stop condition
+    const highestPrice = await this.getHighestPriceSinceEntry(position.token, position.entryPrice);
+    const peakDrop = (highestPrice - position.currentPrice) / highestPrice * 100;
+    
+    if (peakDrop >= trailingPercent) {
+      return "SELL_ALL_TRAILING";
+    }
+    
+    // Waktu maksimal hold 15 menit
+    const holdMinutes = (Date.now() - position.entryTime.getTime()) / 60000;
+    if (holdMinutes >= 15 && position.profitPercent > 0) {
+      return "SELL_ALL_TIMEOUT";
+    }
+    
+    return "HOLD";
+  }
+  
+  private async getPriceMomentum(token: string, seconds: number): Promise<number> {
+    const priceNow = await this.getPrice(token);
+    const priceSecondsAgo = await this.getPriceAtTime(token, Date.now() - seconds * 1000);
+    return ((priceNow - priceSecondsAgo) / priceSecondsAgo) * 100;
+  }
+  
+  private async getVolumeMomentum(token: string, seconds: number): Promise<number> {
+    const volumeNow = await this.getVolumeLastMinute(token);
+    const volumePrev = await this.getVolumeBefore(token, seconds);
+    return ((volumeNow - volumePrev) / volumePrev) * 100;
+  }
+  
+  private async getHighestPriceSinceEntry(token: string, entryPrice: number): Promise<number> {
+    // Ambil highest price sejak entry dari GeckoTerminal
+    const candles = await this.getOHLCV(token, 20);
+    const highest = Math.max(...candles.map(c => c.high), entryPrice);
+    return highest;
+  }
+}
+```
+
+---
+
+## 🛡️ UPDATE 5: RISK MANAGER UNTUK MODAL KECIL
+
+### 📁 `artifacts/api-server/src/microcap-risk-manager.ts` (FILE BARU)
+
+```typescript
+// FILE BARU: Tambahkan ini sebagai microcap-risk-manager.ts
+
+export class MicroCapRiskManager {
+  private todayLoss: number = 0;
+  private consecutiveLosses: number = 0;
+  private lastTradeProfit: number = 0;
+  private cooldownUntil: Date = new Date();
+  private totalCapital: number;
+  private readonly INITIAL_CAPITAL = 0.006; // 0.006 ETH
+  
+  constructor(initialCapital: number = 0.006) {
+    this.totalCapital = initialCapital;
+  }
+  
+  async beforeTrade(token: any): Promise<{allowed: boolean, reason?: string}> {
+    // Check cooldown
+    if (this.cooldownUntil > new Date()) {
+      const remaining = Math.ceil((this.cooldownUntil.getTime() - Date.now()) / 60000);
+      return {allowed: false, reason: `Cooldown: ${remaining} menit tersisa`};
+    }
+    
+    // Check daily loss limit
+    if (this.todayLoss >= 0.0015) { // 25% dari 0.006
+      return {allowed: false, reason: `Daily loss limit reached: ${this.todayLoss.toFixed(4)} ETH`};
+    }
+    
+    // Check consecutive losses
+    if (this.consecutiveLosses >= 3) {
+      this.cooldownUntil = new Date(Date.now() + 30 * 60000);
+      return {allowed: false, reason: `3 consecutive losses, cooldown 30 minutes`};
+    }
+    
+    // Check minimum liquidity
+    if (token.liquidityUSD < 5000) {
+      return {allowed: false, reason: `Low liquidity: $${token.liquidityUSD}`};
+    }
+    
+    // Check token age
+    const ageSeconds = (Date.now() - token.createdAt) / 1000;
+    if (ageSeconds > 300) { // 5 menit
+      return {allowed: false, reason: `Token too old: ${Math.floor(ageSeconds)} detik`};
+    }
+    
+    return {allowed: true};
+  }
+  
+  afterTrade(profitETH: number) {
+    if (profitETH < 0) {
+      // Rugi
+      this.todayLoss += Math.abs(profitETH);
+      this.consecutiveLosses++;
+      this.lastTradeProfit = profitETH;
+    } else {
+      // Profit
+      this.consecutiveLosses = 0;
+      this.lastTradeProfit = profitETH;
+      
+      // Cooldown setelah profit besar (>50% modal)
+      if (profitETH > 0.003) {
+        this.cooldownUntil = new Date(Date.now() + 15 * 60000);
+      }
+      
+      // REINVEST ONLY 50% PROFIT
+      const reinvestAmount = profitETH * 0.5;
+      const withdrawAmount = profitETH * 0.5;
+      this.totalCapital += reinvestAmount;
+      
+      console.log(`Profit: ${profitETH.toFixed(6)} ETH | Reinvest: ${reinvestAmount.toFixed(6)} | Withdraw: ${withdrawAmount.toFixed(6)}`);
+    }
+  }
+  
+  getPositionSize(): number {
+    // Dynamic position sizing: 12% dari modal
+    const baseSize = this.totalCapital * 0.12;
+    // Clamp antara 0.001 ETH dan 0.003 ETH
+    return Math.min(Math.max(baseSize, 0.001), 0.003);
+  }
+  
+  resetDaily() {
+    const now = new Date();
+    if (now.getHours() === 0 && now.getMinutes() === 0) {
+      this.todayLoss = 0;
+    }
+  }
+}
+```
+
+---
+
+## 🤖 UPDATE 6: AI PROMPT YANG LEBIH AGRESIF
+
+### 📁 `artifacts/api-server/src/ai-prompt-pro.ts` (UPDATE multi-ai-provider.ts)
+
+```typescript
+// UPDATE di multi-ai-provider.ts - Ganti prompt dengan ini:
+
+const PRO_PROMPT = `
+Anda adalah sniper token microcap profesional dengan modal kecil.
+Analisis token berikut untuk POTENSI PUMP CEPAT (10-20 menit):
+
+Data Token:
+- Nama: ${tokenName}
+- Age: ${tokenAge} menit
+- Liquidity: $${liquidityUSD} (minimal $5k aman)
+- 1 menit volume: $${volume1m}
+- 5 menit volume: $${volume5m}
+- Buy/Sell ratio 1 menit: ${buySellRatio1m}
+- Buy/Sell ratio 5 menit: ${buySellRatio5m}
+- Jumlah holder: ${holderCount}
+- Top 10 holder concentration: ${top10Concentration}%
+
+KRITERIA BUY (CEK 3 INI):
+1. Ada pressure beli? (buy/sell ratio > 1.5 di 1 menit)
+2. Market making aktif? (volume/liquidity > 0.3)
+3. Tidak ada sell wall besar? (sell orders < 2x buy orders)
+4. Tidak terpusat? (top 10 concentration < 40%)
+
+Jika 3 dari 4 terpenuhi → BUY dengan confidence 70-100
+Jika 2 terpenuhi → BUY dengan confidence 50-70
+Jika 1 atau kurang → HOLD
+
+RESPOND DENGAN JSON:
+{
+  "action": "BUY|HOLD",
+  "confidence": 0-100,
+  "exitTarget": 1.5,
+  "stopLoss": 12,
+  "reasoning": "singkat"
+}
+
+JANGAN PERNAH REJECT, hanya BUY atau HOLD.
+`;
+
+// Juga tambahkan fallback jika AI down:
+function getRuleBasedRecommendation(token: any) {
+  let score = 0;
+  
+  if (token.buySellRatio1m > 1.5) score += 30;
+  if (token.buySellRatio1m > 2.5) score += 20;
+  if (token.volume1m / token.liquidityUSD > 0.3) score += 25;
+  if (token.holderCount > 100) score += 15;
+  if (token.top10Concentration < 40) score += 10;
+  
+  if (score >= 60) return {action: "BUY", confidence: score};
+  return {action: "HOLD", confidence: score};
+}
+```
+
+---
+
+## 📱 UPDATE 7: TELEGRAM NOTIFICATION PRO
+
+### 📁 `artifacts/api-server/src/telegram-pro.ts` (UPDATE)
+
+```typescript
+// UPDATE di telegram service - Ganti format pesan:
+
+async sendTradeAlert(trade: any) {
+  const profitEmoji = trade.profitPercent >= 0 ? "🚀" : "📉";
+  const message = `
+${profitEmoji} *${trade.type.toUpperCase()}* | $${trade.tokenSymbol}
+
+💰 *Capital:* ${trade.amountETH.toFixed(4)} ETH (~$${trade.amountUSD})
+🎯 *Entry:* $${trade.entryPrice.toFixed(8)}
+📊 *AI:* ${trade.aiConfidence}% (${trade.aiAction})
+🐋 *Whale follows:* ${trade.whaleCount}
+
+*Target:* +${trade.exitTarget * 100}% in 10-15m
+*SL:* -${trade.stopLoss}% ($${trade.stopPrice.toFixed(8)})
+
+[CHART 5m](${trade.chartUrl}) | [SELL NOW](https://basescan.org/token/${trade.tokenAddress})
+  `;
+  
+  await this.send(message);
+}
+
+async sendRiskAlert(type: 'daily_loss' | 'consecutive_loss' | 'cooldown', data: any) {
+  const alerts = {
+    daily_loss: `⚠️ *DAILY LOSS LIMIT*\nLoss today: ${data.lossETH} ETH\nTrading stopped until tomorrow 00:00 UTC`,
+    consecutive_loss: `⚠️ *${data.count} CONSECUTIVE LOSSES*\nCooldown 30 minutes to prevent revenge trading`,
+    cooldown: `⏸️ *COOLDOWN MODE*\nProfit: +${data.profitETH} ETH (>50% capital)\nResume in ${data.minutes} minutes`
+  };
+  
+  await this.send(alerts[type]);
+}
+```
+
+---
+
+## ⚡ UPDATE 8: PERFORMANCE OPTIMIZATION
+
+### 📁 `artifacts/api-server/src/performance-optimizer.ts` (FILE BARU)
+
+```typescript
+// FILE BARU: Optimasi performa untuk modal kecil
+
+export class PerformanceOptimizer {
+  // Cache untuk mengurangi API calls
+  private priceCache = new Map<string, {price: number, timestamp: number}>();
+  private readonly CACHE_TTL = 3000; // 3 detik
+  
+  async getCachedPrice(token: string): Promise<number> {
+    const cached = this.priceCache.get(token);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return cached.price;
+    }
+    
+    const price = await this.fetchPriceFromGecko(token);
+    this.priceCache.set(token, {price, timestamp: Date.now()});
+    return price;
+  }
+  
+  // Batch API calls
+  async batchGetPrices(tokens: string[]): Promise<Map<string, number>> {
+    const results = new Map();
+    const uncached = tokens.filter(t => !this.priceCache.has(t));
+    
+    if (uncached.length > 0) {
+      const prices = await this.fetchBatchPrices(uncached);
+      uncached.forEach(t => {
+        const price = prices[t];
+        this.priceCache.set(t, {price, timestamp: Date.now()});
+        results.set(t, price);
+      });
+    }
+    
+    tokens.forEach(t => {
+      if (!results.has(t)) {
+        results.set(t, this.priceCache.get(t)!.price);
+      }
+    });
+    
+    return results;
+  }
+  
+  // Prioritaskan wallet yang paling profitable
+  async prioritizeWallets(wallets: string[]): Promise<string[]> {
+    const scores = await Promise.all(
+      wallets.map(async w => ({
+        wallet: w,
+        score: await this.getWhaleProfitability(w)
+      }))
+    );
+    
+    return scores
+      .sort((a,b) => b.score - a.score)
+      .slice(0, 5)
+      .map(s => s.wallet);
+  }
+}
+```
+
+---
+
+## 📋 UPDATE 9: INSTALL DEPENDENCIES
+
+```bash
+# Jalankan di terminal (artifacts/api-server/)
+npm install --save-dev @types/node
+npm install ws
+npm install axios
+npm install ethers@5.7.2
+
+# Untuk frontend (artifacts/base-sniper/)
+npm install recharts
+npm install date-fns
+```
+
+---
+
+## 🚀 UPDATE 10: INTEGRASI SEMUA MODUL
+
+### 📁 `artifacts/api-server/src/index.ts` (TAMBAHKAN DI ATAS)
+
+```typescript
+// Tambahkan import di awal file index.ts
+import { ProWhaleAnalyzer } from './whale-analyzer-pro';
+import { MempoolAnalyzer } from './mempool-analyzer';
+import { DynamicExitStrategy } from './dynamic-exit';
+import { MicroCapRiskManager } from './microcap-risk-manager';
+import { PerformanceOptimizer } from './performance-optimizer';
+
+// Inisialisasi di dalam class AISniperBot
+class AISniperBot {
+  private whaleAnalyzer: ProWhaleAnalyzer;
+  private mempoolAnalyzer: MempoolAnalyzer;
+  private exitStrategy: DynamicExitStrategy;
+  private riskManager: MicroCapRiskManager;
+  private performanceOptimizer: PerformanceOptimizer;
+  
+  constructor() {
+    this.whaleAnalyzer = new ProWhaleAnalyzer();
+    this.mempoolAnalyzer = new MempoolAnalyzer();
+    this.exitStrategy = new DynamicExitStrategy();
+    this.riskManager = new MicroCapRiskManager();
+    this.performanceOptimizer = new PerformanceOptimizer();
+  }
+  
+  // UPDATE method executeTrade
+  async executeTrade(token: any) {
+    // Risk check
+    const riskCheck = await this.riskManager.beforeTrade(token);
+    if (!riskCheck.allowed) {
+      console.log(`Trade blocked: ${riskCheck.reason}`);
+      return;
+    }
+    
+    // Check pending whale transactions
+    const pendingWhale = await this.mempoolAnalyzer.detectWhalePending(process.env.WHALE_WALLET);
+    if (pendingWhale) {
+      console.log('Frontrunning detected! Executing...');
+      await this.mempoolAnalyzer.executeFrontrun(pendingWhale, this.riskManager.getPositionSize());
+    }
+    
+    // Execute normal trade
+    const position = await this.swapExecutor.buy(token, this.riskManager.getPositionSize());
+    
+    // Monitor exit dynamically
+    this.monitorPosition(position);
+  }
+  
+  async monitorPosition(position: any) {
+    setInterval(async () => {
+      const action = await this.exitStrategy.calculateExit(position);
+      
+      switch(action) {
+        case "SELL_ALL_PANIC":
+        case "SELL_ALL_TRAILING":
+        case "SELL_ALL_TIMEOUT":
+          await this.swapExecutor.sell(position.token, 100);
+          const profit = this.calculateProfit(position);
+          this.riskManager.afterTrade(profit);
+          break;
+        case "SELL_50_PERCENT":
+          await this.swapExecutor.sell(position.token, 50);
+          break;
+        case "SELL_25_PERCENT":
+          await this.swapExecutor.sell(position.token, 25);
+          break;
+      }
+    }, 5000); // Check setiap 5 detik
+  }
+}
+```
+
+---
+
+
+
+## 📊 RINGKASAN EKSPEKTASI (Modal 0.006 ETH)
+
+| Metric | Conservative | Realistic | Aggressive |
+|--------|-------------|-----------|------------|
+| Daily target | +5% (0.0003 ETH) | +15% (0.0009 ETH) | +30% (0.0018 ETH) |
+| Max drawdown | -8% | -15% | -25% |
+| Win rate | 65% | 55% | 45% |
+| Trades per day | 5-10 | 15-25 | 30-50 |
+| Monthly target | +50% | +150% | +300% |
+
+Misal nya daily target Tercapai., Kan saldo bertambah misalnya Dari 0.01eth jadi 0.02eth nah saya mau Bisa di sesuaikan lagi. untuk next hari berikut nya
+poko nya di telegram juga punya opsi untuk cek saldo wallet. 
+
+=====
+add a wallet detail view in the dashboard that shows a whale's full trade history across pools when you click on them in the Copy Wallets panel
+
+Untuk Auto Finder Saya Perlu Modifikasi Setujui & Copy. Saya mau sebelum di setujui Wallet yang mau di copy di masukin Dulu Ke daftar waitlist, Sebelum benar benar di masukan kedaftar wallet copytrade untuk keamanan Saja. agar tidak asal Memilih wallet. Sebelum benar benar di copy. Saya mau liat performance wallet di Waitlist Berapa banyak dia Trade dan berapa tinggi Winrate nya. Dan berapa Banyak dia Profit/Lost..
+
+Backtesting engine	
+Tambahkan modul untuk mensimulasikan strategi trading berdasarkan data historis (misal dari GeckoTerminal atau Dune Analytics).
+
+Order limit & stop loss on-chain	
+Saat ini trailing stop loss dilakukan off-chain. Implementasikan stop loss on-chain menggunakan smart contract atau relayer.
+
+Manajemen risiko lebih granular	
+Batasi drawdown harian atau per-token, serta fitur circuit breaker jika rugi melebihi threshold tertentu.
+
+Metric exporter – integrasikan dengan Prometheus untuk memantau jumlah trade, latency AI, error rate, dan profit/loss.
+
+
+Error handling belum menyeluruh	
+Tambahkan retry mechanism dengan exponential backoff untuk panggilan API eksternal (GeckoTerminal, Blockscout).
+
+Dashboard mobile-friendly – perbaiki responsivitas UI untuk layar kecil.
+
+Dukungan multiple wallet – kelola beberapa wallet trading dari satu dashboard.
+
+Integrasi DEX aggregator – selain Uniswap V3, bisa akses likuiditas dari Aerodrome atau PancakeSwap di Base.
+
