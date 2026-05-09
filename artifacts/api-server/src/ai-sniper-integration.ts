@@ -58,6 +58,7 @@ interface RuntimeConfig {
     minSafetyScore:  number;
     maxPoolAgeSeconds: number;
     aiEnabled:       boolean;
+    dcaEnabled:      boolean;
 }
 
 export class AISniperBot extends EventEmitter {
@@ -91,7 +92,8 @@ export class AISniperBot extends EventEmitter {
         copyMaxPerDay:    parseInt  (process.env.COPY_TRADING_MAX_PER_DAY     || '10'),
         minSafetyScore:   parseInt  (process.env.MIN_SAFETY_SCORE             || '65'),
         maxPoolAgeSeconds:parseInt  (process.env.MAX_POOL_AGE_SECONDS         || '60'),
-        aiEnabled:        process.env.AI_ENABLED === 'true'
+        aiEnabled:        process.env.AI_ENABLED === 'true',
+        dcaEnabled:       process.env.DCA_ENABLED !== 'false'
     };
 
     private readonly CONFIG = {
@@ -554,6 +556,7 @@ export class AISniperBot extends EventEmitter {
         if (s.minSafetyScore   != null) this.runtimeConfig.minSafetyScore   = s.minSafetyScore;
         if (s.maxPoolAgeSeconds!= null) this.runtimeConfig.maxPoolAgeSeconds= s.maxPoolAgeSeconds;
         if (s.aiEnabled        != null) this.runtimeConfig.aiEnabled        = s.aiEnabled;
+        if (s.dcaEnabled       != null) this.runtimeConfig.dcaEnabled       = s.dcaEnabled;
 
         // Push trading params to SwapExecutor
         if (this.executor) {
@@ -565,7 +568,8 @@ export class AISniperBot extends EventEmitter {
                 tp2Percentage:  this.runtimeConfig.tp2Percentage,
                 stopLoss:       this.runtimeConfig.stopLoss,
                 maxPriorityFee: this.runtimeConfig.maxPriorityFee,
-                maxFeePerGas:   this.runtimeConfig.maxFeePerGas
+                maxFeePerGas:   this.runtimeConfig.maxFeePerGas,
+                dcaEnabled:     this.runtimeConfig.dcaEnabled
             });
         }
 
@@ -587,13 +591,17 @@ export class AISniperBot extends EventEmitter {
     }
 
     // ============ KEY MANAGEMENT ============
-    updateKeys(keys: { privateKey?: string; groqKey?: string; geminiKey?: string; huggingfaceKey?: string }): void {
+    updateKeys(keys: { privateKey?: string; groqKey?: string; geminiKey?: string; huggingfaceKey?: string; telegramToken?: string; telegramChatId?: string }): void {
         // Update AI provider keys hot
         const aiKeys: { groq?: string; gemini?: string; huggingface?: string } = {};
         if (keys.groqKey)        aiKeys.groq        = keys.groqKey;
         if (keys.geminiKey)      aiKeys.gemini      = keys.geminiKey;
         if (keys.huggingfaceKey) aiKeys.huggingface = keys.huggingfaceKey;
         if (Object.keys(aiKeys).length > 0) this.ai.updateKeys(aiKeys);
+
+        // Update Telegram credentials hot
+        if (keys.telegramToken)  { this.telegramToken  = keys.telegramToken;  process.env.TELEGRAM_BOT_TOKEN = keys.telegramToken;  }
+        if (keys.telegramChatId) { this.telegramChatId = keys.telegramChatId; process.env.TELEGRAM_CHAT_ID   = keys.telegramChatId; }
 
         // Re-init SwapExecutor if private key changed
         if (keys.privateKey) {
@@ -676,14 +684,38 @@ export class AISniperBot extends EventEmitter {
         this.copyMonitor.renameWallet(address, name);
     }
 
-    getKeyStatus(): { privateKey: boolean; groqKey: boolean; geminiKey: boolean; huggingfaceKey: boolean; appPassword: boolean } {
+    getTradeHistory(): { trades: ClosedTrade[]; stats: { total: number; wins: number; losses: number; winRate: number; totalProfitPct: number; bestTrade: ClosedTrade | null; worstTrade: ClosedTrade | null } } {
+        const trades = [...this.closedTrades];
+        const withPnl = trades.filter(t => t.profitPct !== null && t.profitPct !== undefined);
+        const wins    = withPnl.filter(t => (t.profitPct ?? 0) > 0).length;
+        const losses  = withPnl.filter(t => (t.profitPct ?? 0) <= 0).length;
+        const winRate = withPnl.length > 0 ? (wins / withPnl.length) * 100 : 0;
+        const totalProfitPct = withPnl.reduce((sum, t) => sum + (t.profitPct ?? 0), 0);
+        const sorted  = [...withPnl].sort((a, b) => (b.profitPct ?? 0) - (a.profitPct ?? 0));
+        return {
+            trades,
+            stats: {
+                total: trades.length,
+                wins,
+                losses,
+                winRate,
+                totalProfitPct,
+                bestTrade:  sorted[0]                     ?? null,
+                worstTrade: sorted[sorted.length - 1]     ?? null
+            }
+        };
+    }
+
+    getKeyStatus(): { privateKey: boolean; groqKey: boolean; geminiKey: boolean; huggingfaceKey: boolean; appPassword: boolean; telegramToken: boolean; telegramChatId: boolean } {
         const ai = this.ai.getKeyStatus();
         return {
             privateKey:     !!this.executor,
             groqKey:        ai.groq,
             geminiKey:      ai.gemini,
             huggingfaceKey: ai.huggingface,
-            appPassword:    !!(process.env.APP_PASSWORD)
+            appPassword:    !!(process.env.APP_PASSWORD),
+            telegramToken:  !!(this.telegramToken),
+            telegramChatId: !!(this.telegramChatId)
         };
     }
 

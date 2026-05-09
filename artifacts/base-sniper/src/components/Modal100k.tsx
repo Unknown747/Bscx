@@ -28,6 +28,9 @@ export interface ModalSettings {
     copyEnabled: boolean;
     copyAmount: number;
     copyDelay: number;
+
+    // DCA
+    dcaEnabled: boolean;
 }
 
 // FIX: Uniswap V3 swap uses ~150,000 gas units, not 21,000 (ETH transfer)
@@ -48,7 +51,8 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
         maxFeePerGas: 1.5,
         copyEnabled: true,
         copyAmount: 0.0003,
-        copyDelay: 2
+        copyDelay: 2,
+        dcaEnabled: true
     });
     
     const [estimatedGasCost, setEstimatedGasCost] = useState(0.00015);
@@ -387,6 +391,35 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                         )}
                     </div>
                     
+                    {/* ========== DCA SETTINGS ========== */}
+                    <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700">
+                        <div className="flex justify-between items-center">
+                            <div>
+                                <h3 className="text-lg font-semibold text-white">📉 DCA on Dip</h3>
+                                <p className="text-xs text-gray-400 mt-0.5">Beli lagi saat harga turun setelah TP1 (tidak direkomendasikan modal kecil &lt; 0.003 ETH)</p>
+                            </div>
+                            <label className="relative inline-flex items-center cursor-pointer ml-4 flex-shrink-0">
+                                <input
+                                    type="checkbox"
+                                    checked={settings.dcaEnabled}
+                                    onChange={(e) => setSettings({...settings, dcaEnabled: e.target.checked})}
+                                    className="sr-only peer"
+                                />
+                                <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            </label>
+                        </div>
+                        {settings.dcaEnabled && (
+                            <div className="mt-3 p-3 bg-blue-900/20 rounded-lg border border-blue-800/40">
+                                <p className="text-xs text-blue-300">💡 DCA aktif: Bot akan beli 50% dari posisi awal saat harga turun ke 98% dari entry setelah TP1 tercapai.</p>
+                            </div>
+                        )}
+                        {!settings.dcaEnabled && (
+                            <div className="mt-3 p-3 bg-yellow-900/20 rounded-lg border border-yellow-800/40">
+                                <p className="text-xs text-yellow-300">⚠️ DCA dimatikan. Direkomendasikan untuk modal &lt; 0.003 ETH agar tidak kehabisan modal.</p>
+                            </div>
+                        )}
+                    </div>
+
                     {/* ========== STRATEGY CARD ========== */}
                     <div className="bg-gradient-to-r from-green-900/20 to-blue-900/20 rounded-xl p-5 border border-green-500/20">
                         <h4 className="font-bold text-white mb-2">🎯 Strategi Modal 100rb</h4>

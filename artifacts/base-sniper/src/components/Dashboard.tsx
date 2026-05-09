@@ -5,6 +5,7 @@ import Portfolio from './Portfolio';
 import Modal100k, { ModalSettings } from './Modal100k';
 import WalletConfigModal from './WalletConfigModal';
 import CopyWalletsModal from './CopyWalletsModal';
+import TradeHistory from './TradeHistory';
 
 interface Status {
     connected: boolean;
@@ -35,7 +36,7 @@ interface Config {
     aiEnabled: boolean;
 }
 
-type Tab = 'overview' | 'portfolio' | 'positions' | 'log';
+type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history';
 
 interface DashboardProps {
     apiUrl: string;
@@ -45,7 +46,8 @@ const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
     { id: 'overview',   label: 'Overview',  icon: '📊' },
     { id: 'portfolio',  label: 'Portfolio', icon: '👜' },
     { id: 'positions',  label: 'Posisi',    icon: '💼' },
-    { id: 'log',        label: 'Log',       icon: '📋' }
+    { id: 'log',        label: 'Log',       icon: '📋' },
+    { id: 'history',   label: 'Histori',   icon: '📈' }
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
@@ -274,6 +276,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
 
                 {/* ─── LOG ─── */}
                 {activeTab === 'log' && <ActivityLog apiUrl={apiUrl} />}
+
+                {/* ─── HISTORY ─── */}
+                {activeTab === 'history' && <TradeHistory apiUrl={apiUrl} />}
             </div>
 
             {/* Settings Modal */}

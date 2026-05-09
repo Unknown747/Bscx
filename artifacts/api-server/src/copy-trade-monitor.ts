@@ -217,6 +217,16 @@ export class CopyTradeMonitor extends EventEmitter {
         
         const tokenInfo = await this.getTokenInfo(tokenAddress);
         if (!tokenInfo) return;
+
+        // ─── TOKEN AGE FILTER ─── skip tokens older than 24 hours
+        if (tokenInfo.pairCreatedAt) {
+            const ageHours = (Date.now() - tokenInfo.pairCreatedAt) / 3_600_000;
+            const maxAgeHours = 24;
+            if (ageHours > maxAgeHours) {
+                console.log(`   ⏳ Skip: token ${tokenInfo.symbol} terlalu tua (${ageHours.toFixed(1)}h > ${maxAgeHours}h)`);
+                return;
+            }
+        }
         
         const isSafe = await this.quickSafetyCheck(tokenAddress);
         if (!isSafe) {
@@ -257,7 +267,7 @@ export class CopyTradeMonitor extends EventEmitter {
         }, this.CONFIG.COPY_DELAY_SECONDS * 1000);
     }
 
-    private async getTokenInfo(tokenAddress: string): Promise<{ symbol: string; name: string } | null> {
+    private async getTokenInfo(tokenAddress: string): Promise<{ symbol: string; name: string; pairCreatedAt?: number } | null> {
         try {
             const response = await axios.get(
                 `https://api.dexscreener.com/latest/dex/search?q=${tokenAddress}`,
@@ -265,9 +275,11 @@ export class CopyTradeMonitor extends EventEmitter {
             );
             
             if (response.data.pairs && response.data.pairs[0]) {
+                const pair = response.data.pairs[0];
                 return {
-                    symbol: response.data.pairs[0].baseToken.symbol || 'UNKNOWN',
-                    name: response.data.pairs[0].baseToken.name || 'Unknown Token'
+                    symbol: pair.baseToken.symbol || 'UNKNOWN',
+                    name:   pair.baseToken.name   || 'Unknown Token',
+                    pairCreatedAt: pair.pairCreatedAt ?? undefined
                 };
             }
             return { symbol: 'UNKNOWN', name: 'Unknown Token' };

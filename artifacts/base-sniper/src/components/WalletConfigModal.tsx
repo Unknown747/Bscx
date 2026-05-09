@@ -1,35 +1,39 @@
 import React, { useState, useEffect } from 'react';
 
 interface KeyStatus {
-    privateKey: boolean;
-    groqKey: boolean;
-    geminiKey: boolean;
+    privateKey:     boolean;
+    groqKey:        boolean;
+    geminiKey:      boolean;
     huggingfaceKey: boolean;
-    appPassword: boolean;
+    appPassword:    boolean;
+    telegramToken:  boolean;
+    telegramChatId: boolean;
 }
 
 interface WalletConfigModalProps {
-    apiUrl: string;
+    apiUrl:  string;
     onClose: () => void;
 }
 
 interface FieldState {
     value: string;
-    show: boolean;
+    show:  boolean;
 }
 
 const EMPTY: FieldState = { value: '', show: false };
 
 const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }) => {
-    const [keyStatus, setKeyStatus]   = useState<KeyStatus | null>(null);
-    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-    const [errorMsg, setErrorMsg]     = useState('');
+    const [keyStatus,   setKeyStatus]   = useState<KeyStatus | null>(null);
+    const [saveStatus,  setSaveStatus]  = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [errorMsg,    setErrorMsg]    = useState('');
 
     const [privateKey,      setPrivateKey]      = useState<FieldState>(EMPTY);
     const [groqKey,         setGroqKey]         = useState<FieldState>(EMPTY);
     const [geminiKey,       setGeminiKey]       = useState<FieldState>(EMPTY);
     const [huggingfaceKey,  setHuggingfaceKey]  = useState<FieldState>(EMPTY);
     const [appPassword,     setAppPassword]     = useState<FieldState>(EMPTY);
+    const [telegramToken,   setTelegramToken]   = useState<FieldState>(EMPTY);
+    const [telegramChatId,  setTelegramChatId]  = useState<FieldState>(EMPTY);
 
     useEffect(() => {
         fetch(`${apiUrl}/api/keys`)
@@ -51,6 +55,8 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
         if (geminiKey.value.trim())      payload.geminiKey      = geminiKey.value.trim();
         if (huggingfaceKey.value.trim()) payload.huggingfaceKey = huggingfaceKey.value.trim();
         if (appPassword.value.trim())    payload.appPassword    = appPassword.value.trim();
+        if (telegramToken.value.trim())  payload.telegramToken  = telegramToken.value.trim();
+        if (telegramChatId.value.trim()) payload.telegramChatId = telegramChatId.value.trim();
 
         if (Object.keys(payload).length === 0) {
             setSaveStatus('idle');
@@ -72,6 +78,8 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
             setGeminiKey(EMPTY);
             setHuggingfaceKey(EMPTY);
             setAppPassword(EMPTY);
+            setTelegramToken(EMPTY);
+            setTelegramChatId(EMPTY);
 
             const updated = await fetch(`${apiUrl}/api/keys`).then(r => r.json());
             setKeyStatus(updated);
@@ -84,19 +92,22 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
     };
 
     const StatusBadge: React.FC<{ set: boolean }> = ({ set }) => (
-        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${set ? 'bg-green-900/50 text-green-400 border border-green-700' : 'bg-red-900/30 text-red-400 border border-red-800'}`}>
+        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${set
+            ? 'bg-green-900/50 text-green-400 border border-green-700'
+            : 'bg-red-900/30 text-red-400 border border-red-800'}`}>
             {set ? '✓ Terkonfigurasi' : '✗ Belum diset'}
         </span>
     );
 
     const KeyField: React.FC<{
-        label: string;
-        hint: string;
+        label:       string;
+        hint:        string;
         placeholder: string;
-        state: FieldState;
-        setState: React.Dispatch<React.SetStateAction<FieldState>>;
-        isSet?: boolean;
-    }> = ({ label, hint, placeholder, state, setState, isSet }) => (
+        state:       FieldState;
+        setState:    React.Dispatch<React.SetStateAction<FieldState>>;
+        isSet?:      boolean;
+        mono?:       boolean;
+    }> = ({ label, hint, placeholder, state, setState, isSet, mono = true }) => (
         <div>
             <div className="flex items-center justify-between mb-1">
                 <label className="text-sm text-gray-300 font-medium">{label}</label>
@@ -108,7 +119,7 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
                     value={state.value}
                     onChange={e => setState(prev => ({ ...prev, value: e.target.value }))}
                     placeholder={placeholder}
-                    className="w-full bg-gray-900 border border-gray-700 focus:border-green-500 rounded-xl px-4 py-2.5 pr-12 text-white placeholder-gray-600 text-sm focus:outline-none transition-colors font-mono"
+                    className={`w-full bg-gray-900 border border-gray-700 focus:border-green-500 rounded-xl px-4 py-2.5 pr-12 text-white placeholder-gray-600 text-sm focus:outline-none transition-colors ${mono ? 'font-mono' : ''}`}
                 />
                 <button
                     type="button"
@@ -190,6 +201,38 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
                         />
                     </div>
 
+                    {/* Telegram */}
+                    <div className="bg-gray-800/40 border border-gray-700 rounded-xl p-5 space-y-4">
+                        <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-semibold text-gray-200">📱 Notifikasi Telegram</h3>
+                            {keyStatus?.telegramToken && keyStatus?.telegramChatId && (
+                                <span className="text-xs bg-green-900/40 text-green-400 border border-green-700 px-2 py-0.5 rounded-full">Aktif</span>
+                            )}
+                        </div>
+                        <div className="bg-gray-900/60 rounded-lg p-3 text-xs text-gray-400 space-y-1">
+                            <p>1. Buka <span className="text-blue-400">@BotFather</span> di Telegram → <code>/newbot</code></p>
+                            <p>2. Salin Bot Token yang diberikan</p>
+                            <p>3. Chat bot kamu, lalu buka <span className="text-blue-400">@userinfobot</span> untuk dapat Chat ID</p>
+                        </div>
+                        <KeyField
+                            label="Bot Token"
+                            hint="Format: 123456789:ABC-DEF... dari @BotFather"
+                            placeholder="123456789:ABC-DEF..."
+                            state={telegramToken}
+                            setState={setTelegramToken}
+                            isSet={keyStatus?.telegramToken}
+                        />
+                        <KeyField
+                            label="Chat ID"
+                            hint="ID chat / user kamu (angka, bisa negatif untuk grup)"
+                            placeholder="-1001234567890 atau 123456789"
+                            state={telegramChatId}
+                            setState={setTelegramChatId}
+                            isSet={keyStatus?.telegramChatId}
+                            mono={false}
+                        />
+                    </div>
+
                     {/* App Password */}
                     <div className="bg-gray-800/40 border border-gray-700 rounded-xl p-5 space-y-4">
                         <h3 className="text-sm font-semibold text-gray-200">🔐 Keamanan Dashboard</h3>
@@ -200,6 +243,7 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
                             state={appPassword}
                             setState={setAppPassword}
                             isSet={keyStatus?.appPassword}
+                            mono={false}
                         />
                     </div>
 

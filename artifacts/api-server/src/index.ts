@@ -99,7 +99,8 @@ app.post('/api/settings', (req: Request, res: Response) => {
             copyMaxPerDay:    s.copyMaxPerDay,
             minSafetyScore:   s.minSafetyScore,
             maxPoolAgeSeconds:s.maxPoolAgeSeconds,
-            aiEnabled:        s.aiEnabled
+            aiEnabled:        s.aiEnabled,
+            dcaEnabled:       s.dcaEnabled
         });
         res.json({ ok: true, message: 'Pengaturan berhasil diterapkan' });
     } catch (err: any) {
@@ -207,9 +208,9 @@ app.get('/api/keys', (_req: Request, res: Response) => {
 });
 
 app.post('/api/keys', (req: Request, res: Response) => {
-    const { privateKey, groqKey, geminiKey, huggingfaceKey, appPassword } = req.body;
+    const { privateKey, groqKey, geminiKey, huggingfaceKey, appPassword, telegramToken, telegramChatId } = req.body;
 
-    if (!privateKey && !groqKey && !geminiKey && !huggingfaceKey && !appPassword) {
+    if (!privateKey && !groqKey && !geminiKey && !huggingfaceKey && !appPassword && !telegramToken && !telegramChatId) {
         res.status(400).json({ error: 'Tidak ada kunci yang diberikan' });
         return;
     }
@@ -227,11 +228,13 @@ app.post('/api/keys', (req: Request, res: Response) => {
     });
 
     const updates: Record<string, string> = {};
-    if (privateKey)     updates['PRIVATE_KEY']         = privateKey;
-    if (groqKey)        updates['GROQ_API_KEY']         = groqKey;
-    if (geminiKey)      updates['GEMINI_API_KEY']       = geminiKey;
-    if (huggingfaceKey) updates['HUGGINGFACE_API_KEY']  = huggingfaceKey;
-    if (appPassword)    updates['APP_PASSWORD']         = appPassword;
+    if (privateKey)     updates['PRIVATE_KEY']          = privateKey;
+    if (groqKey)        updates['GROQ_API_KEY']          = groqKey;
+    if (geminiKey)      updates['GEMINI_API_KEY']        = geminiKey;
+    if (huggingfaceKey) updates['HUGGINGFACE_API_KEY']   = huggingfaceKey;
+    if (appPassword)    updates['APP_PASSWORD']          = appPassword;
+    if (telegramToken)  updates['TELEGRAM_BOT_TOKEN']   = telegramToken;
+    if (telegramChatId) updates['TELEGRAM_CHAT_ID']     = telegramChatId;
 
     for (const [key, value] of Object.entries(updates)) {
         process.env[key] = value;
@@ -250,9 +253,13 @@ app.post('/api/keys', (req: Request, res: Response) => {
     }
 
     // Apply keys to running bot without restart
-    bot.updateKeys({ privateKey, groqKey, geminiKey, huggingfaceKey });
+    bot.updateKeys({ privateKey, groqKey, geminiKey, huggingfaceKey, telegramToken, telegramChatId });
 
     res.json({ ok: true, status: bot.getKeyStatus() });
+});
+
+app.get('/api/history', (_req: Request, res: Response) => {
+    res.json(bot.getTradeHistory());
 });
 
 app.get('/api/logs', (_req: Request, res: Response) => {

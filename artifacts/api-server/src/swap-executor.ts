@@ -112,6 +112,7 @@ export class SwapExecutor extends EventEmitter {
         TRAILING_SL_FROM_PEAK_PCT:  15,     // sell when 15% drop from peak
         MAX_PRICE_IMPACT_PCT:       5,      // skip if trade > 5% of pool liquidity
         DCA_TRIGGER_MULT:           0.98,   // DCA if falls back to 98% of entry after TP1
+        DCA_ENABLED:                process.env.DCA_ENABLED !== 'false', // toggle DCA on/off
     };
 
     constructor() {
@@ -431,7 +432,7 @@ export class SwapExecutor extends EventEmitter {
         }
 
         // ─── DCA ON DIP ─── (After TP1 hit, price drops back near entry — buy more once)
-        if (position.takeProfit1Hit && !position.takeProfit2Hit && !position.dcaDone
+        if (this.CONFIG.DCA_ENABLED && position.takeProfit1Hit && !position.takeProfit2Hit && !position.dcaDone
             && multiplier <= this.CONFIG.DCA_TRIGGER_MULT) {
             const dcaAmount = parseFloat(formatEther(position.amountIn)) * 0.5;
             console.log(`📉 DCA: ${position.tokenSymbol} at ${multiplier.toFixed(3)}x — signal to buy ${dcaAmount} ETH more`);
@@ -698,6 +699,7 @@ export class SwapExecutor extends EventEmitter {
         stopLoss?:       number;
         maxPriorityFee?: number;
         maxFeePerGas?:   number;
+        dcaEnabled?:     boolean;
     }): void {
         const c = this.CONFIG as any;
         if (updates.maxSlippage    != null) c.DEFAULT_SLIPPAGE      = updates.maxSlippage;
@@ -708,6 +710,7 @@ export class SwapExecutor extends EventEmitter {
         if (updates.stopLoss       != null) c.STOP_LOSS_PCT          = updates.stopLoss;
         if (updates.maxPriorityFee != null) c.MAX_PRIORITY_FEE_GWEI = updates.maxPriorityFee;
         if (updates.maxFeePerGas   != null) c.MAX_FEE_GWEI           = updates.maxFeePerGas;
+        if (updates.dcaEnabled     != null) c.DCA_ENABLED            = updates.dcaEnabled;
         console.log('⚙️  SwapExecutor config updated');
     }
 
