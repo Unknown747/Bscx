@@ -11,6 +11,13 @@ import {
     formatWhaleTelegramMsg, type WhaleCandidate, type SimulationResult
 } from './whale-finder';
 import { getEthPriceUsd, getBestDexPair } from './price-oracle';
+import {
+    dbInsertTrade, dbGetTrades,
+    dbAddToBlacklist, dbRemoveFromBlacklist, dbGetBlacklist, dbIsBlacklisted,
+    dbAddCopyWallet, dbRemoveCopyWallet, dbGetCopyWallets, dbUpdateCopyWallet,
+    type TradeRow,
+} from './db';
+import { startTelegramBot, type TelegramBot } from './telegram-bot';
 import type { Address } from 'viem';
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
@@ -28,22 +35,7 @@ interface LogEntry {
     timestamp: number;
 }
 
-const MAX_LOG_ENTRIES   = 100;
-const MAX_TRADE_HISTORY = 200;
-
-interface ClosedTrade {
-    id:           string;
-    tokenAddress: string;
-    tokenSymbol:  string;
-    entryEth:     number;
-    profitPct:    number | null;
-    percentSold:  number;
-    closedAt:     number;
-    holdMs:       number;
-    txHash:       string;
-    reason:       'take-profit' | 'stop-loss' | 'manual' | 'dca' | 'gecko-scanner';
-    tpLevel?:     number;
-}
+const MAX_LOG_ENTRIES = 100;
 
 interface RuntimeConfig {
     totalCapital:             number;
@@ -90,14 +82,12 @@ export class AISniperBot extends EventEmitter {
     private ai:           MultiAIProvider;
     private executor:     SwapExecutor | null = null;
     private geckoScanner: GeckoTokenScanner;
-    private activityLog:  LogEntry[]    = [];
-    private closedTrades: ClosedTrade[] = [];
-    private blacklist:    Set<string>   = new Set();
-    private _blacklistMeta: Map<string, { address: string; addedAt: number; label?: string }> = new Map();
+    private activityLog:  LogEntry[] = [];
     private telegramToken  = process.env.TELEGRAM_BOT_TOKEN || '';
     private telegramChatId = process.env.TELEGRAM_CHAT_ID   || '';
     private sentimentInterval: NodeJS.Timeout | null = null;
     private whaleAutoScanInterval: NodeJS.Timeout | null = null;
+    private tgBot: TelegramBot | null = null;
 
     private runtimeConfig: RuntimeConfig = {
         totalCapital:            parseFloat(process.env.TOTAL_CAPITAL_ETH            || '0.006'),
@@ -480,7 +470,7 @@ export class AISniperBot extends EventEmitter {
             if (d.sourceWallet && (d.percentSold ?? 100) >= 100) {
                 this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
             }
-            const trade: ClosedTrade = {
+            dbInsertTrade({
                 id:           randomBytes(6).toString('hex'),
                 tokenAddress: d.tokenAddress || '',
                 tokenSymbol:  d.tokenSymbol  || 'UNKNOWN',
@@ -490,10 +480,8 @@ export class AISniperBot extends EventEmitter {
                 closedAt:     Date.now(),
                 holdMs:       d.holdMs      ?? 0,
                 txHash:       d.txHash      || '',
-                reason:       'manual'
-            };
-            this.closedTrades.unshift(trade);
-            if (this.closedTrades.length > MAX_TRADE_HISTORY) this.closedTrades.length = MAX_TRADE_HISTORY;
+                reason:       'manual',
+            });
             this.sendTelegram(
                 `💰 <b>SELL manual</b>\n` +
                 `Token: <code>${d.tokenSymbol}</code> (${d.percentSold}%)\n` +
@@ -507,7 +495,7 @@ export class AISniperBot extends EventEmitter {
             if (d.sourceWallet && d.level === 2 && d.profitPct != null) {
                 this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct);
             }
-            const trade: ClosedTrade = {
+            dbInsertTrade({
                 id:           randomBytes(6).toString('hex'),
                 tokenAddress: d.tokenAddress || '',
                 tokenSymbol:  d.tokenSymbol  || 'UNKNOWN',
@@ -518,10 +506,8 @@ export class AISniperBot extends EventEmitter {
                 holdMs:       d.holdMs ?? 0,
                 txHash:       d.txHash || '',
                 reason:       'take-profit',
-                tpLevel:      d.level
-            };
-            this.closedTrades.unshift(trade);
-            if (this.closedTrades.length > MAX_TRADE_HISTORY) this.closedTrades.length = MAX_TRADE_HISTORY;
+                tpLevel:      d.level,
+            });
             this.sendTelegram(
                 `🎯 <b>TAKE PROFIT TP${d.level}</b>\n` +
                 `Token: <code>${d.tokenSymbol}</code>\n` +
@@ -535,10 +521,10 @@ export class AISniperBot extends EventEmitter {
             this.addLog('stop-loss', `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`, d.reason || 'Auto stop loss triggered');
             if (d.sourceWallet) this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
             if (d.tokenAddress) {
-                this.blacklist.add(d.tokenAddress.toLowerCase());
+                dbAddToBlacklist(d.tokenAddress.toLowerCase(), 'Stop Loss auto-blacklist');
                 this.addLog('info', `Auto-blacklisted: ${d.tokenSymbol}`, 'Hit stop loss');
             }
-            const trade: ClosedTrade = {
+            dbInsertTrade({
                 id:           randomBytes(6).toString('hex'),
                 tokenAddress: d.tokenAddress || '',
                 tokenSymbol:  d.tokenSymbol  || 'UNKNOWN',
@@ -548,10 +534,8 @@ export class AISniperBot extends EventEmitter {
                 closedAt:     Date.now(),
                 holdMs:       d.holdMs ?? 0,
                 txHash:       d.txHash || '',
-                reason:       'stop-loss'
-            };
-            this.closedTrades.unshift(trade);
-            if (this.closedTrades.length > MAX_TRADE_HISTORY) this.closedTrades.length = MAX_TRADE_HISTORY;
+                reason:       'stop-loss',
+            });
             const isEmergency = d.reason?.startsWith('🚨');
             const isTimeout   = d.reason?.startsWith('⏰');
             const isTrailing  = d.reason?.includes('Trailing');
@@ -599,7 +583,7 @@ export class AISniperBot extends EventEmitter {
     ): Promise<void> {
         if (!this.executor) { console.warn('   ⚠️  Live trading disabled'); return; }
 
-        if (this.blacklist.has(tokenAddress.toLowerCase())) {
+        if (dbIsBlacklisted(tokenAddress.toLowerCase())) {
             console.log(`   🚫 Token blacklisted — skip`);
             return;
         }
@@ -647,7 +631,7 @@ export class AISniperBot extends EventEmitter {
         if (!this.executor) { console.warn('   ⚠️  Live trading disabled'); return; }
 
         const addr = (opportunity.tokenAddress as string).toLowerCase();
-        if (this.blacklist.has(addr)) { console.log(`   🚫 Blacklisted — skip copy`); return; }
+        if (dbIsBlacklisted(addr)) { console.log(`   🚫 Blacklisted — skip copy`); return; }
 
         if (this.runtimeConfig.serialRuggerEnabled) {
             const sr = await checkSerialDeployer(opportunity.tokenAddress, this.runtimeConfig.serialRuggerMaxDeploys, this.runtimeConfig.serialRuggerWindowHours);
@@ -738,6 +722,18 @@ export class AISniperBot extends EventEmitter {
         const health = await this.ai.healthCheck();
         console.log(`🔍 AI: Groq=${health.groq ? '✅' : '❌'} Gemini=${health.gemini ? '✅' : '❌'} HF=${health.huggingface ? '✅' : '❌'}\n`);
 
+        // ── Load persisted copy wallets from DB ──
+        const savedWallets = dbGetCopyWallets();
+        for (const w of savedWallets) {
+            if (!this.copyMonitor.getWallets().some((x: any) => x.address.toLowerCase() === w.address)) {
+                this.copyMonitor.addWallet(w.address, w.name, false);
+                if (!w.isActive) this.copyMonitor.toggleWallet(w.address, false);
+            }
+        }
+        if (savedWallets.length > 0) {
+            console.log(`💾 Loaded ${savedWallets.length} copy wallets from DB`);
+        }
+
         await this.scanner.connect();
 
         if (this.runtimeConfig.copyEnabled) {
@@ -751,6 +747,9 @@ export class AISniperBot extends EventEmitter {
         if (this.runtimeConfig.whaleAutoScanEnabled) {
             this.startWhaleAutoScan();
         }
+
+        // ── Start Telegram command bot ──
+        this.tgBot = startTelegramBot(this);
 
         setInterval(() => this.printPerformanceReport(), 3_600_000);
         console.log('✅ AI SNIPER RUNNING\n');
@@ -770,6 +769,7 @@ export class AISniperBot extends EventEmitter {
     async stop(): Promise<void> {
         if (this.sentimentInterval)      { clearInterval(this.sentimentInterval);      this.sentimentInterval = null; }
         if (this.whaleAutoScanInterval)  { clearInterval(this.whaleAutoScanInterval);  this.whaleAutoScanInterval = null; }
+        this.tgBot?.stop();
         this.scanner.disconnect();
         this.copyMonitor.stop();
         this.geckoScanner.stop();
@@ -917,14 +917,25 @@ export class AISniperBot extends EventEmitter {
     getCopyWallets() { return this.copyMonitor.getWallets(); }
     addCopyWallet(address: string, name: string): void {
         this.copyMonitor.addWallet(address, name, false);
+        dbAddCopyWallet(address, name);
         this.addLog('info', `Whale ditambahkan: ${name}`, address);
     }
-    removeCopyWallet(address: string): void { this.copyMonitor.removeWallet(address); this.addLog('info', `Whale dihapus`, address); }
-    toggleCopyWallet(address: string, active: boolean): void { this.copyMonitor.toggleWallet(address, active); }
-    renameCopyWallet(address: string, name: string): void { this.copyMonitor.renameWallet(address, name); }
+    removeCopyWallet(address: string): void {
+        this.copyMonitor.removeWallet(address);
+        dbRemoveCopyWallet(address);
+        this.addLog('info', `Whale dihapus`, address);
+    }
+    toggleCopyWallet(address: string, active: boolean): void {
+        this.copyMonitor.toggleWallet(address, active);
+        dbUpdateCopyWallet(address, { isActive: active });
+    }
+    renameCopyWallet(address: string, name: string): void {
+        this.copyMonitor.renameWallet(address, name);
+        dbUpdateCopyWallet(address, { name });
+    }
 
-    getTradeHistory(): { trades: ClosedTrade[]; stats: any } {
-        const trades   = [...this.closedTrades];
+    getTradeHistory(): { trades: any[]; stats: any } {
+        const trades   = dbGetTrades(200);
         const withPnl  = trades.filter(t => t.profitPct !== null && t.profitPct !== undefined);
         const wins     = withPnl.filter(t => (t.profitPct ?? 0) > 0).length;
         const losses   = withPnl.filter(t => (t.profitPct ?? 0) <= 0).length;
@@ -943,18 +954,14 @@ export class AISniperBot extends EventEmitter {
     }
 
     getBlacklist(): { address: string; addedAt: number; label?: string }[] {
-        return [...this._blacklistMeta.values()];
+        return dbGetBlacklist();
     }
     addToBlacklist(address: string, label?: string): void {
-        const addr = address.toLowerCase();
-        this.blacklist.add(addr);
-        this._blacklistMeta.set(addr, { address: addr, addedAt: Date.now(), label });
+        dbAddToBlacklist(address.toLowerCase(), label);
         this.addLog('info', `🚫 Token diblacklist`, `${label || ''} ${address}`);
     }
     removeFromBlacklist(address: string): void {
-        const addr = address.toLowerCase();
-        this.blacklist.delete(addr);
-        this._blacklistMeta.delete(addr);
+        dbRemoveFromBlacklist(address.toLowerCase());
         this.addLog('info', `✅ Token dihapus dari blacklist`, address);
     }
 

@@ -1,0 +1,325 @@
+/**
+ * telegram-bot.ts — Telegram command interface for Base Sniper
+ *
+ * Uses long-polling (getUpdates). Only responds to messages from the
+ * configured TELEGRAM_CHAT_ID so strangers cannot control the bot.
+ *
+ * Commands:
+ *   /help       — show available commands
+ *   /status     — scanner + open positions summary
+ *   /balance    — ETH balance + USD value
+ *   /candidates — list pending whale candidates
+ *   /approve <addr> — approve a whale candidate
+ *   /reject  <addr> — reject a whale candidate
+ *   /history    — last 5 closed trades + P&L stats
+ *   /blacklist  — show current blacklist
+ *   /positions  — open positions detail
+ */
+
+import axios from 'axios';
+import type { AISniperBot } from './ai-sniper-integration';
+
+const POLL_TIMEOUT = 30;   // seconds for long-poll
+const HELP_TEXT =
+    `🔥 <b>Base Sniper Bot Commands</b>\n\n` +
+    `/status      — Status scanner & posisi aktif\n` +
+    `/balance     — Cek saldo ETH wallet\n` +
+    `/candidates  — Whale kandidat yang menunggu\n` +
+    `/approve &lt;addr&gt; — Setujui whale kandidat\n` +
+    `/reject &lt;addr&gt;  — Tolak whale kandidat\n` +
+    `/positions   — Detail posisi yang sedang terbuka\n` +
+    `/history     — 5 trade terakhir + statistik\n` +
+    `/blacklist   — Daftar token yang diblacklist\n` +
+    `/help        — Tampilkan menu ini`;
+
+export class TelegramBot {
+    private token:    string;
+    private chatId:   string;
+    private bot:      AISniperBot;
+    private offset    = 0;
+    private running   = false;
+    private pollTimer: NodeJS.Timeout | null = null;
+
+    constructor(token: string, chatId: string, bot: AISniperBot) {
+        this.token  = token;
+        this.chatId = chatId;
+        this.bot    = bot;
+    }
+
+    start(): void {
+        if (this.running) return;
+        this.running = true;
+        console.log('🤖 Telegram command bot started (polling)');
+        this.poll();
+    }
+
+    stop(): void {
+        this.running = false;
+        if (this.pollTimer) { clearTimeout(this.pollTimer); this.pollTimer = null; }
+    }
+
+    private scheduleNext(): void {
+        if (!this.running) return;
+        this.pollTimer = setTimeout(() => this.poll(), 500);
+    }
+
+    private async poll(): Promise<void> {
+        if (!this.running) return;
+        try {
+            const res = await axios.get(
+                `https://api.telegram.org/bot${this.token}/getUpdates`,
+                { params: { offset: this.offset, timeout: POLL_TIMEOUT, allowed_updates: ['message'] }, timeout: (POLL_TIMEOUT + 5) * 1000 }
+            );
+            const updates: any[] = res.data?.result ?? [];
+            for (const update of updates) {
+                this.offset = update.update_id + 1;
+                await this.handleUpdate(update).catch(() => {});
+            }
+        } catch {
+            // Network blip — wait a bit longer before retry
+            await new Promise(r => setTimeout(r, 5000));
+        }
+        this.scheduleNext();
+    }
+
+    private async handleUpdate(update: any): Promise<void> {
+        const msg  = update.message;
+        if (!msg?.text) return;
+
+        const fromId = String(msg.chat?.id ?? msg.from?.id ?? '');
+        if (fromId !== this.chatId) {
+            await this.send('⛔ Akses ditolak.');
+            return;
+        }
+
+        const text  = (msg.text as string).trim();
+        const parts = text.split(/\s+/);
+        const cmd   = parts[0].toLowerCase().replace(/^\//, '').split('@')[0];
+        const arg   = parts[1] ?? '';
+
+        switch (cmd) {
+            case 'start':
+            case 'help':   await this.cmdHelp();             break;
+            case 'status': await this.cmdStatus();           break;
+            case 'balance':await this.cmdBalance();          break;
+            case 'candidates': await this.cmdCandidates();   break;
+            case 'approve':await this.cmdApprove(arg);       break;
+            case 'reject': await this.cmdReject(arg);        break;
+            case 'positions': await this.cmdPositions();     break;
+            case 'history':await this.cmdHistory();          break;
+            case 'blacklist': await this.cmdBlacklist();     break;
+            default:
+                await this.send(`❓ Perintah tidak dikenal: <code>${text}</code>\nKetik /help untuk daftar perintah.`);
+        }
+    }
+
+    // ── Commands ──────────────────────────────────────────────────────────────
+
+    private async cmdHelp(): Promise<void> {
+        await this.send(HELP_TEXT);
+    }
+
+    private async cmdStatus(): Promise<void> {
+        const st       = this.bot.getStatus();
+        const pos      = st.openPositions ?? [];
+        const cfg      = this.bot.getRuntimeConfig();
+        const posLine  = pos.length > 0
+            ? pos.map((p: any) => `  • ${p.tokenSymbol || p.tokenAddress?.slice(0, 10)}`).join('\n')
+            : '  (tidak ada)';
+
+        await this.send(
+            `📊 <b>Status Base Sniper</b>\n\n` +
+            `🔌 WebSocket: ${st.connected ? '✅ Terhubung' : '❌ Terputus'}\n` +
+            `🤖 AI: ${cfg.aiEnabled ? '✅ Aktif' : '⏸ Nonaktif'}\n` +
+            `🐋 Copy Trading: ${cfg.copyEnabled ? '✅ Aktif' : '⏸ Nonaktif'}\n` +
+            `🦎 Gecko Scanner: ${cfg.geckoScannerEnabled ? '✅ Aktif' : '⏸ Nonaktif'}\n` +
+            `💰 Modal: ${cfg.totalCapital} ETH\n\n` +
+            `📂 Posisi aktif (${pos.length}):\n${posLine}`
+        );
+    }
+
+    private async cmdBalance(): Promise<void> {
+        try {
+            const portfolio = await this.bot.getPortfolio();
+            const ethBal    = parseFloat(portfolio.ethBalance ?? '0');
+            const usdVal    = portfolio.ethValueUsd ?? 0;
+            const totalUsd  = portfolio.totalValueUsd ?? usdVal;
+            const tokens    = (portfolio.tokens ?? []) as any[];
+
+            const tokenLines = tokens.length > 0
+                ? tokens.map((t: any) =>
+                    `  • ${t.symbol || '?'}: ${parseFloat(t.balanceFormatted ?? '0').toFixed(4)} (~$${(t.valueUsd ?? 0).toFixed(2)})`
+                  ).join('\n')
+                : '  (tidak ada token)';
+
+            await this.send(
+                `💰 <b>Saldo Wallet</b>\n\n` +
+                `ETH: <b>${ethBal.toFixed(6)} ETH</b> (~$${usdVal.toFixed(2)})\n\n` +
+                `📦 Token di portfolio:\n${tokenLines}\n\n` +
+                `💼 Total nilai: <b>$${totalUsd.toFixed(2)}</b>`
+            );
+        } catch (err: any) {
+            await this.send(`❌ Gagal cek saldo: ${err.message}`);
+        }
+    }
+
+    private async cmdCandidates(): Promise<void> {
+        const pending = this.bot.getPendingWhales();
+        if (pending.length === 0) {
+            await this.send('🐋 Tidak ada whale kandidat yang menunggu.\n\nGunakan fitur Auto Scan di dashboard atau tunggu scan berikutnya.');
+            return;
+        }
+
+        const lines = pending.slice(0, 8).map((c: any, i: number) => {
+            const stars = c.score >= 80 ? '⭐⭐⭐' : c.score >= 65 ? '⭐⭐' : '⭐';
+            const days  = ((Date.now() - c.lastActiveMs) / 86_400_000).toFixed(1);
+            return (
+                `${stars} <b>#${i + 1}</b> Skor: ${c.score}/100\n` +
+                `   <code>${c.address}</code>\n` +
+                `   WR: ${c.estimatedWinRate}% | Profit: +${c.avgProfitPct}% | ${days}h lalu\n` +
+                `   ✅ /approve ${c.address.slice(0, 10)}...\n` +
+                `   ❌ /reject ${c.address.slice(0, 10)}...`
+            );
+        }).join('\n\n');
+
+        await this.send(
+            `🐋 <b>${pending.length} Whale Kandidat Menunggu</b>\n\n${lines}\n\n` +
+            `<i>Gunakan /approve &lt;alamat-lengkap&gt; atau /reject &lt;alamat-lengkap&gt;</i>`
+        );
+    }
+
+    private async cmdApprove(addr: string): Promise<void> {
+        if (!addr || !addr.match(/^0x[0-9a-fA-F]{10,40}$/i)) {
+            const pending = this.bot.getPendingWhales();
+            if (pending.length === 0) {
+                await this.send('❌ Tidak ada kandidat pending. Gunakan /candidates untuk melihat daftar.');
+                return;
+            }
+            const matched = pending.find((c: any) => c.address.toLowerCase().startsWith(addr.toLowerCase()));
+            if (!matched) {
+                await this.send(`❌ Format: /approve &lt;alamat-lengkap&gt;\nContoh: /approve ${pending[0]?.address ?? '0x...'}`);
+                return;
+            }
+            addr = matched.address;
+        }
+
+        const full = addr.length < 42
+            ? this.bot.getPendingWhales().find((c: any) => c.address.toLowerCase().startsWith(addr.toLowerCase()))?.address
+            : addr;
+
+        if (!full) { await this.send('❌ Kandidat tidak ditemukan.'); return; }
+
+        const approved = this.bot.approveWhale(full);
+        if (!approved) {
+            await this.send(`❌ Kandidat tidak ditemukan atau sudah diproses:\n<code>${full}</code>`);
+        } else {
+            await this.send(
+                `✅ <b>Whale Disetujui!</b>\n\n` +
+                `<code>${approved.address}</code>\n` +
+                `Skor: ${approved.score}/100 | WR: ${approved.estimatedWinRate}%\n` +
+                `Ditambahkan ke copy trading list.`
+            );
+        }
+    }
+
+    private async cmdReject(addr: string): Promise<void> {
+        if (!addr || !addr.match(/^0x[0-9a-fA-F]{10,40}$/i)) {
+            const pending = this.bot.getPendingWhales();
+            const matched = pending.find((c: any) => c.address.toLowerCase().startsWith(addr.toLowerCase()));
+            if (!matched) {
+                await this.send(`❌ Format: /reject &lt;alamat-lengkap&gt;\nContoh: /reject ${pending[0]?.address ?? '0x...'}`);
+                return;
+            }
+            addr = matched.address;
+        }
+
+        const full = addr.length < 42
+            ? this.bot.getPendingWhales().find((c: any) => c.address.toLowerCase().startsWith(addr.toLowerCase()))?.address
+            : addr;
+
+        if (!full) { await this.send('❌ Kandidat tidak ditemukan.'); return; }
+
+        this.bot.rejectWhale(full);
+        await this.send(`❌ <b>Whale Ditolak</b>\n<code>${full}</code>`);
+    }
+
+    private async cmdPositions(): Promise<void> {
+        const st  = this.bot.getStatus();
+        const pos = st.openPositions ?? [];
+        if (pos.length === 0) {
+            await this.send('📂 Tidak ada posisi yang sedang terbuka.');
+            return;
+        }
+
+        const lines = pos.map((p: any) => {
+            const holdMin = p.openedAt ? ((Date.now() - p.openedAt) / 60000).toFixed(0) : '?';
+            const pnl     = p.currentPnlPct != null ? `${p.currentPnlPct >= 0 ? '+' : ''}${p.currentPnlPct.toFixed(1)}%` : 'N/A';
+            return (
+                `🪙 <b>${p.tokenSymbol || 'UNKNOWN'}</b>\n` +
+                `   Masuk: ${p.amountEth?.toFixed(5) ?? '?'} ETH\n` +
+                `   P&amp;L saat ini: <b>${pnl}</b>\n` +
+                `   Hold: ${holdMin} menit\n` +
+                `   <a href="https://basescan.org/address/${p.tokenAddress}">Basescan</a>`
+            );
+        }).join('\n\n');
+
+        await this.send(`📂 <b>${pos.length} Posisi Terbuka</b>\n\n${lines}`);
+    }
+
+    private async cmdHistory(): Promise<void> {
+        const { trades, stats } = this.bot.getTradeHistory();
+        const recent = trades.slice(0, 5);
+
+        const tradeLines = recent.length === 0
+            ? '  (belum ada)'
+            : recent.map((t: any) => {
+                const pnl  = t.profitPct != null ? `${t.profitPct >= 0 ? '+' : ''}${t.profitPct.toFixed(1)}%` : 'N/A';
+                const icon = !t.profitPct ? '⚪' : t.profitPct > 0 ? '✅' : '❌';
+                return `${icon} <b>${t.tokenSymbol}</b> — ${pnl} (${t.reason})`;
+            }).join('\n');
+
+        await this.send(
+            `📈 <b>Trade History</b>\n\n` +
+            `Total: ${stats.total} | ✅ ${stats.wins} | ❌ ${stats.losses}\n` +
+            `Win Rate: ${stats.winRate.toFixed(1)}%\n` +
+            `Total P&amp;L: ${stats.totalProfitPct >= 0 ? '+' : ''}${stats.totalProfitPct.toFixed(1)}%\n\n` +
+            `<b>5 Trade Terakhir:</b>\n${tradeLines}`
+        );
+    }
+
+    private async cmdBlacklist(): Promise<void> {
+        const bl = this.bot.getBlacklist();
+        if (bl.length === 0) {
+            await this.send('🚫 Blacklist kosong.');
+            return;
+        }
+        const lines = bl.slice(0, 10).map((b: any) =>
+            `• <code>${b.address.slice(0, 18)}...</code>${b.label ? ' — ' + b.label : ''}`
+        ).join('\n');
+        await this.send(`🚫 <b>Blacklist (${bl.length} token)</b>\n\n${lines}`);
+    }
+
+    // ── Helper ────────────────────────────────────────────────────────────────
+
+    async send(text: string): Promise<void> {
+        try {
+            await axios.post(
+                `https://api.telegram.org/bot${this.token}/sendMessage`,
+                { chat_id: this.chatId, text, parse_mode: 'HTML', disable_web_page_preview: true },
+                { timeout: 8000 }
+            );
+        } catch { /* silent */ }
+    }
+}
+
+export function startTelegramBot(bot: AISniperBot): TelegramBot | null {
+    const token  = process.env.TELEGRAM_BOT_TOKEN || '';
+    const chatId = process.env.TELEGRAM_CHAT_ID   || '';
+    if (!token || !chatId) {
+        console.log('ℹ️  Telegram bot: no token/chatId — command interface disabled');
+        return null;
+    }
+    const tgBot = new TelegramBot(token, chatId, bot);
+    tgBot.start();
+    return tgBot;
+}

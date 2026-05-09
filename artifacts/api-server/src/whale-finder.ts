@@ -6,56 +6,83 @@
  * 2. Fetching top traders from Blockscout for those tokens
  * 3. Filtering with strict criteria (win rate, trade count, profit, recency)
  * 4. Sending Telegram notification to owner for manual approval
- * 5. Holding wallet in "pending" state until owner approves/rejects
+ * 5. Holding wallet in "pending" state until owner approves/rejects via Telegram bot
+ *
+ * State is persisted in SQLite so candidates survive server restarts.
  */
 
 import axios from 'axios';
-import { getGeckoTrendingPools, getBestDexPair, getEthPriceUsd } from './price-oracle';
+import { getGeckoTrendingPools, getBestDexPair } from './price-oracle';
+import {
+    initDb,
+    dbUpsertWhale, dbGetWhale, dbGetPendingWhales, dbGetAllWhales,
+    dbApproveWhale, dbRejectWhale, dbWhaleExists, dbIsRejected,
+    type WhaleRow,
+} from './db';
 
 const BLOCKSCOUT = 'https://base.blockscout.com/api/v2';
 
-// ─── Interfaces ────────────────────────────────────────────────────────────────
+// ─── Interfaces (re-exported so ai-sniper-integration keeps same API) ─────────
+
 export interface WhaleCandidate {
-    address:       string;
+    address:          string;
     estimatedWinRate: number;
-    tradeCount:    number;
-    avgProfitPct:  number;
-    totalVolumeEth: number;
-    lastActiveMs:  number;
-    discoveredAt:  number;
-    score:         number;
-    tokens:        string[];
-    status:        'pending' | 'approved' | 'rejected';
-    approvedAt?:   number;
+    tradeCount:       number;
+    avgProfitPct:     number;
+    totalVolumeEth:   number;
+    lastActiveMs:     number;
+    discoveredAt:     number;
+    score:            number;
+    tokens:           string[];
+    status:           'pending' | 'approved' | 'rejected';
+    approvedAt?:      number;
 }
 
 export interface SimulationResult {
-    walletAddress:  string;
-    tokenAddress:   string;
-    tokenSymbol:    string;
-    simulated:      boolean;
-    estimatedProfit: number;   // %
-    estimatedRisk:  'LOW' | 'MEDIUM' | 'HIGH';
-    winRate:        number;    // whale historical WR for this token type
-    tradeCount:     number;
-    summary:        string;
+    walletAddress:   string;
+    tokenAddress:    string;
+    tokenSymbol:     string;
+    simulated:       boolean;
+    estimatedProfit: number;
+    estimatedRisk:   'LOW' | 'MEDIUM' | 'HIGH';
+    winRate:         number;
+    tradeCount:      number;
+    summary:         string;
 }
 
-// ─── In-memory state ──────────────────────────────────────────────────────────
-const pendingCandidates = new Map<string, WhaleCandidate>();
-const rejectedAddresses = new Set<string>();
+// ─── Init DB ──────────────────────────────────────────────────────────────────
+initDb();
+
+// ─── Scan cooldown (in-memory only — restarts are OK) ─────────────────────────
 let lastScanMs = 0;
-const SCAN_COOLDOWN_MS = 15 * 60 * 1000; // scan every 15 min
+const SCAN_COOLDOWN_MS = 15 * 60 * 1000;
 
 // ─── Strict filters ───────────────────────────────────────────────────────────
 const FILTERS = {
-    MIN_TRADES:           8,      // minimum trade count to qualify
-    MIN_WIN_RATE:         55,     // minimum win rate %
-    MIN_AVG_PROFIT:       15,     // minimum average profit %
-    MAX_LAST_ACTIVE_DAYS: 3,      // must have traded within 3 days
-    MIN_SCORE:            60,     // minimum composite score
-    MIN_VOLUME_ETH:       0.01,   // min total volume ETH
+    MIN_TRADES:           8,
+    MIN_WIN_RATE:         55,
+    MIN_AVG_PROFIT:       15,
+    MAX_LAST_ACTIVE_DAYS: 3,
+    MIN_SCORE:            60,
+    MIN_VOLUME_ETH:       0.01,
 };
+
+// ─── Helper: row ↔ WhaleCandidate ─────────────────────────────────────────────
+function rowToCandidate(r: WhaleRow): WhaleCandidate {
+    return {
+        address:          r.address,
+        estimatedWinRate: r.estimatedWinRate,
+        tradeCount:       r.tradeCount,
+        avgProfitPct:     r.avgProfitPct,
+        totalVolumeEth:   r.totalVolumeEth,
+        lastActiveMs:     r.lastActiveMs,
+        discoveredAt:     r.discoveredAt,
+        score:            r.score,
+        tokens:           r.tokens,
+        status:           r.status,
+        approvedAt:       r.approvedAt,
+    };
+}
 
 // ─── Blockscout helpers ───────────────────────────────────────────────────────
 
@@ -86,70 +113,46 @@ async function getWalletTokenTransactions(walletAddress: string, tokenAddress: s
     }
 }
 
-async function getRecentSwaps(walletAddress: string): Promise<any[]> {
-    try {
-        const res = await axios.get(
-            `${BLOCKSCOUT}/addresses/${walletAddress}/transactions`,
-            { params: { filter: 'to', limit: 20 }, timeout: 6000 }
-        );
-        return res.data?.items ?? [];
-    } catch {
-        return [];
-    }
-}
-
 // ─── Score calculation ────────────────────────────────────────────────────────
 
 function computeScore(candidate: Omit<WhaleCandidate, 'score' | 'status'>): number {
     let score = 0;
-
-    // Win rate: 0-40 points
     score += Math.min(40, (candidate.estimatedWinRate / 100) * 40);
-
-    // Trade count: 0-20 points (more trades = more reliable signal)
     score += Math.min(20, (candidate.tradeCount / 30) * 20);
-
-    // Avg profit: 0-25 points
     score += Math.min(25, (candidate.avgProfitPct / 100) * 25);
-
-    // Recency: 0-15 points (more recent = better)
     const daysSince = (Date.now() - candidate.lastActiveMs) / 86_400_000;
     score += Math.max(0, 15 - daysSince * 5);
-
     return Math.round(Math.min(100, score));
 }
 
 // ─── Analyse a single wallet for whale potential ──────────────────────────────
 
 async function analyseWallet(address: string, tokenAddress: string): Promise<WhaleCandidate | null> {
-    if (pendingCandidates.has(address.toLowerCase())) return null;
-    if (rejectedAddresses.has(address.toLowerCase()))  return null;
+    const addr = address.toLowerCase();
+    if (dbWhaleExists(addr)) return null;
+    if (dbIsRejected(addr))  return null;
 
     const txs = await getWalletTokenTransactions(address, tokenAddress);
     if (txs.length < 2) return null;
 
-    // Pair buy/sell transactions to estimate profit
     const buys:  any[] = [];
     const sells: any[] = [];
 
     for (const tx of txs) {
-        const isFromWallet = tx.from?.hash?.toLowerCase() === address.toLowerCase();
-        const isToWallet   = tx.to?.hash?.toLowerCase()   === address.toLowerCase();
+        const isFromWallet = tx.from?.hash?.toLowerCase() === addr;
+        const isToWallet   = tx.to?.hash?.toLowerCase()   === addr;
         if (isToWallet)   buys.push(tx);
         if (isFromWallet) sells.push(tx);
     }
 
     if (buys.length < FILTERS.MIN_TRADES / 2) return null;
 
-    // Simple heuristic: estimate win rate from buy/sell patterns
-    // If # sells > 0 and roughly paired with buys, assume 60% WR baseline
     const pairedTrades = Math.min(buys.length, sells.length);
     if (pairedTrades < 3) return null;
 
     const estimatedWinRate = 50 + Math.min(30, (sells.length / buys.length) * 20);
-    const tradeCount = buys.length + sells.length;
+    const tradeCount       = buys.length + sells.length;
 
-    // Estimate last activity
     const latestTs = txs.reduce((latest: number, tx: any) => {
         const ts = tx.timestamp ? new Date(tx.timestamp).getTime() : 0;
         return ts > latest ? ts : latest;
@@ -159,16 +162,14 @@ async function analyseWallet(address: string, tokenAddress: string): Promise<Wha
     const daysSince = (Date.now() - latestTs) / 86_400_000;
     if (daysSince > FILTERS.MAX_LAST_ACTIVE_DAYS) return null;
 
-    // Estimate rough volume (ETH equivalent, very rough)
     const estimatedVolumeEth = buys.reduce((sum: number, tx: any) => {
-        const val = parseFloat(tx.value || '0') / 1e18;
-        return sum + val;
+        return sum + parseFloat(tx.value || '0') / 1e18;
     }, 0);
 
     const avgProfitEst = estimatedWinRate > 50 ? (estimatedWinRate - 50) * 1.5 : 5;
 
     const partial: Omit<WhaleCandidate, 'score' | 'status'> = {
-        address:          address.toLowerCase(),
+        address:          addr,
         estimatedWinRate: Math.round(estimatedWinRate),
         tradeCount,
         avgProfitPct:     Math.round(avgProfitEst),
@@ -179,7 +180,7 @@ async function analyseWallet(address: string, tokenAddress: string): Promise<Wha
     };
 
     const score = computeScore(partial);
-    if (score < FILTERS.MIN_SCORE) return null;
+    if (score < FILTERS.MIN_SCORE)             return null;
     if (estimatedWinRate < FILTERS.MIN_WIN_RATE) return null;
 
     return { ...partial, score, status: 'pending' };
@@ -190,13 +191,12 @@ async function analyseWallet(address: string, tokenAddress: string): Promise<Wha
 export async function runWhaleScan(): Promise<WhaleCandidate[]> {
     const now = Date.now();
     if (now - lastScanMs < SCAN_COOLDOWN_MS) {
-        return [...pendingCandidates.values()].filter(c => c.status === 'pending');
+        return dbGetPendingWhales().map(rowToCandidate);
     }
     lastScanMs = now;
 
     console.log('\n🔍 [WhaleFinder] Starting whale scan via GeckoTerminal...');
-
-    let newCandidates: WhaleCandidate[] = [];
+    const newCandidates: WhaleCandidate[] = [];
 
     try {
         const trending = await getGeckoTrendingPools();
@@ -206,16 +206,16 @@ export async function runWhaleScan(): Promise<WhaleCandidate[]> {
 
         for (const pool of topPools) {
             if (!pool.tokenAddress) continue;
-            const holders = await getTokenHolders(pool.tokenAddress);
+            const holders    = await getTokenHolders(pool.tokenAddress);
             const candidates = holders.slice(0, 10);
 
             for (const walletAddr of candidates) {
                 try {
                     const candidate = await analyseWallet(walletAddr, pool.tokenAddress);
                     if (candidate) {
-                        pendingCandidates.set(candidate.address, candidate);
+                        dbUpsertWhale(candidate);
                         newCandidates.push(candidate);
-                        console.log(`   🐋 Candidate found: ${walletAddr.slice(0, 10)}... score=${candidate.score} WR=${candidate.estimatedWinRate}%`);
+                        console.log(`   🐋 Candidate: ${walletAddr.slice(0, 10)}... score=${candidate.score} WR=${candidate.estimatedWinRate}%`);
                     }
                 } catch { /* skip */ }
             }
@@ -228,52 +228,36 @@ export async function runWhaleScan(): Promise<WhaleCandidate[]> {
     return newCandidates;
 }
 
-// ─── Approval / Rejection ─────────────────────────────────────────────────────
+// ─── Approval / Rejection (DB-backed) ────────────────────────────────────────
 
 export function getPendingCandidates(): WhaleCandidate[] {
-    return [...pendingCandidates.values()].filter(c => c.status === 'pending');
+    return dbGetPendingWhales().map(rowToCandidate);
 }
 
 export function getAllCandidates(): WhaleCandidate[] {
-    return [...pendingCandidates.values()];
+    return dbGetAllWhales().map(rowToCandidate);
 }
 
 export function approveCandidate(address: string): WhaleCandidate | null {
-    const addr = address.toLowerCase();
-    const c    = pendingCandidates.get(addr);
-    if (!c) return null;
-    c.status    = 'approved';
-    c.approvedAt = Date.now();
-    pendingCandidates.set(addr, c);
-    return c;
+    const row = dbApproveWhale(address);
+    return row ? rowToCandidate(row) : null;
 }
 
 export function rejectCandidate(address: string): void {
-    const addr = address.toLowerCase();
-    const c    = pendingCandidates.get(addr);
-    if (c) {
-        c.status = 'rejected';
-        pendingCandidates.set(addr, c);
-    }
-    rejectedAddresses.add(addr);
+    dbRejectWhale(address);
 }
 
-// ─── Simulation: estimate P&L if following a whale on a token ─────────────────
+// ─── Simulation ───────────────────────────────────────────────────────────────
 
 export async function simulateCopyTrade(
     walletAddress: string,
     tokenAddress:  string
 ): Promise<SimulationResult> {
-    const wallet = pendingCandidates.get(walletAddress.toLowerCase());
-
-    // Fetch token info
-    const pair = await getBestDexPair(tokenAddress);
+    const wallet = dbGetWhale(walletAddress.toLowerCase());
+    const pair   = await getBestDexPair(tokenAddress);
     const tokenSymbol = pair?.baseToken?.symbol ?? 'UNKNOWN';
+    const txs    = await getWalletTokenTransactions(walletAddress, tokenAddress);
 
-    // Fetch whale's tx history with this token
-    const txs = await getWalletTokenTransactions(walletAddress, tokenAddress);
-
-    // Calculate simulated profit from price changes between buy/sell events
     let simProfit = 0;
     let wins = 0;
     let losses = 0;
@@ -283,32 +267,29 @@ export async function simulateCopyTrade(
         simulated = true;
         const buys  = txs.filter((tx: any) => tx.to?.hash?.toLowerCase() === walletAddress.toLowerCase());
         const sells = txs.filter((tx: any) => tx.from?.hash?.toLowerCase() === walletAddress.toLowerCase());
-
         const pairs = Math.min(buys.length, sells.length);
+
         for (let i = 0; i < pairs; i++) {
             const buyTs  = buys[i].timestamp  ? new Date(buys[i].timestamp).getTime()  : 0;
             const sellTs = sells[i].timestamp ? new Date(sells[i].timestamp).getTime() : 0;
             if (!buyTs || !sellTs || sellTs <= buyTs) continue;
-
-            // Estimate 40% win rate if whale has positive history, 25% otherwise
             const tradeProfit = Math.random() > 0.45 ? (15 + Math.random() * 80) : -(20 + Math.random() * 30);
             simProfit += tradeProfit;
             if (tradeProfit > 0) wins++;
             else losses++;
         }
-
-        if (wins + losses > 0) {
-            simProfit = simProfit / (wins + losses);
-        }
+        if (wins + losses > 0) simProfit = simProfit / (wins + losses);
     } else {
-        // No history: use whale's overall stats if available
         simProfit = wallet?.avgProfitPct ?? 20;
         wins      = wallet?.tradeCount ?? 5;
         losses    = Math.max(1, Math.round(wins * 0.4));
         simulated = false;
     }
 
-    const winRate   = wins + losses > 0 ? Math.round((wins / (wins + losses)) * 100) : wallet?.estimatedWinRate ?? 50;
+    const winRate = wins + losses > 0
+        ? Math.round((wins / (wins + losses)) * 100)
+        : wallet?.estimatedWinRate ?? 50;
+
     const riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' =
         winRate >= 65 && simProfit > 20 ? 'LOW' :
         winRate >= 50 ? 'MEDIUM' : 'HIGH';
@@ -343,8 +324,7 @@ export function formatWhaleTelegramMsg(candidate: WhaleCandidate, index: number)
         `📈 Est. Avg Profit: <b>+${candidate.avgProfitPct}%</b>\n` +
         `🔢 Jumlah Trade: ${candidate.tradeCount}\n` +
         `⏱ Terakhir aktif: ${daysSince} hari lalu\n\n` +
-        `✅ Setujui: POST /api/whale/approve\n` +
-        `❌ Tolak: POST /api/whale/reject\n` +
-        `📋 Body: {"address": "${candidate.address}"}`
+        `✅ Balas: /approve ${candidate.address}\n` +
+        `❌ Balas: /reject ${candidate.address}`
     );
 }
