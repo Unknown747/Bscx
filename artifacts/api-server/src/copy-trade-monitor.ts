@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import axios from 'axios';
+import { getBestDexPair } from './price-oracle';
 
 // ============ TYPES ============
 interface WalletTarget {
@@ -287,17 +288,13 @@ export class CopyTradeMonitor extends EventEmitter {
 
     private async getTokenInfo(tokenAddress: string): Promise<{ symbol: string; name: string; pairCreatedAt?: number } | null> {
         try {
-            const response = await axios.get(
-                `https://api.dexscreener.com/latest/dex/search?q=${tokenAddress}`,
-                { timeout: 5000 }
-            );
-            
-            if (response.data.pairs && response.data.pairs[0]) {
-                const pair = response.data.pairs[0];
+            // getBestDexPair uses the shared cache — rate-limited + deduplicated
+            const pair = await getBestDexPair(tokenAddress);
+            if (pair) {
                 return {
-                    symbol: pair.baseToken.symbol || 'UNKNOWN',
-                    name:   pair.baseToken.name   || 'Unknown Token',
-                    pairCreatedAt: pair.pairCreatedAt ?? undefined
+                    symbol:       pair.baseToken?.symbol || 'UNKNOWN',
+                    name:         pair.baseToken?.name   || 'Unknown Token',
+                    pairCreatedAt: pair.pairCreatedAt ?? undefined,
                 };
             }
             return { symbol: 'UNKNOWN', name: 'Unknown Token' };

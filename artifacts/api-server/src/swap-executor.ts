@@ -16,6 +16,12 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { base } from 'viem/chains';
 import { EventEmitter } from 'events';
 import dotenv from 'dotenv';
+import {
+    getEthPriceUsd,
+    getBestDexPair,
+    getDexUniV3Pairs,
+    getTokenPriceEth,
+} from './price-oracle';
 
 dotenv.config();
 
@@ -577,44 +583,36 @@ export class SwapExecutor extends EventEmitter {
     }
 
     // ============ PRICE ESTIMATION ============
-    private async estimateTokenValueEth(tokenAddress: Address, tokenAmount: bigint): Promise<number | null> {
+    // In-process decimals cache to avoid repeated on-chain calls
+    private decimalsCache = new Map<string, number>();
+
+    private async getTokenDecimals(tokenAddress: Address): Promise<number> {
+        const cached = this.decimalsCache.get(tokenAddress.toLowerCase());
+        if (cached !== undefined) return cached;
         try {
-            const { default: axios } = await import('axios');
-            const res = await axios.get(
-                `https://api.dexscreener.com/latest/dex/search?q=${tokenAddress}`,
-                { timeout: 4000 }
-            );
-
-            const pair = res.data?.pairs?.[0];
-            if (!pair) return null;
-
-            const priceUsd    = parseFloat(pair.priceUsd || '0');
-            const ethPriceUsd = await this.getEthPriceUsd();
-            if (!priceUsd || !ethPriceUsd) return null;
-
-            const decimals = await this.publicClient.readContract({
-                address: tokenAddress,
-                abi: ERC20_ABI,
-                functionName: 'decimals'
+            const d = await this.publicClient.readContract({
+                address: tokenAddress, abi: ERC20_ABI, functionName: 'decimals'
             }) as number;
-
-            const tokenAmountNum = Number(tokenAmount) / Math.pow(10, decimals);
-            return (tokenAmountNum * priceUsd) / ethPriceUsd;
+            this.decimalsCache.set(tokenAddress.toLowerCase(), d);
+            return d;
         } catch {
-            return null;
+            return 18;
         }
     }
 
-    private async getEthPriceUsd(): Promise<number> {
+    private async estimateTokenValueEth(tokenAddress: Address, tokenAmount: bigint): Promise<number | null> {
         try {
-            const { default: axios } = await import('axios');
-            const res = await axios.get(
-                'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd',
-                { timeout: 3000 }
-            );
-            return res.data?.ethereum?.usd || 3000;
+            const decimals = await this.getTokenDecimals(tokenAddress);
+            const tokenAmountNum = Number(tokenAmount) / Math.pow(10, decimals);
+
+            // getTokenPriceEth: tries DexScreener (cached, parallel ETH price)
+            //   then falls back to on-chain slot0 if pair not yet indexed
+            const priceEth = await getTokenPriceEth(this.publicClient, tokenAddress, decimals);
+            if (priceEth === null) return null;
+
+            return tokenAmountNum * priceEth;
         } catch {
-            return 3000;
+            return null;
         }
     }
 
@@ -633,19 +631,11 @@ export class SwapExecutor extends EventEmitter {
     // ============ BEST FEE TIER DETECTION ============
     private async getBestFeeTier(tokenAddress: Address): Promise<500 | 3000 | 10000> {
         try {
-            const { default: axios } = await import('axios');
-            const res = await axios.get(
-                `https://api.dexscreener.com/latest/dex/search?q=${tokenAddress}`,
-                { timeout: 4000 }
-            );
-            const pairs: any[] = res.data?.pairs || [];
-
-            let bestLiq  = 0;
+            // getDexUniV3Pairs uses the shared cache — no extra HTTP call if already fetched
+            const pairs = await getDexUniV3Pairs(tokenAddress);
+            let bestLiq = 0;
             let bestFee: 500 | 3000 | 10000 = 3000;
-
             for (const pair of pairs) {
-                if (pair.chainId !== 'base') continue;
-                if (!pair.dexId?.toLowerCase().includes('uniswap')) continue;
                 const liq = parseFloat(pair.liquidity?.usd || '0');
                 if (liq > bestLiq) {
                     bestLiq = liq;
@@ -664,24 +654,21 @@ export class SwapExecutor extends EventEmitter {
     // ============ PRICE IMPACT CHECK ============
     private async checkPriceImpact(tokenAddress: Address, amountEth: number): Promise<{ ok: boolean; impact: number; liquidityUsd: number }> {
         try {
-            const { default: axios } = await import('axios');
-            const res = await axios.get(
-                `https://api.dexscreener.com/latest/dex/search?q=${tokenAddress}`,
-                { timeout: 4000 }
-            );
-            const pair = res.data?.pairs?.[0];
-            if (!pair) return { ok: true, impact: 0, liquidityUsd: 0 }; // No data — allow trade
+            // Fetch pair & ETH price in parallel; getBestDexPair uses cache
+            const [pair, ethPriceUsd] = await Promise.all([
+                getBestDexPair(tokenAddress),
+                getEthPriceUsd(),
+            ]);
+            if (!pair) return { ok: true, impact: 0, liquidityUsd: 0 }; // Not yet indexed — allow
 
-            const liqUsd     = parseFloat(pair.liquidity?.usd || '0');
+            const liqUsd  = parseFloat(pair.liquidity?.usd || '0');
             if (liqUsd === 0) return { ok: false, impact: 100, liquidityUsd: 0 };
 
-            const ethPriceUsd = await this.getEthPriceUsd();
-            const tradeUsd    = amountEth * ethPriceUsd;
-            const impact      = (tradeUsd / liqUsd) * 100;
-
+            const tradeUsd = amountEth * ethPriceUsd;
+            const impact   = (tradeUsd / liqUsd) * 100;
             return { ok: impact < this.CONFIG.MAX_PRICE_IMPACT_PCT, impact, liquidityUsd: liqUsd };
         } catch {
-            return { ok: true, impact: 0, liquidityUsd: 0 }; // Assume OK if check fails
+            return { ok: true, impact: 0, liquidityUsd: 0 };
         }
     }
 
@@ -705,8 +692,7 @@ export class SwapExecutor extends EventEmitter {
         }>;
         totalValueEth: number; totalValueUsd: number;
     }> {
-        const { default: axios } = await import('axios');
-        const ethPriceUsd = await this.getEthPriceUsd();
+        const ethPriceUsd = await getEthPriceUsd();
         const { eth } = await this.getBalance();
         const ethValueUsd = parseFloat(eth) * ethPriceUsd;
         const tokens: any[] = [];

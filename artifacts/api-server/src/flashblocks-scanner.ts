@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import axios from 'axios';
+import { getDexLiquidityEth, getEthPriceUsd } from './price-oracle';
 
 // ============ TYPES ============
 interface PoolData {
@@ -347,33 +348,8 @@ export class FlashblocksScanner extends EventEmitter {
 
     // ============ API INTEGRATIONS ============
     private async getPoolLiquidity(poolAddress: string): Promise<number | null> {
-        try {
-            const response = await axios.get(
-                `https://api.dexscreener.com/latest/dex/search?q=${poolAddress}`,
-                { timeout: 5000 }
-            );
-            
-            if (response.data.pairs && response.data.pairs[0]) {
-                const liquidityUSD = parseFloat(response.data.pairs[0].liquidity?.usd || '0');
-                const ethPrice = await this.getEthPrice();
-                return liquidityUSD / ethPrice;
-            }
-            return null;
-        } catch (error) {
-            return null;
-        }
-    }
-
-    private async getEthPrice(): Promise<number> {
-        try {
-            const response = await axios.get(
-                'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd',
-                { timeout: 3000 }
-            );
-            return response.data.ethereum.usd;
-        } catch {
-            return 3000;
-        }
+        // getDexLiquidityEth: cached, fetches ETH price in parallel with DexScreener
+        return getDexLiquidityEth(poolAddress);
     }
 
     private async checkTokenSafety(tokenAddress: string): Promise<TokenSafety | null> {
