@@ -92,9 +92,13 @@ interface OpenPosition {
     txHash: Hex;
     takeProfit1Hit: boolean;
     takeProfit2Hit: boolean;
+    takeProfit3Hit: boolean;
     peakValueEth: number;
     dcaDone: boolean;
     sourceWallet?: string;
+    initialLiquidityUsd: number;
+    tp1SoldPct: number;
+    tp2SoldPct: number;
 }
 
 // ============ SWAP EXECUTOR ============
@@ -109,14 +113,19 @@ export class SwapExecutor extends EventEmitter {
 
     private readonly CONFIG = {
         // ── Slippage ──────────────────────────────────────────────────────────
-        DEFAULT_SLIPPAGE:           parseFloat(process.env.MAX_SLIPPAGE_PERCENT      || '8'),   // 8% (was 15%)
-        // ── Take Profit — tuned for small capital (need bigger wins to beat gas) ──
-        TAKE_PROFIT_1_X:            parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER  || '2.0'), // 2x (was 1.5x)
-        TAKE_PROFIT_1_PCT:          parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE  || '50'),
-        TAKE_PROFIT_2_X:            parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER  || '5.0'), // 5x (was 2.5x)
-        TAKE_PROFIT_2_PCT:          parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE  || '50'),
+        DEFAULT_SLIPPAGE:           parseFloat(process.env.MAX_SLIPPAGE_PERCENT      || '8'),   // 8%
+        // ── Profit Ladder TP (3 Level) ────────────────────────────────────────
+        // TP1: +50% (1.5x) → sell 30%
+        TAKE_PROFIT_1_X:            parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER  || '1.5'),
+        TAKE_PROFIT_1_PCT:          parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE  || '30'),
+        // TP2: +150% (2.5x) → sell 30% of original position
+        TAKE_PROFIT_2_X:            parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER  || '2.5'),
+        TAKE_PROFIT_2_PCT:          parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE  || '30'),
+        // TP3: trailing stop on remaining ~40% — activate after +50% profit
+        TRAILING_TP3_ACTIVATE_PCT:  50,   // activate trailing TP3 after +50% profit
+        TRAILING_TP3_FROM_PEAK_PCT: 15,   // sell remaining if drops 15% from peak
         // ── Stop Loss ────────────────────────────────────────────────────────
-        STOP_LOSS_PCT:              parseFloat(process.env.STOP_LOSS_PERCENTAGE       || '20'), // 20% (was 30%)
+        STOP_LOSS_PCT:              parseFloat(process.env.STOP_LOSS_PERCENTAGE       || '20'),
         // ── Gas — calibrated for Base L2 (NOT Ethereum mainnet) ──────────────
         // Base typical base fee: 0.001–0.005 gwei. Priority fee: 0.001 gwei is enough.
         MAX_PRIORITY_FEE_GWEI:      parseFloat(process.env.MAX_PRIORITY_FEE_GWEI     || '0.005'), // was 0.5 — 100x too high
@@ -124,9 +133,11 @@ export class SwapExecutor extends EventEmitter {
         GAS_MODE:                   process.env.GAS_MODE                             || 'auto',   // auto reads actual Base fee
         // ── Position Monitor ─────────────────────────────────────────────────
         MONITOR_INTERVAL_MS:        5000,
-        // ── Trailing Stop Loss ───────────────────────────────────────────────
-        TRAILING_SL_ACTIVATE_MULT:  1.50,  // start trailing after 50% profit (was 20%)
-        TRAILING_SL_FROM_PEAK_PCT:  12,    // sell if drops 12% from peak (was 15%)
+        // ── Trailing Stop Loss (for positions before TP3 activates) ─────────
+        TRAILING_SL_ACTIVATE_MULT:  1.50,  // start trailing after 50% profit
+        TRAILING_SL_FROM_PEAK_PCT:  12,    // sell if drops 12% from peak
+        // ── Minimum Liquidity Guard ──────────────────────────────────────────
+        LIQUIDITY_DROP_EXIT_PCT:    50,    // exit if pool liquidity drops 50% from entry
         // ── Price Impact ─────────────────────────────────────────────────────
         MAX_PRICE_IMPACT_PCT:       5,
         // ── DCA ─ disabled for small capital (gas cost > benefit) ────────────
@@ -284,9 +295,13 @@ export class SwapExecutor extends EventEmitter {
                 txHash,
                 takeProfit1Hit: false,
                 takeProfit2Hit: false,
+                takeProfit3Hit: false,
                 peakValueEth:   amountInEth,
                 dcaDone:        false,
-                sourceWallet:   params.sourceWallet
+                sourceWallet:   params.sourceWallet,
+                initialLiquidityUsd: impact.liquidityUsd,
+                tp1SoldPct: 0,
+                tp2SoldPct: 0,
             });
 
             this.knownTokens.add(tokenAddress.toLowerCase() as Address);
@@ -510,22 +525,61 @@ export class SwapExecutor extends EventEmitter {
             return;
         }
 
-        // ─── TAKE PROFIT 1 ───
+        // ─── MINIMUM LIQUIDITY GUARD ─── exit if liquidity drained ≥50%
+        if (position.initialLiquidityUsd > 100) {
+            try {
+                const liqCheck = await this.checkPriceImpact(tokenAddress, 0.001);
+                if (liqCheck.liquidityUsd > 0) {
+                    const liqDrop = ((position.initialLiquidityUsd - liqCheck.liquidityUsd) / position.initialLiquidityUsd) * 100;
+                    if (liqDrop >= this.CONFIG.LIQUIDITY_DROP_EXIT_PCT) {
+                        console.log(`💧 LIQUIDITY GUARD: ${position.tokenSymbol} likuiditas turun ${liqDrop.toFixed(0)}% — keluar!`);
+                        this.emit('stop-loss', {
+                            tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
+                            reason: `💧 Likuiditas turun ${liqDrop.toFixed(0)}% (rug/dump suspected)`,
+                            peakMult, sourceWallet: position.sourceWallet
+                        });
+                        await this.sell(tokenAddress, 100);
+                        return;
+                    }
+                }
+            } catch { /* silent — don't block position monitor */ }
+        }
+
+        // ─── PROFIT LADDER TP1: sell 30% at 1.5x (+50%) ───
         if (!position.takeProfit1Hit && multiplier >= this.CONFIG.TAKE_PROFIT_1_X) {
-            console.log(`🎯 TAKE PROFIT 1 at ${multiplier.toFixed(2)}x — selling ${this.CONFIG.TAKE_PROFIT_1_PCT}%`);
+            const sellPct = this.CONFIG.TAKE_PROFIT_1_PCT;
+            console.log(`🎯 TP1 at ${multiplier.toFixed(2)}x (+${((multiplier-1)*100).toFixed(0)}%) — jual ${sellPct}%`);
             this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 1, multiplier, sourceWallet: position.sourceWallet });
-            await this.sell(tokenAddress, this.CONFIG.TAKE_PROFIT_1_PCT);
+            await this.sell(tokenAddress, sellPct);
             position.takeProfit1Hit = true;
+            position.tp1SoldPct = sellPct;
             return;
         }
 
-        // ─── TAKE PROFIT 2 ───
+        // ─── PROFIT LADDER TP2: sell 30% of original at 2.5x (+150%) ───
         if (position.takeProfit1Hit && !position.takeProfit2Hit && multiplier >= this.CONFIG.TAKE_PROFIT_2_X) {
-            console.log(`🎯 TAKE PROFIT 2 at ${multiplier.toFixed(2)}x — selling remaining ${this.CONFIG.TAKE_PROFIT_2_PCT}%`);
+            // We already sold tp1Pct% → remaining = (100 - tp1Pct)%. We want to sell tp2Pct% of original.
+            // sellPct of remaining = tp2Pct / (1 - tp1Pct/100) * 100
+            const remaining = 100 - (position.tp1SoldPct || this.CONFIG.TAKE_PROFIT_1_PCT);
+            const tp2Pct    = this.CONFIG.TAKE_PROFIT_2_PCT;
+            const sellPct   = remaining > 0 ? Math.min(100, Math.round((tp2Pct / remaining) * 100)) : 100;
+            console.log(`🎯 TP2 at ${multiplier.toFixed(2)}x (+${((multiplier-1)*100).toFixed(0)}%) — jual ${sellPct}% dari sisa`);
             this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 2, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
-            await this.sell(tokenAddress, 100);
+            await this.sell(tokenAddress, sellPct);
             position.takeProfit2Hit = true;
+            position.tp2SoldPct = tp2Pct;
             return;
+        }
+
+        // ─── PROFIT LADDER TP3: trailing stop on remaining ~40% ───
+        if (position.takeProfit2Hit && !position.takeProfit3Hit && profitPct >= this.CONFIG.TRAILING_TP3_ACTIVATE_PCT) {
+            if (dropFromPeak >= this.CONFIG.TRAILING_TP3_FROM_PEAK_PCT) {
+                console.log(`🎯 TP3 Trailing — turun ${dropFromPeak.toFixed(1)}% dari puncak → jual semua sisa`);
+                this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 3, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
+                await this.sell(tokenAddress, 100);
+                position.takeProfit3Hit = true;
+                return;
+            }
         }
 
         // ─── DCA ON DIP ─── (After TP1 hit, price drops back near entry — buy more once)
@@ -797,6 +851,21 @@ export class SwapExecutor extends EventEmitter {
     // ============ PUBLIC GETTERS ============
     getOpenPositions(): OpenPosition[] {
         return Array.from(this.openPositions.values());
+    }
+
+    hasPosition(tokenAddress: string): boolean {
+        return this.openPositions.has(tokenAddress.toLowerCase() as Address) ||
+               this.openPositions.has(tokenAddress as Address);
+    }
+
+    async sellAllPositions(): Promise<void> {
+        const addresses = Array.from(this.openPositions.keys());
+        for (const addr of addresses) {
+            try {
+                console.log(`🛑 Emergency sell: ${this.openPositions.get(addr)?.tokenSymbol ?? addr}`);
+                await this.sell(addr, 100);
+            } catch { /* continue selling others */ }
+        }
     }
 
     getWalletAddress(): Address {

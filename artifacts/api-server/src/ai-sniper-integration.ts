@@ -5,6 +5,9 @@ import { SwapExecutor } from './swap-executor';
 import { GeckoTokenScanner, type TokenOpportunity } from './gecko-token-scanner';
 import { checkSerialDeployer, getTokenDeployer } from './deployer-checker';
 import { getDeployerReputation } from './deployer-reputation';
+import { checkTokenSafety } from './token-safety';
+import { getActiveCorrelations } from './whale-correlator';
+import { runBacktest, type BacktestConfig } from './backtest-engine';
 import {
     runWhaleScan, approveCandidate, rejectCandidate, monitorCandidate,
     getPendingCandidates, getAllCandidates, simulateCopyTrade,
@@ -96,6 +99,11 @@ export class AISniperBot extends EventEmitter {
     private sentimentInterval: NodeJS.Timeout | null = null;
     private whaleAutoScanInterval: NodeJS.Timeout | null = null;
     private tgBot: TelegramBot | null = null;
+
+    private emergencyStopActive   = false;
+    private dailyReportTimer: NodeJS.Timeout | null = null;
+    private dailyReportInterval: NodeJS.Timeout | null = null;
+    private narrativeCache = new Map<string, { data: string; expiresAt: number }>();
 
     private runtimeConfig: RuntimeConfig = {
         totalCapital:            parseFloat(process.env.TOTAL_CAPITAL_ETH            || '0.006'),
@@ -406,6 +414,22 @@ export class AISniperBot extends EventEmitter {
                     `📊 Est. P&L: ${data.simulation.estimatedProfit}%\n` +
                     `⚠️ Risiko: ${data.simulation.estimatedRisk}\n` +
                     `📋 ${sanitizeTg(data.simulation.summary)}`
+                );
+            }
+        });
+
+        // ─── Feature 1: Auto-exit when whale exits ───
+        this.copyMonitor.on('whale-sell', async (data: { walletAddress: string; walletName: string; tokenAddress: string }) => {
+            const { tokenAddress, walletName } = data;
+            this.addLog('info', `🚨 ${walletName} menjual token`, tokenAddress.slice(0, 10) + '...');
+            if (this.executor?.hasPosition(tokenAddress)) {
+                this.addLog('info', `🔴 Auto-exit: whale ${walletName} keluar`, `Jual semua ${tokenAddress.slice(0, 10)}...`);
+                await this.executor.sell(tokenAddress as `0x${string}`, 100);
+                this.sendTelegram(
+                    `🚨 <b>Auto-Exit: Whale Keluar!</b>\n` +
+                    `Whale <b>${sanitizeTg(walletName)}</b> menjual token ini.\n` +
+                    `Token: <code>${tokenAddress}</code>\n` +
+                    `✅ Bot langsung jual semua posisi.`
                 );
             }
         });
@@ -887,6 +911,14 @@ export class AISniperBot extends EventEmitter {
                 if (!w.isActive) this.copyMonitor.toggleWallet(w.address, false);
             }
         }
+
+        // ── Feature 5: Set balance provider for dynamic copy sizing (6-10%) ──
+        if (this.executor) {
+            this.copyMonitor.setBalanceProvider(async () => {
+                const { eth } = await this.executor!.getBalance();
+                return parseFloat(eth);
+            });
+        }
         if (savedWallets.length > 0) {
             console.log(`💾 Loaded ${savedWallets.length} copy wallets from DB`);
         }
@@ -912,6 +944,10 @@ export class AISniperBot extends EventEmitter {
         whaleMonitor.start();
 
         setInterval(() => this.printPerformanceReport(), 3_600_000);
+
+        // ── Feature 10: Schedule daily P&L report ──
+        this.scheduleDailyReport();
+
         console.log('✅ AI SNIPER RUNNING\n');
     }
 
@@ -929,6 +965,8 @@ export class AISniperBot extends EventEmitter {
     async stop(): Promise<void> {
         if (this.sentimentInterval)      { clearInterval(this.sentimentInterval);      this.sentimentInterval = null; }
         if (this.whaleAutoScanInterval)  { clearInterval(this.whaleAutoScanInterval);  this.whaleAutoScanInterval = null; }
+        if (this.dailyReportTimer)       { clearTimeout(this.dailyReportTimer);        this.dailyReportTimer = null; }
+        if (this.dailyReportInterval)    { clearInterval(this.dailyReportInterval);    this.dailyReportInterval = null; }
         this.tgBot?.stop();
         this.scanner.disconnect();
         this.copyMonitor.stop();
@@ -1150,21 +1188,156 @@ export class AISniperBot extends EventEmitter {
         return analyzeWhale(address);
     }
 
+    // ============ FEATURE 9: EMERGENCY STOP ============
+    async emergencyStop(): Promise<{ stopped: boolean; positionsSold: number; message: string }> {
+        console.log('\n🚨🚨🚨 EMERGENCY STOP TRIGGERED 🚨🚨🚨');
+        this.emergencyStopActive = true;
+
+        if (this.sentimentInterval)     { clearInterval(this.sentimentInterval);     this.sentimentInterval = null; }
+        if (this.whaleAutoScanInterval) { clearInterval(this.whaleAutoScanInterval); this.whaleAutoScanInterval = null; }
+        this.scanner.disconnect();
+        this.copyMonitor.stop();
+        this.geckoScanner.stop();
+
+        const positions = this.executor?.getOpenPositions() ?? [];
+        let sold = 0;
+        if (this.executor && positions.length > 0) {
+            console.log(`🛑 Menjual ${positions.length} posisi terbuka...`);
+            await this.executor.sellAllPositions();
+            sold = positions.length;
+        }
+
+        const msg = `🚨 <b>EMERGENCY STOP DIAKTIFKAN!</b>\n\nSemua scanner dihentikan.\n${sold} posisi terbuka dijual.\n\n<i>Restart server untuk melanjutkan trading.</i>`;
+        this.addLog('info', '🚨 EMERGENCY STOP', `${sold} posisi dijual`);
+        await this.sendTelegram(msg);
+        return { stopped: true, positionsSold: sold, message: `Emergency stop berhasil. ${sold} posisi dijual.` };
+    }
+
+    isEmergencyStopped(): boolean { return this.emergencyStopActive; }
+
+    // ============ FEATURE 7: TOKEN NARRATIVE DETECTOR ============
+    async detectNarrative(tokenAddress: string, symbol: string, name: string): Promise<{
+        narrative: string; confidence: number; isHot: boolean; tags: string[];
+    }> {
+        const key    = tokenAddress.toLowerCase();
+        const cached = this.narrativeCache.get(key);
+        if (cached && cached.expiresAt > Date.now()) return JSON.parse(cached.data);
+
+        const prompt =
+            `Klasifikasikan token kripto berikut. Jawab JSON saja tanpa teks lain.\n` +
+            `Token: ${symbol} (${name})\n` +
+            `Pilih kategori: AI/ML, Gaming, DeFi/DEX, Meme, NFT, Social, Infrastructure, RWA, Unknown\n` +
+            `Format: {"narrative":"<kategori>","confidence":<0-100>,"isHot":<true/false>,"tags":["tag1"]}\n` +
+            `isHot=true jika sesuai narrative trending (AI agents, meme, Base ecosystem).`;
+
+        try {
+            const resp = await this.ai.query(prompt);
+            if (resp.success) {
+                const match = resp.content.match(/\{[\s\S]*?\}/);
+                if (match) {
+                    const parsed = JSON.parse(match[0]);
+                    this.narrativeCache.set(key, { data: JSON.stringify(parsed), expiresAt: Date.now() + 3_600_000 });
+                    return parsed;
+                }
+            }
+        } catch { /* fallback */ }
+
+        // Rule-based fallback
+        const upper = (symbol + ' ' + name).toUpperCase();
+        let narrative = 'Unknown'; let isHot = false; const tags: string[] = [];
+        if (/\bAI\b|GPT|AGENT|NEURAL|BOT\b|ML\b/.test(upper))                { narrative = 'AI/ML';         isHot = true; tags.push('AI');   }
+        else if (/PEPE|DOGE|SHIB|MEME|FROG|CAT|DOG|TRUMP|BASED/.test(upper)) { narrative = 'Meme';          isHot = true; tags.push('Meme'); }
+        else if (/SWAP|DEX|YIELD|FARM|LIQUID|STAKE/.test(upper))              { narrative = 'DeFi/DEX';     tags.push('DeFi'); }
+        else if (/GAME|PLAY|NFT|PIXEL|META/.test(upper))                      { narrative = 'Gaming';        tags.push('Gaming'); }
+        else if (/BASE|L2|CHAIN|BRIDGE/.test(upper))                          { narrative = 'Infrastructure'; tags.push('L2'); }
+        const result = { narrative, confidence: 55, isHot, tags };
+        this.narrativeCache.set(key, { data: JSON.stringify(result), expiresAt: Date.now() + 3_600_000 });
+        return result;
+    }
+
+    // ============ FEATURE 8: WHALE CORRELATION MAP ============
+    getWhaleCorrelations() { return getActiveCorrelations(); }
+
+    // ============ FEATURE 6: BACKTEST ============
+    async runBacktest(tokenAddress: string, timeframe: '1h' | '15m' = '1h', config: Partial<BacktestConfig> = {}) {
+        return runBacktest(tokenAddress, timeframe, config);
+    }
+
+    // ============ FEATURE 2: FULL TOKEN SAFETY CHECK ============
+    async checkFullTokenSafety(tokenAddress: string) {
+        return checkTokenSafety(tokenAddress);
+    }
+
+    // ============ FEATURE 10: DAILY P&L REPORT ============
+    async getDailyPnlReport(): Promise<string> {
+        const { trades, stats } = this.getTradeHistory();
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const todayTrades = trades.filter((t: any) => (t.closedAt ?? 0) >= todayStart.getTime());
+        const withPnl     = todayTrades.filter((t: any) => t.profitPct !== null && t.profitPct !== undefined);
+        const wins        = withPnl.filter((t: any) => (t.profitPct ?? 0) > 0).length;
+        const losses      = withPnl.length - wins;
+        const totalPnl    = withPnl.reduce((s: number, t: any) => s + (t.profitPct ?? 0), 0);
+        const best        = withPnl.length > 0 ? Math.max(...withPnl.map((t: any) => t.profitPct ?? 0)) : 0;
+        const worst       = withPnl.length > 0 ? Math.min(...withPnl.map((t: any) => t.profitPct ?? 0)) : 0;
+
+        let ethLine = '';
+        if (this.executor) {
+            try {
+                const { eth } = await this.executor.getBalance();
+                const usd     = parseFloat(eth) * await getEthPriceUsd();
+                ethLine = `💰 Saldo: ${parseFloat(eth).toFixed(5)} ETH (~$${usd.toFixed(2)})\n\n`;
+            } catch { /* silent */ }
+        }
+
+        const today = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+        return (
+            `📊 <b>Laporan P&L Harian — ${today}</b>\n\n` +
+            ethLine +
+            `📈 Trade Hari Ini: ${todayTrades.length}\n` +
+            `✅ Profit: ${wins} | ❌ Rugi: ${losses}\n` +
+            `💹 Total P&L: ${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(1)}%\n` +
+            (withPnl.length > 0 ? `🏆 Terbaik: +${best.toFixed(1)}% | 📉 Terburuk: ${worst.toFixed(1)}%\n` : '') +
+            `\n📅 Semua waktu: ${stats.total} trade | WR ${stats.winRate.toFixed(1)}%`
+        );
+    }
+
+    private scheduleDailyReport(): void {
+        const now      = new Date();
+        const midnight = new Date(now);
+        midnight.setHours(0, 0, 0, 0);
+        midnight.setDate(midnight.getDate() + 1);
+        const msLeft = midnight.getTime() - now.getTime();
+        console.log(`📅 Daily P&L report dijadwalkan pada tengah malam (${Math.round(msLeft / 60000)} menit lagi)`);
+        this.dailyReportTimer = setTimeout(() => {
+            this.sendDailyReport();
+            this.dailyReportInterval = setInterval(() => this.sendDailyReport(), 24 * 3_600_000);
+        }, msLeft);
+    }
+
+    private async sendDailyReport(): Promise<void> {
+        try {
+            const report = await this.getDailyPnlReport();
+            await this.sendTelegram(report);
+            this.addLog('info', '📊 Daily P&L report terkirim ke Telegram', '');
+        } catch (e: any) { console.error('Daily report error:', e?.message); }
+    }
+
     getStatus() {
         return {
-            connected:     this.scanner.isConnectedToBase(),
-            copyStats:     this.copyMonitor.getStats(),
-            config:        this.scanner.getConfig(),
-            aiStats:       this.ai.getStats(),
-            openPositions: this.executor?.getOpenPositions() ?? [],
-            wallet:        this.executor?.getWalletAddress() ?? null,
-            geckoScanner:  {
+            connected:       this.scanner.isConnectedToBase(),
+            copyStats:       this.copyMonitor.getStats(),
+            config:          this.scanner.getConfig(),
+            aiStats:         this.ai.getStats(),
+            openPositions:   this.executor?.getOpenPositions() ?? [],
+            wallet:          this.executor?.getWalletAddress() ?? null,
+            geckoScanner:    {
                 enabled:    this.runtimeConfig.geckoScannerEnabled,
                 seenTokens: this.geckoScanner.getSeenCount(),
             },
-            riskState:     this.riskManager.getState(),
-            pendingWhales: dbGetPendingWhales().length,
-            timestamp:     Date.now()
+            riskState:       this.riskManager.getState(),
+            pendingWhales:   dbGetPendingWhales().length,
+            emergencyStop:   this.emergencyStopActive,
+            timestamp:       Date.now()
         };
     }
 }

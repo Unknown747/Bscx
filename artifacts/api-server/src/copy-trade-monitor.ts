@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import axios from 'axios';
 import { getBestDexPair } from './price-oracle';
 import { simulateCopyTrade, type SimulationResult } from './whale-finder';
+import { recordWhaleBuy } from './whale-correlator';
 
 // ============ TYPES ============
 interface WalletTarget {
@@ -38,7 +39,10 @@ export class CopyTradeMonitor extends EventEmitter {
     private isScanning = false;
 
     private readonly CONFIG = {
-        COPY_INVEST_AMOUNT:          0.002,
+        COPY_INVEST_AMOUNT:          0.002,  // fallback if no balance provider
+        COPY_BALANCE_PCT:            0.08,   // 8% of balance (center of 6-10% safe range)
+        COPY_BALANCE_MIN_PCT:        0.06,   // minimum 6% of balance
+        COPY_BALANCE_MAX_PCT:        0.10,   // maximum 10% of balance
         COPY_DELAY_SECONDS:          2,
         MAX_COPY_PER_DAY:            10,
         MIN_WALLET_SCORE:            60,
@@ -46,13 +50,15 @@ export class CopyTradeMonitor extends EventEmitter {
         SCAN_INTERVAL_MS:            2000,
         MIN_WIN_RATE_TO_STAY_ACTIVE: 30,
         MIN_TRADES_BEFORE_SCORE:     5,
-        // Simulation gate: skip copy if estimated profit is too low
         MIN_SIM_PROFIT_PCT:          10,
         SIMULATION_ENABLED:          true,
     };
 
-    private dailyCopyCount = 0;
-    private lastResetDate  = new Date().toDateString();
+    private dailyCopyCount   = 0;
+    private lastResetDate    = new Date().toDateString();
+    private balanceProvider: (() => Promise<number>) | null = null;
+    // Track whale token holdings for auto-exit detection
+    private whaleHoldings = new Map<string, Set<string>>(); // walletAddr → Set<tokenAddr>
 
     constructor() {
         super();
@@ -88,6 +94,30 @@ export class CopyTradeMonitor extends EventEmitter {
         }, 60000);
     }
 
+    // ============ BALANCE PROVIDER (for dynamic copy sizing) ============
+    setBalanceProvider(fn: () => Promise<number>): void {
+        this.balanceProvider = fn;
+        console.log('💰 CopyTradeMonitor: balance provider set (dynamic sizing aktif)');
+    }
+
+    private async calculateCopyAmount(): Promise<number> {
+        if (!this.balanceProvider) return this.CONFIG.COPY_INVEST_AMOUNT;
+        try {
+            const balanceEth = await this.balanceProvider();
+            if (balanceEth <= 0) return this.CONFIG.COPY_INVEST_AMOUNT;
+            const target  = balanceEth * this.CONFIG.COPY_BALANCE_PCT;
+            const minAmt  = balanceEth * this.CONFIG.COPY_BALANCE_MIN_PCT;
+            const maxAmt  = balanceEth * this.CONFIG.COPY_BALANCE_MAX_PCT;
+            const amount  = Math.max(minAmt, Math.min(maxAmt, target));
+            // Never copy more than we can afford (keep 20% buffer for gas + other trades)
+            const safe    = Math.min(amount, balanceEth * 0.15);
+            console.log(`   💰 Copy size: ${safe.toFixed(5)} ETH (${(safe/balanceEth*100).toFixed(1)}% dari ${balanceEth.toFixed(5)} ETH)`);
+            return safe;
+        } catch {
+            return this.CONFIG.COPY_INVEST_AMOUNT;
+        }
+    }
+
     // ============ SCAN WALLET TRANSACTIONS ============
     private async scanWallets(): Promise<void> {
         if (this.isScanning) return;
@@ -99,9 +129,26 @@ export class CopyTradeMonitor extends EventEmitter {
             try {
                 const recentTxs = await this.getRecentTransactions(wallet.address);
                 const newBuys   = this.filterNewBuys(recentTxs, wallet);
+                const newSells  = this.filterNewSells(recentTxs, wallet);
 
                 for (const buy of newBuys) {
                     await this.processCopyOpportunity(buy, wallet);
+                }
+
+                // ── Auto-exit detection: whale sold → emit event ──
+                for (const sell of newSells) {
+                    const tokenAddress = this.extractTokenAddress(sell);
+                    if (!tokenAddress) continue;
+                    const holdings = this.whaleHoldings.get(wallet.address.toLowerCase());
+                    if (holdings?.has(tokenAddress.toLowerCase())) {
+                        console.log(`🚨 Whale ${wallet.name} menjual ${tokenAddress.slice(0, 10)}... — sinyal keluar!`);
+                        this.emit('whale-sell', {
+                            walletAddress: wallet.address,
+                            walletName:    wallet.name,
+                            tokenAddress,
+                        });
+                        holdings.delete(tokenAddress.toLowerCase());
+                    }
                 }
             } catch { /* silent fail per wallet */ }
         }
@@ -153,7 +200,34 @@ export class CopyTradeMonitor extends EventEmitter {
 
     private isBuyTransaction(tx: any): boolean {
         const input = tx.input || tx.data || '';
-        return input.startsWith('0x414bf389') || input.startsWith('0xbc651188');
+        const hasSig = input.startsWith('0x414bf389') || input.startsWith('0xbc651188');
+        // Buy = ETH sent to router (value > 0)
+        const ethValue = parseFloat(tx.value || '0') / 1e18;
+        return hasSig && ethValue > 0.000001;
+    }
+
+    private isSellTransaction(tx: any): boolean {
+        const input = tx.input || tx.data || '';
+        const hasSig = input.startsWith('0x414bf389') || input.startsWith('0xbc651188');
+        // Sell = no ETH sent (selling token for ETH)
+        const ethValue = parseFloat(tx.value || '0') / 1e18;
+        return hasSig && ethValue < 0.000001;
+    }
+
+    private filterNewSells(transactions: any[], wallet: WalletTarget): any[] {
+        const newSells = [];
+        const now      = Date.now();
+        for (const tx of transactions) {
+            if (!this.isSellTransaction(tx)) continue;
+            const txHash = tx.hash || tx.id;
+            const txTime = this.getTxTimestamp(tx);
+            if (this.recentTrades.has(`sell_${txHash}`)) continue;
+            if (txTime === 0) continue;
+            if (now - txTime > 60000) continue; // only recent sells (1 min)
+            newSells.push(tx);
+            this.recentTrades.set(`sell_${txHash}`, now);
+        }
+        return newSells;
     }
 
     private getTxTimestamp(tx: any): number {
@@ -223,11 +297,14 @@ export class CopyTradeMonitor extends EventEmitter {
             } catch { /* if simulation fails, proceed anyway */ }
         }
 
+        // ── Dynamic copy size (6-10% of balance) ──
+        const copyAmount = await this.calculateCopyAmount();
+
         console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log(`🐋 COPY TRADE TRIGGERED!`);
         console.log(`👤 From: ${wallet.name} (${wallet.address.slice(0, 10)}...)`);
         console.log(`🪙 Token: ${tokenInfo.symbol} (${tokenAddress.slice(0, 10)}...)`);
-        console.log(`💰 Amount: ${this.CONFIG.COPY_INVEST_AMOUNT} ETH`);
+        console.log(`💰 Amount: ${copyAmount.toFixed(5)} ETH (dynamic 6-10% saldo)`);
         if (simulation) console.log(`🔮 Sim: +${simulation.estimatedProfit}% est. | ${simulation.estimatedRisk} risk`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
@@ -235,12 +312,23 @@ export class CopyTradeMonitor extends EventEmitter {
         wallet.lastBuyToken = tokenAddress;
         this.dailyCopyCount++;
 
+        // ── Track holding for auto-exit detection ──
+        if (!this.whaleHoldings.has(wallet.address.toLowerCase())) {
+            this.whaleHoldings.set(wallet.address.toLowerCase(), new Set());
+        }
+        this.whaleHoldings.get(wallet.address.toLowerCase())!.add(tokenAddress.toLowerCase());
+
+        // ── Record in whale correlator ──
+        try {
+            recordWhaleBuy(wallet.address, wallet.name, tokenAddress, tokenInfo.symbol, copyAmount);
+        } catch { /* silent */ }
+
         this.emit('copy-opportunity', {
             walletAddress: wallet.address,
             walletName:    wallet.name,
             tokenAddress,
             tokenSymbol:   tokenInfo.symbol,
-            buyAmount:     this.CONFIG.COPY_INVEST_AMOUNT,
+            buyAmount:     copyAmount,
             timestamp:     Date.now(),
             txHash:        tx.hash || tx.id,
             simulation,
@@ -250,7 +338,7 @@ export class CopyTradeMonitor extends EventEmitter {
             this.emit('execute-copy', {
                 tokenAddress,
                 tokenSymbol:  tokenInfo.symbol,
-                amount:       this.CONFIG.COPY_INVEST_AMOUNT,
+                amount:       copyAmount,
                 sourceWallet: wallet.name,
                 simulation,
             });

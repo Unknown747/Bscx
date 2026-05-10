@@ -22,15 +22,16 @@ import type { AISniperBot } from './ai-sniper-integration';
 const POLL_TIMEOUT = 30;   // seconds for long-poll
 const HELP_TEXT =
     `🔥 <b>Base Sniper Bot Commands</b>\n\n` +
-    `/status      — Status scanner & posisi aktif\n` +
-    `/balance     — Cek saldo ETH wallet\n` +
-    `/candidates  — Whale kandidat yang menunggu\n` +
+    `/status        — Status scanner & posisi aktif\n` +
+    `/balance       — Cek saldo ETH wallet\n` +
+    `/candidates    — Whale kandidat yang menunggu\n` +
     `/approve &lt;addr&gt; — Setujui whale kandidat\n` +
     `/reject &lt;addr&gt;  — Tolak whale kandidat\n` +
-    `/positions   — Detail posisi yang sedang terbuka\n` +
-    `/history     — 5 trade terakhir + statistik\n` +
-    `/blacklist   — Daftar token yang diblacklist\n` +
-    `/help        — Tampilkan menu ini`;
+    `/positions     — Detail posisi yang sedang terbuka\n` +
+    `/history       — 5 trade terakhir + statistik\n` +
+    `/blacklist     — Daftar token yang diblacklist\n` +
+    `/dailyreport   — Laporan P&amp;L hari ini\n` +
+    `/help          — Tampilkan menu ini`;
 
 export class TelegramBot {
     private token:    string;
@@ -107,7 +108,8 @@ export class TelegramBot {
             case 'reject': await this.cmdReject(arg);        break;
             case 'positions': await this.cmdPositions();     break;
             case 'history':await this.cmdHistory();          break;
-            case 'blacklist': await this.cmdBlacklist();     break;
+            case 'blacklist':    await this.cmdBlacklist();    break;
+            case 'dailyreport':  await this.cmdDailyReport(); break;
             default:
                 await this.send(`❓ Perintah tidak dikenal: <code>${text}</code>\nKetik /help untuk daftar perintah.`);
         }
@@ -285,6 +287,15 @@ export class TelegramBot {
             `Total P&amp;L: ${stats.totalProfitPct >= 0 ? '+' : ''}${stats.totalProfitPct.toFixed(1)}%\n\n` +
             `<b>5 Trade Terakhir:</b>\n${tradeLines}`
         );
+    }
+
+    private async cmdDailyReport(): Promise<void> {
+        try {
+            const report = await this.bot.getDailyPnlReport();
+            await this.send(report);
+        } catch {
+            await this.send('❌ Gagal mengambil laporan P&L. Coba lagi nanti.');
+        }
     }
 
     private async cmdBlacklist(): Promise<void> {

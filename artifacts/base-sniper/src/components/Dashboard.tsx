@@ -79,6 +79,8 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const [showBlacklist, setShowBlacklist]         = useState(false);
     const [monitorCount, setMonitorCount]           = useState(0);
     const [saveStatus, setSaveStatus]           = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [emergencyLoading, setEmergencyLoading] = useState(false);
+    const [emergencyDone, setEmergencyDone]       = useState(false);
 
     const fetchData = useCallback(async () => {
         try {
@@ -150,6 +152,21 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
 
     const openCount = status?.openPositions?.length ?? 0;
     const currentCapital = config?.capital ? parseFloat(config.capital) : 0.006;
+
+    const handleEmergencyStop = useCallback(async () => {
+        if (!window.confirm('⚠️ EMERGENCY STOP: Ini akan menghentikan semua scanner dan menjual SEMUA posisi terbuka sekarang. Lanjutkan?')) return;
+        setEmergencyLoading(true);
+        try {
+            const res  = await authFetch(`${apiUrl}/api/emergency-stop`, { method: 'POST' });
+            const data = await res.json();
+            setEmergencyDone(true);
+            alert(`✅ ${data.message ?? 'Emergency stop berhasil'}`);
+        } catch {
+            alert('❌ Gagal mengirim emergency stop. Periksa koneksi ke server.');
+        } finally {
+            setEmergencyLoading(false);
+        }
+    }, [apiUrl]);
 
     return (
         <div className="min-h-screen bg-gray-950 flex flex-col">
@@ -227,8 +244,30 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         <span>⚙️</span>
                         <span>Atur</span>
                     </button>
+
+                    {/* Emergency Stop button */}
+                    <button
+                        onClick={handleEmergencyStop}
+                        disabled={emergencyLoading || emergencyDone || (status?.emergencyStop === true)}
+                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all font-semibold border
+                            ${emergencyDone || status?.emergencyStop
+                                ? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
+                                : 'bg-red-900/80 hover:bg-red-800 border-red-700 text-red-300 hover:text-white'
+                            }`}
+                        title="Hentikan semua scanner & jual semua posisi"
+                    >
+                        <span>{emergencyLoading ? '⏳' : emergencyDone || status?.emergencyStop ? '🔴' : '🚨'}</span>
+                        <span>{emergencyDone || status?.emergencyStop ? 'STOPPED' : 'STOP'}</span>
+                    </button>
                 </div>
             </div>
+
+            {/* Emergency stop active banner */}
+            {(emergencyDone || status?.emergencyStop) && (
+                <div className="mx-4 mb-2 bg-red-900/50 border border-red-700 rounded-xl px-4 py-2 text-sm text-red-300 text-center font-semibold">
+                    🚨 EMERGENCY STOP AKTIF — Restart server API untuk melanjutkan trading
+                </div>
+            )}
 
             {/* Save feedback banner */}
             {saveStatus === 'saved' && (

@@ -537,6 +537,79 @@ app.post('/api/whale/promote/:address', (req: Request, res: Response) => {
     res.json({ ok: true, message: 'Wallet berhasil dipromosikan ke copy wallet aktif!' });
 });
 
+// ============ FITUR BARU: EMERGENCY STOP, BACKTEST, CORRELATION, NARRATIVE, SAFETY ============
+
+// POST /api/emergency-stop — Feature 9: hentikan semua & jual semua posisi
+app.post('/api/emergency-stop', requireAuth, async (req: Request, res: Response) => {
+    try {
+        const result = await bot.emergencyStop();
+        res.json(result);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/backtest — Feature 6: jalankan backtest OHLCV GeckoTerminal
+app.post('/api/backtest', requireAuth, async (req: Request, res: Response) => {
+    const { tokenAddress, timeframe = '1h', config = {} } = req.body ?? {};
+    if (!tokenAddress || !tokenAddress.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'tokenAddress wajib diisi (format 0x...)' }); return;
+    }
+    try {
+        const result = await bot.runBacktest(tokenAddress, timeframe, config);
+        res.json(result);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/whale/correlation — Feature 8: correlation map aktif
+app.get('/api/whale/correlation', requireAuth, (_req: Request, res: Response) => {
+    try {
+        res.json({ correlations: bot.getWhaleCorrelations(), timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/narrative/check — Feature 7: token narrative detector
+app.post('/api/narrative/check', requireAuth, async (req: Request, res: Response) => {
+    const { tokenAddress, symbol = 'UNKNOWN', name = 'Unknown' } = req.body ?? {};
+    if (!tokenAddress || !tokenAddress.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'tokenAddress wajib diisi' }); return;
+    }
+    try {
+        const result = await bot.detectNarrative(tokenAddress, symbol, name);
+        res.json({ tokenAddress, ...result, timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/safety/:address — Feature 2: full token safety checker (GoPlus + Honeypot.is)
+app.get('/api/safety/:address', requireAuth, async (req: Request, res: Response) => {
+    const { address } = req.params;
+    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+    }
+    try {
+        const result = await bot.checkFullTokenSafety(address);
+        res.json(result);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/daily-report — Feature 10: ambil laporan P&L hari ini
+app.get('/api/daily-report', requireAuth, async (_req: Request, res: Response) => {
+    try {
+        const report = await bot.getDailyPnlReport();
+        res.json({ report, timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ============ START SERVER ============
 app.listen(PORT, () => {
     console.log(`🌐 API Server running on port ${PORT}`);
