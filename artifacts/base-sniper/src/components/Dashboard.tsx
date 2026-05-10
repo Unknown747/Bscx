@@ -10,6 +10,7 @@ import BlacklistModal from './BlacklistModal';
 import TradeHistory from './TradeHistory';
 import WhaleLeaderboard from './WhaleLeaderboard';
 import Backtest from './Backtest';
+import DailyReport from './DailyReport';
 import { authFetch } from '../lib/authFetch';
 
 interface Status {
@@ -52,7 +53,7 @@ interface Config {
     whaleAutoScanEnabled: boolean;
 }
 
-type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest';
+type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report';
 
 interface DashboardProps {
     apiUrl: string;
@@ -64,6 +65,7 @@ const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
     { id: 'positions', label: 'Posisi',    icon: '💼' },
     { id: 'log',       label: 'Log',       icon: '📋' },
     { id: 'history',   label: 'Histori',   icon: '📈' },
+    { id: 'report',    label: 'Laporan',   icon: '📉' },
     { id: 'backtest',  label: 'Backtest',  icon: '🔬' },
 ];
 
@@ -403,6 +405,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
 
                 {/* ─── HISTORY ─── */}
                 {activeTab === 'history' && <TradeHistory apiUrl={apiUrl} />}
+
+                {/* ─── LAPORAN P&L ─── */}
+                {activeTab === 'report' && <DailyReport apiUrl={apiUrl} />}
 
                 {/* ─── BACKTEST ─── */}
                 {activeTab === 'backtest' && <Backtest apiUrl={apiUrl} />}

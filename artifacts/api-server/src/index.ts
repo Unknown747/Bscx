@@ -631,11 +631,89 @@ app.get('/api/safety/:address', requireAuth, async (req: Request, res: Response)
     }
 });
 
-// GET /api/daily-report — Feature 10: ambil laporan P&L hari ini
+// GET /api/daily-report — Feature 10: ambil laporan P&L hari ini (text for Telegram)
 app.get('/api/daily-report', requireAuth, async (_req: Request, res: Response) => {
     try {
         const report = await bot.getDailyPnlReport();
         res.json({ report, timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/report — Structured JSON P&L report for dashboard (last 14 days breakdown)
+app.get('/api/report', requireAuth, async (_req: Request, res: Response) => {
+    try {
+        const { trades, stats } = bot.getTradeHistory();
+
+        // ── Today summary ─────────────────────────────────────────────────────
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const todayTs    = todayStart.getTime();
+        const todayTrades = trades.filter((t: any) => (t.closedAt ?? 0) >= todayTs);
+        const todayWithPnl = todayTrades.filter((t: any) => t.profitPct !== null && t.profitPct !== undefined);
+        const todayWins    = todayWithPnl.filter((t: any) => (t.profitPct ?? 0) > 0).length;
+        const todayLosses  = todayWithPnl.length - todayWins;
+        const todayPnl     = todayWithPnl.reduce((s: number, t: any) => s + (t.profitPct ?? 0), 0);
+        const todayBest    = todayWithPnl.length > 0 ? Math.max(...todayWithPnl.map((t: any) => t.profitPct ?? 0)) : null;
+        const todayWorst   = todayWithPnl.length > 0 ? Math.min(...todayWithPnl.map((t: any) => t.profitPct ?? 0)) : null;
+
+        // ── ETH balance ────────────────────────────────────────────────────────
+        let ethBalance: string | null = null;
+        let ethUsd: number | null = null;
+        try {
+            const portfolio = await bot.getPortfolio();
+            ethBalance = portfolio.ethBalance ?? null;
+            ethUsd     = portfolio.ethValueUsd ?? null;
+        } catch { /* silent */ }
+
+        // ── Daily breakdown (last 14 days) ────────────────────────────────────
+        const daily: { date: string; dateMs: number; trades: number; wins: number; losses: number; totalPnlPct: number; winRate: number }[] = [];
+        for (let d = 13; d >= 0; d--) {
+            const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0); dayStart.setDate(dayStart.getDate() - d);
+            const dayEnd   = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
+            const dayTs    = dayStart.getTime();
+            const dayEndTs = dayEnd.getTime();
+            const dayTrades  = trades.filter((t: any) => {
+                const ca = t.closedAt ?? 0;
+                return ca >= dayTs && ca < dayEndTs;
+            });
+            const dayWithPnl = dayTrades.filter((t: any) => t.profitPct !== null && t.profitPct !== undefined);
+            const dayWins    = dayWithPnl.filter((t: any) => (t.profitPct ?? 0) > 0).length;
+            const dayLosses  = dayWithPnl.length - dayWins;
+            const dayPnl     = dayWithPnl.reduce((s: number, t: any) => s + (t.profitPct ?? 0), 0);
+            const dayWr      = dayWithPnl.length > 0 ? (dayWins / dayWithPnl.length) * 100 : 0;
+            const label = dayStart.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+            daily.push({ date: label, dateMs: dayTs, trades: dayTrades.length, wins: dayWins, losses: dayLosses, totalPnlPct: parseFloat(dayPnl.toFixed(1)), winRate: parseFloat(dayWr.toFixed(1)) });
+        }
+
+        // ── Recent closed trades (last 15) ────────────────────────────────────
+        const recentTrades = trades.slice(0, 15);
+
+        res.json({
+            today: {
+                date:       todayStart.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
+                trades:     todayTrades.length,
+                wins:       todayWins,
+                losses:     todayLosses,
+                winRate:    todayWithPnl.length > 0 ? parseFloat(((todayWins / todayWithPnl.length) * 100).toFixed(1)) : 0,
+                totalPnlPct: parseFloat(todayPnl.toFixed(1)),
+                bestPct:    todayBest !== null ? parseFloat(todayBest.toFixed(1)) : null,
+                worstPct:   todayWorst !== null ? parseFloat(todayWorst.toFixed(1)) : null,
+                ethBalance, ethUsd,
+            },
+            daily,
+            allTime: {
+                total:       stats.total,
+                wins:        stats.wins,
+                losses:      stats.losses,
+                winRate:     parseFloat((stats.winRate ?? 0).toFixed(1)),
+                totalPnlPct: parseFloat((stats.totalProfitPct ?? 0).toFixed(1)),
+                bestTrade:   stats.bestTrade  ?? null,
+                worstTrade:  stats.worstTrade ?? null,
+            },
+            recentTrades,
+            timestamp: Date.now(),
+        });
     } catch (err: any) {
         res.status(500).json({ error: err.message });
     }
