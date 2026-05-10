@@ -311,9 +311,9 @@ Jika 2 terpenuhi → BUY confidence 50-70
 Jika 1 atau kurang → HOLD
 
 Respond JSON (WAJIB HANYA JSON):
-{"recommendation":"BUY|HOLD","confidence":0-100,"riskLevel":"LOW|MEDIUM|HIGH|CRITICAL","predictedProfit":0-200,"reasoning":"singkat"}
+{"recommendation":"BUY|HOLD|SKIP","confidence":0-100,"riskLevel":"LOW|MEDIUM|HIGH|CRITICAL","predictedProfit":0-200,"reasoning":"singkat"}
 
-JANGAN PERNAH output SKIP atau SELL untuk token baru.
+Gunakan SKIP jika token terlalu berisiko atau tidak memenuhi kriteria minimum.
 `;
 
         const response = await this.query(prompt, 'groq');

@@ -388,9 +388,22 @@ export class AISniperBot extends EventEmitter {
                 );
             }
 
+            const walletInfo = this.copyMonitor.getWallets().find(
+                w => w.address.toLowerCase() === opportunity.walletAddress.toLowerCase()
+            );
+            const walletStats = walletInfo
+                ? {
+                    totalTrades: walletInfo.copiedTrades,
+                    winRate:     walletInfo.winRate,
+                    avgHoldTime: 300,
+                    avgProfit:   walletInfo.copiedTrades > 0
+                        ? parseFloat((walletInfo.totalPnL / walletInfo.copiedTrades).toFixed(2))
+                        : 0,
+                  }
+                : { totalTrades: 0, winRate: 0, avgHoldTime: 300, avgProfit: 0 };
             const walletAnalysis = await this.ai.analyzeWallet(
                 opportunity.walletAddress,
-                { totalTrades: 50, winRate: 60, avgHoldTime: 300, avgProfit: 25 }
+                walletStats
             );
 
             if (walletAnalysis.shouldCopy && walletAnalysis.score > this.CONFIG.AUTO_COPY_SCORE_THRESHOLD) {

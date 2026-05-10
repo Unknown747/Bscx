@@ -166,7 +166,7 @@ export class CopyTradeMonitor extends EventEmitter {
         try {
             const response = await axios.get(
                 `https://base.blockscout.com/api/v2/addresses/${address}/transactions`,
-                { params: { filter: 'to', limit: 5 }, timeout: 5000 }
+                { params: { filter: 'from', limit: 10 }, timeout: 5000 }
             );
             return response.data?.items ?? [];
         } catch {
@@ -198,20 +198,47 @@ export class CopyTradeMonitor extends EventEmitter {
         return newBuys;
     }
 
+    private readonly WETH_BASE = '0x4200000000000000000000000000000000000006';
+
     private isBuyTransaction(tx: any): boolean {
         const input = tx.input || tx.data || '';
-        const hasSig = input.startsWith('0x414bf389') || input.startsWith('0xbc651188');
-        // Buy = ETH sent to router (value > 0)
         const ethValue = parseFloat(tx.value || '0') / 1e18;
-        return hasSig && ethValue > 0.000001;
+
+        // exactInputSingle (0x414bf389): decode tokenIn from ABI-encoded calldata
+        // calldata layout after 4-byte selector (8 hex chars):
+        //   tokenIn  (32 bytes = 64 hex) → chars 10-73, address in last 40 → chars 34-73
+        //   tokenOut (32 bytes = 64 hex) → chars 74-137, address in last 40 → chars 98-137
+        if (input.startsWith('0x414bf389') && input.length >= 138) {
+            if (ethValue > 0.000001) return true; // ETH → Token
+            const tokenIn = ('0x' + input.slice(34, 74)).toLowerCase();
+            return tokenIn === this.WETH_BASE; // WETH → Token (no ETH value)
+        }
+
+        // multicall (0xbc651188): heuristic — ETH value present means ETH-in buy
+        if (input.startsWith('0xbc651188')) {
+            return ethValue > 0.000001;
+        }
+
+        return false;
     }
 
     private isSellTransaction(tx: any): boolean {
         const input = tx.input || tx.data || '';
-        const hasSig = input.startsWith('0x414bf389') || input.startsWith('0xbc651188');
-        // Sell = no ETH sent (selling token for ETH)
         const ethValue = parseFloat(tx.value || '0') / 1e18;
-        return hasSig && ethValue < 0.000001;
+
+        // exactInputSingle: tokenIn must NOT be WETH and no ETH value (Token → ETH)
+        if (input.startsWith('0x414bf389') && input.length >= 138) {
+            if (ethValue > 0.000001) return false; // ETH-in = buy, not sell
+            const tokenIn = ('0x' + input.slice(34, 74)).toLowerCase();
+            return tokenIn !== this.WETH_BASE; // Token → WETH = sell
+        }
+
+        // multicall: no ETH value heuristic
+        if (input.startsWith('0xbc651188')) {
+            return ethValue < 0.000001;
+        }
+
+        return false;
     }
 
     private filterNewSells(transactions: any[], wallet: WalletTarget): any[] {
@@ -237,9 +264,23 @@ export class CopyTradeMonitor extends EventEmitter {
     }
 
     private extractTokenAddress(tx: any): string {
-        const data  = tx.input || tx.data || '';
-        const match = data.match(/0x[a-fA-F0-9]{40}/);
-        return match ? match[0] : '';
+        const input = tx.input || tx.data || '';
+
+        // exactInputSingle (0x414bf389): tokenOut at ABI offset 98-138
+        // layout: 0x(2) + selector(8) + tokenIn(64) + tokenOut(64)
+        // tokenOut = last 40 chars of the 64-char tokenOut slot → chars 98-137
+        if (input.startsWith('0x414bf389') && input.length >= 138) {
+            const tokenOut = '0x' + input.slice(98, 138);
+            if (tokenOut.length === 42) return tokenOut.toLowerCase();
+        }
+
+        // Fallback for multicall/other: find 32-byte padded addresses, skip first (tokenIn/WETH)
+        const matches = input.match(/000000000000000000000000([a-fA-F0-9]{40})/g);
+        if (matches && matches.length >= 2) {
+            return '0x' + matches[1].slice(24);
+        }
+
+        return '';
     }
 
     // ============ PROCESS COPY OPPORTUNITY ============

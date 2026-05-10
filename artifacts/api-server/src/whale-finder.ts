@@ -13,7 +13,7 @@
  */
 
 import axios from 'axios';
-import { getGeckoTrendingPools, getGeckoNewPools, getBestDexPair } from './price-oracle';
+import { getGeckoTrendingPools, getGeckoNewPools, getBestDexPair, getEthPriceUsd } from './price-oracle';
 import {
     initDb,
     dbUpsertWhale, dbGetWhale, dbGetPendingWhales, dbGetAllWhales,
@@ -81,6 +81,9 @@ initDb();
 // ─── Auto-scan cooldown (manual scans always bypass this) ────────────────────
 let lastAutoScanMs = 0;
 const AUTO_SCAN_COOLDOWN_MS = 15 * 60 * 1000;
+
+// ─── Live ETH price (updated before each scan) ───────────────────────────────
+let _ethPriceUsd = 3000;
 
 // ─── Scan filters ─────────────────────────────────────────────────────────────
 const FILTERS = {
@@ -206,8 +209,8 @@ function buildCandidate(
     const sellRatio        = totalBuys > 0 ? totalSells / totalBuys : 0;
     const estimatedWinRate = Math.round(Math.min(82, 50 + sellRatio * 25 + uniquePools * 2));
 
-    // Rough ETH volume (1 ETH ≈ $2000 used as conservative estimate)
-    const totalVolumeEth = parseFloat((totalVolumeUsd / 2000).toFixed(4));
+    // ETH volume using live price (updated before each scan)
+    const totalVolumeEth = parseFloat((totalVolumeUsd / _ethPriceUsd).toFixed(4));
 
     const avgProfitEst = Math.round(Math.max(5, (estimatedWinRate - 45) * 1.2));
 
@@ -245,6 +248,8 @@ export async function runWhaleScan(forceManual = false): Promise<WhaleCandidate[
     if (!forceManual) lastAutoScanMs = now;
 
     console.log(`\n🔍 [WhaleFinder] Starting ${forceManual ? 'MANUAL' : 'auto'} whale scan...`);
+    _ethPriceUsd = await getEthPriceUsd().catch(() => _ethPriceUsd);
+    console.log(`   💲 ETH price: $${_ethPriceUsd.toFixed(0)}`);
     const newCandidates: WhaleCandidate[] = [];
 
     try {
@@ -304,7 +309,7 @@ export async function runWhaleScan(forceManual = false): Promise<WhaleCandidate[
                     console.log(
                         `   🐋 FOUND: ${walletAddr.slice(0, 10)}... ` +
                         `score=${candidate.score} WR=${candidate.estimatedWinRate}% ` +
-                        `pools=${tradesByPool.size} vol=$${(candidate.totalVolumeEth * 2000).toFixed(0)}`
+                        `pools=${tradesByPool.size} vol=$${(candidate.totalVolumeEth * _ethPriceUsd).toFixed(0)}`
                     );
                 }
             } catch { /* skip individual wallet errors */ }
@@ -407,7 +412,7 @@ export async function simulateCopyTrade(
 export function formatWhaleTelegramMsg(candidate: WhaleCandidate, index: number): string {
     const daysSince = ((Date.now() - candidate.lastActiveMs) / 86_400_000).toFixed(1);
     const stars = candidate.score >= 80 ? '⭐⭐⭐' : candidate.score >= 60 ? '⭐⭐' : '⭐';
-    const volUsd = (candidate.totalVolumeEth * 2000).toFixed(0);
+    const volUsd = (candidate.totalVolumeEth * _ethPriceUsd).toFixed(0);
     return (
         `🐋 <b>Whale Kandidat #${index + 1}</b>\n` +
         `${stars} Skor: <b>${candidate.score}/100</b>\n\n` +

@@ -245,7 +245,25 @@ export class SwapExecutor extends EventEmitter {
             const bestFee = await this.getBestFeeTier(tokenAddress);
             console.log(`   ⛽ Using fee tier: ${bestFee / 10000}%`);
 
-            const amountOutMinimum = 0n;
+            // ── Slippage protection: compute minimum tokens out from live price ──
+            let amountOutMinimum = 0n;
+            try {
+                const pair = await getBestDexPair(tokenAddress);
+                if (pair) {
+                    const tokenPriceEth = parseFloat(pair.priceNative || '0');
+                    if (tokenPriceEth > 0) {
+                        const decimals      = await this.getTokenDecimals(tokenAddress);
+                        const expectedTokens = amountInEth / tokenPriceEth;
+                        const minTokens     = expectedTokens * (1 - slippagePercent / 100);
+                        const minFixed      = minTokens.toFixed(Math.min(decimals, 8));
+                        amountOutMinimum    = parseUnits(minFixed, decimals);
+                        console.log(`   🛡️ Slippage guard: min ${minTokens.toFixed(4)} tokens (${slippagePercent}% max slippage)`);
+                    }
+                }
+            } catch {
+                console.log(`   ⚠️ Tidak bisa hitung amountOutMinimum — buy tanpa proteksi slippage`);
+            }
+
             const gasPrice = await this.getGasPrice();
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
