@@ -5,6 +5,7 @@ import Portfolio from './Portfolio';
 import SettingsModal from './SettingsModal';
 import CopyWalletsModal from './CopyWalletsModal';
 import WalletMonitorPage from './WalletMonitorPage';
+import VettedWalletsPage from './VettedWalletsPage';
 import BlacklistModal from './BlacklistModal';
 import TradeHistory from './TradeHistory';
 import WhaleLeaderboard from './WhaleLeaderboard';
@@ -100,8 +101,10 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const { canInstall, install }               = usePwaInstall();
     const [showCopyWallets, setShowCopyWallets]     = useState(false);
     const [showMonitor, setShowMonitor]             = useState(false);
+    const [showVetted, setShowVetted]               = useState(false);
     const [showBlacklist, setShowBlacklist]         = useState(false);
     const [monitorCount, setMonitorCount]           = useState(0);
+    const [vettedCount, setVettedCount]             = useState(0);
     const [emergencyLoading, setEmergencyLoading] = useState(false);
     const [emergencyDone, setEmergencyDone]       = useState(false);
 
@@ -132,7 +135,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         try {
             const res  = await authFetch(`${apiUrl}/api/whale/monitored`);
             const data = await res.json();
-            setMonitorCount((data.wallets || []).length);
+            const ws   = data.wallets || [];
+            setMonitorCount(ws.length);
+            setVettedCount(ws.filter((w: any) => w.aiVerdict === 'approved').length);
         } catch { }
     }, [apiUrl]);
 
@@ -271,6 +276,19 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         {monitorCount > 0 && (
                             <span className="absolute -top-2.5 -right-2 bg-purple-500 text-white font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center leading-none" style={{fontSize:'10px'}}>
                                 {monitorCount > 99 ? '99+' : monitorCount}
+                            </span>
+                        )}
+                    </button>
+
+                    <button
+                        onClick={() => setShowVetted(true)}
+                        className="flex-shrink-0 relative flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-2 rounded-lg transition-all"
+                    >
+                        <span>🤖</span>
+                        <span>Vetted</span>
+                        {vettedCount > 0 && (
+                            <span className="absolute -top-2.5 -right-2 bg-green-500 text-white font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center leading-none" style={{fontSize:'10px'}}>
+                                {vettedCount > 99 ? '99+' : vettedCount}
                             </span>
                         )}
                     </button>
@@ -454,6 +472,12 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 <WalletMonitorPage
                     apiUrl={apiUrl}
                     onClose={() => { setShowMonitor(false); fetchMonitorCount(); }}
+                />
+            )}
+            {showVetted && (
+                <VettedWalletsPage
+                    apiUrl={apiUrl}
+                    onClose={() => { setShowVetted(false); fetchMonitorCount(); }}
                 />
             )}
         </div>

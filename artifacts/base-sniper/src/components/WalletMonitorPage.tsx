@@ -270,30 +270,11 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
                     <button onClick={onClose} className="text-gray-500 hover:text-white text-2xl leading-none transition-colors">&times;</button>
                 </div>
 
-                {/* ── Info banner ── */}
-                <div className={`mx-5 mt-4 rounded-xl p-3 border ${basescanEnabled ? 'bg-blue-900/20 border-blue-800/40' : 'bg-gray-800/40 border-gray-700/50'}`}>
-                    <div className="flex gap-2.5">
-                        <span className="text-lg flex-shrink-0">{basescanEnabled ? '🔗' : '🤖'}</span>
-                        <div className="text-xs leading-relaxed space-y-0.5">
-                            {basescanEnabled ? (
-                                <>
-                                    <p className="text-blue-200 font-semibold">Blockscout aktif — data langsung dari blockchain Base</p>
-                                    <p className="text-blue-300"><span className="text-white font-semibold">Tahap 1:</span> Kandidat disetujui → masuk Monitoring</p>
-                                    <p className="text-blue-300"><span className="text-white font-semibold">Tahap 2:</span> Semua ERC-20 tx on-chain dibaca tiap 10 menit via Blockscout</p>
-                                    <p className="text-blue-300"><span className="text-white font-semibold">Tahap 3:</span> Klik "Evaluasi AI" → lihat alasan → promosikan ke Copy</p>
-                                    <p className="text-green-400/80 pt-0.5">✅ Data lengkap & akurat: riwayat swap, realized PnL, frekuensi trading</p>
-                                </>
-                            ) : (
-                                <>
-                                    <p className="text-yellow-300 font-semibold">Mode GeckoTerminal — hanya mencakup pool trending</p>
-                                    <p className="text-gray-300"><span className="text-white font-semibold">Tahap 1:</span> Kandidat disetujui → masuk Monitoring</p>
-                                    <p className="text-gray-300"><span className="text-white font-semibold">Tahap 2:</span> Bot kumpulkan data: trade, win/loss, PnL (setiap 10 menit)</p>
-                                    <p className="text-gray-300"><span className="text-white font-semibold">Tahap 3:</span> Klik "Evaluasi AI" → lihat alasan → promosikan ke Copy</p>
-                                    <p className="text-blue-400/80 pt-0.5">ℹ️ Migrasi ke Blockscout sedang berlangsung secara otomatis</p>
-                                </>
-                            )}
-                        </div>
-                    </div>
+                {/* ── Compact status ── */}
+                <div className="mx-5 mt-3 flex items-center gap-2 text-xs text-gray-500">
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${basescanEnabled ? 'bg-blue-400' : 'bg-gray-600'}`} />
+                    <span>{basescanEnabled ? '🔗 Blockscout on-chain aktif' : '🦎 GeckoTerminal mode'}</span>
+                    <span className="ml-auto text-gray-600">Update tiap 10 mnt</span>
                 </div>
 
                 {/* ── Wallet list ── */}
@@ -360,9 +341,7 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
                                         />
                                     </div>
                                     {dScore < 40 && (
-                                        <p className="text-xs text-yellow-500/80 mt-1">
-                                            ⚠️ Data masih kurang — bot perlu lebih banyak waktu mengamati trade wallet ini
-                                        </p>
+                                        <p className="text-xs text-yellow-500/80 mt-1">⚠️ Data belum cukup</p>
                                     )}
                                 </div>
 

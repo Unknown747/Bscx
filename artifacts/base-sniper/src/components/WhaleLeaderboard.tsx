@@ -51,6 +51,7 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
     const [loading, setLoading]       = useState(true);
     const [lastUpdate, setLastUpdate] = useState('');
     const [detailAddr, setDetailAddr] = useState<{ address: string; name: string } | null>(null);
+    const [deleting, setDeleting]     = useState<string | null>(null);
 
     const fetchWallets = useCallback(async () => {
         try {
@@ -61,6 +62,17 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
         } catch { }
         setLoading(false);
     }, [apiUrl]);
+
+    const handleDelete = useCallback(async (e: React.MouseEvent, address: string, name: string) => {
+        e.stopPropagation();
+        if (!confirm(`Hapus "${name}" dari copy list?`)) return;
+        setDeleting(address);
+        try {
+            await authFetch(`${apiUrl}/api/wallets/${address}`, { method: 'DELETE' });
+            await fetchWallets();
+        } catch { }
+        setDeleting(null);
+    }, [apiUrl, fetchWallets]);
 
     useEffect(() => {
         fetchWallets();
@@ -196,7 +208,19 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
                                 <span className="text-xs text-gray-600 italic flex-shrink-0">Belum ada trade</span>
                             )}
 
-                            <span className="text-gray-700 text-xs flex-shrink-0">›</span>
+                            {/* Delete button */}
+                            <button
+                                onClick={e => handleDelete(e, w.address, w.name)}
+                                disabled={deleting === w.address}
+                                className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-gray-700 hover:text-red-400 hover:bg-red-900/20 transition-all disabled:opacity-40"
+                                title="Hapus"
+                            >
+                                {deleting === w.address ? (
+                                    <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+                                ) : (
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                )}
+                            </button>
                         </div>
                     );
                 })}

@@ -348,22 +348,23 @@ app.get('/api/keys', (_req: Request, res: Response) => {
 
 app.post('/api/keys', (req: Request, res: Response) => {
     const { privateKey, groqKey, geminiKey, huggingfaceKey, appPassword, telegramToken, telegramChatId,
-            baseWssUrl, baseHttpUrl, backupWssUrl, backupHttpUrl } = req.body;
+            baseWssUrl, baseHttpUrl, backupWssUrl, backupHttpUrl, basescanApiKey } = req.body;
     if (!privateKey && !groqKey && !geminiKey && !huggingfaceKey && !appPassword && !telegramToken && !telegramChatId
-        && !baseWssUrl && !baseHttpUrl && !backupWssUrl && !backupHttpUrl) {
+        && !baseWssUrl && !baseHttpUrl && !backupWssUrl && !backupHttpUrl && !basescanApiKey) {
         res.status(400).json({ error: 'Tidak ada kunci yang diberikan' }); return;
     }
-    if (privateKey)     process.env.PRIVATE_KEY         = privateKey;
-    if (groqKey)        process.env.GROQ_API_KEY         = groqKey;
-    if (geminiKey)      process.env.GEMINI_API_KEY       = geminiKey;
-    if (huggingfaceKey) process.env.HUGGINGFACE_API_KEY  = huggingfaceKey;
-    if (appPassword)    process.env.APP_PASSWORD         = appPassword;
-    if (telegramToken)  process.env.TELEGRAM_BOT_TOKEN  = telegramToken;
-    if (telegramChatId) process.env.TELEGRAM_CHAT_ID    = telegramChatId;
-    if (baseWssUrl)     process.env.BASE_WSS_URL         = baseWssUrl;
-    if (baseHttpUrl)    process.env.BASE_HTTP_URL        = baseHttpUrl;
-    if (backupWssUrl)   process.env.BACKUP_WSS_URL       = backupWssUrl;
-    if (backupHttpUrl)  process.env.BACKUP_HTTP_URL      = backupHttpUrl;
+    if (privateKey)      process.env.PRIVATE_KEY         = privateKey;
+    if (groqKey)         process.env.GROQ_API_KEY         = groqKey;
+    if (geminiKey)       process.env.GEMINI_API_KEY       = geminiKey;
+    if (huggingfaceKey)  process.env.HUGGINGFACE_API_KEY  = huggingfaceKey;
+    if (appPassword)     process.env.APP_PASSWORD         = appPassword;
+    if (telegramToken)   process.env.TELEGRAM_BOT_TOKEN  = telegramToken;
+    if (telegramChatId)  process.env.TELEGRAM_CHAT_ID    = telegramChatId;
+    if (baseWssUrl)      process.env.BASE_WSS_URL         = baseWssUrl;
+    if (baseHttpUrl)     process.env.BASE_HTTP_URL        = baseHttpUrl;
+    if (backupWssUrl)    process.env.BACKUP_WSS_URL       = backupWssUrl;
+    if (backupHttpUrl)   process.env.BACKUP_HTTP_URL      = backupHttpUrl;
+    if (basescanApiKey)  process.env.BASESCAN_API_KEY     = basescanApiKey;
     bot.updateKeys({ privateKey, groqKey, geminiKey, huggingfaceKey, telegramToken, telegramChatId });
     res.json({ ok: true, status: bot.getKeyStatus() });
 });

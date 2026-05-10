@@ -58,6 +58,9 @@ interface KeyStatus {
     appPassword: boolean;
     telegramToken: boolean;
     telegramChatId: boolean;
+    backupHttpUrl?: boolean;
+    backupWssUrl?: boolean;
+    basescanApiKey?: boolean;
 }
 
 interface FieldState { value: string; show: boolean }
@@ -244,6 +247,10 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
     const [tgToken,        setTgt]  = useState<FieldState>(EMPTY);
     const [tgChat,         setTgc]  = useState<FieldState>(EMPTY);
     const [tgTest, setTgTest]       = useState<'idle' | 'sending' | 'ok' | 'error'>('idle');
+    // RPC & BaseScan
+    const [backupHttpRpc,  setBhr]  = useState<FieldState>(EMPTY);
+    const [backupWssRpc,   setBwr]  = useState<FieldState>(EMPTY);
+    const [basescanKey,    setBsk]  = useState<FieldState>(EMPTY);
 
     // Gas calc
     const gasCost = ((s.maxFeePerGas * 150000) / 1e9);
@@ -297,13 +304,16 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
 
     const saveKeys = useCallback(async () => {
         const payload: Record<string, string> = {};
-        if (privateKey.value.trim())  payload.privateKey     = privateKey.value.trim();
-        if (groqKey.value.trim())     payload.groqKey        = groqKey.value.trim();
-        if (geminiKey.value.trim())   payload.geminiKey      = geminiKey.value.trim();
-        if (hfKey.value.trim())       payload.huggingfaceKey = hfKey.value.trim();
-        if (appPw.value.trim())       payload.appPassword    = appPw.value.trim();
-        if (tgToken.value.trim())     payload.telegramToken  = tgToken.value.trim();
-        if (tgChat.value.trim())      payload.telegramChatId = tgChat.value.trim();
+        if (privateKey.value.trim())     payload.privateKey     = privateKey.value.trim();
+        if (groqKey.value.trim())        payload.groqKey        = groqKey.value.trim();
+        if (geminiKey.value.trim())      payload.geminiKey      = geminiKey.value.trim();
+        if (hfKey.value.trim())          payload.huggingfaceKey = hfKey.value.trim();
+        if (appPw.value.trim())          payload.appPassword    = appPw.value.trim();
+        if (tgToken.value.trim())        payload.telegramToken  = tgToken.value.trim();
+        if (tgChat.value.trim())         payload.telegramChatId = tgChat.value.trim();
+        if (backupHttpRpc.value.trim())  payload.backupHttpUrl  = backupHttpRpc.value.trim();
+        if (backupWssRpc.value.trim())   payload.backupWssUrl   = backupWssRpc.value.trim();
+        if (basescanKey.value.trim())    payload.basescanApiKey = basescanKey.value.trim();
         if (!Object.keys(payload).length) return;
         setSave('saving');
         try {
@@ -311,8 +321,8 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
             });
             if (!res.ok) throw new Error('Server error');
-            setSave('saved'); setSaveMsg('API Keys disimpan');
-            [setPk, setGk, setGem, setHf, setApw, setTgt, setTgc].forEach(fn => fn(EMPTY));
+            setSave('saved'); setSaveMsg('Disimpan');
+            [setPk, setGk, setGem, setHf, setApw, setTgt, setTgc, setBhr, setBwr, setBsk].forEach(fn => fn(EMPTY));
             const updated = await authFetch(`${apiUrl}/api/keys`).then(r => r.json());
             setKeyStatus(updated);
             setTimeout(() => setSave('idle'), 2500);
@@ -320,7 +330,7 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
             setSave('error'); setSaveMsg(e.message || 'Gagal');
             setTimeout(() => setSave('idle'), 3000);
         }
-    }, [apiUrl, privateKey, groqKey, geminiKey, hfKey, appPw, tgToken, tgChat]);
+    }, [apiUrl, privateKey, groqKey, geminiKey, hfKey, appPw, tgToken, tgChat, backupHttpRpc, backupWssRpc, basescanKey]);
 
     const handleSave = tab === 'keys' ? saveKeys : saveSettings;
 
@@ -639,6 +649,20 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
             <Section title="🔐 Keamanan Dashboard">
                 <KeyField label="Password Dashboard" hint="Password login ke dashboard ini"
                     ph="Password baru..." state={appPw} setState={setApw} isSet={keyStatus?.appPassword} mono={false} />
+            </Section>
+
+            <Section title="🔗 Backup RPC">
+                <p className="text-xs text-gray-500 mb-3">RPC bawaan sistem tetap diutamakan. Backup hanya dipakai jika primary gagal. Infura/Alchemy punya limit harian.</p>
+                <KeyField label="Backup HTTP RPC" hint="https://mainnet.base.org / https://...infura.io/v3/KEY"
+                    ph="https://..." state={backupHttpRpc} setState={setBhr} isSet={keyStatus?.backupHttpUrl} />
+                <KeyField label="Backup WSS RPC" hint="wss://... (untuk scanner Flashblocks)"
+                    ph="wss://..." state={backupWssRpc} setState={setBwr} isSet={keyStatus?.backupWssUrl} />
+            </Section>
+
+            <Section title="🔍 BaseScan API">
+                <p className="text-xs text-gray-500 mb-3">Opsional. Daftar gratis di basescan.org/myapikey. Sistem sudah pakai Blockscout (gratis, tanpa key).</p>
+                <KeyField label="BaseScan API Key" hint="basescan.org/myapikey"
+                    ph="YourBaseScanApiKey..." state={basescanKey} setState={setBsk} isSet={keyStatus?.basescanApiKey} />
             </Section>
         </div>
     );
