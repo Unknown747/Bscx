@@ -53,14 +53,24 @@ export class WhaleMonitorService {
         console.log(`🔬 [Monitor] Polling ${monitored.length} wallets...`);
 
         try {
+            // Strategy 1: Try direct per-wallet trade lookup via GeckoTerminal
+            for (const wallet of monitored) {
+                await this.fetchWalletTradesDirect(wallet.address.toLowerCase(), addressSet);
+                await delay(300);
+            }
+
+            // Strategy 2: Scan top trending pools (broader net — top 30)
             const pools = await getGeckoTrendingPools().catch(() => []);
-            const top   = pools.slice(0, 12);
+            const top   = pools.slice(0, 30);
 
             for (const pool of top) {
                 if (!pool.pairAddress) continue;
                 await this.fetchTrades(pool.pairAddress, addressSet);
-                await delay(400);
+                await delay(300);
             }
+
+            // Strategy 3: Also scan recent new pools (whales often trade new launches)
+            await this.fetchNewPoolTrades(addressSet);
 
             for (const wallet of monitored) {
                 this.updateStats(wallet);
@@ -68,6 +78,56 @@ export class WhaleMonitorService {
         } catch (err: any) {
             console.warn(`[Monitor] Poll error: ${err.message}`);
         }
+    }
+
+    // Attempt direct lookup of a wallet's recent trades via GeckoTerminal
+    private async fetchWalletTradesDirect(walletAddress: string, addressSet: Set<string>): Promise<void> {
+        try {
+            // GeckoTerminal doesn't have a wallet endpoint, but we can query
+            // its trades with address filter across Base network
+            const res = await axios.get(
+                `${GECKO_BASE}/networks/base/addresses/${walletAddress}/transactions`,
+                { headers: GECKO_HEADERS, params: { page: 1 }, timeout: 8000 }
+            );
+            for (const t of (res.data?.data ?? []) as any[]) {
+                const a      = t.attributes ?? {};
+                const wallet = (a.tx_from_address ?? a.from_address ?? '').toLowerCase();
+                if (!wallet || !addressSet.has(wallet)) continue;
+
+                const kind:    'buy' | 'sell' = a.kind === 'buy' ? 'buy' : 'sell';
+                const priceUsd  = parseFloat(a.price_in_usd  ?? a.price_usd  ?? '0');
+                const volumeUsd = parseFloat(a.volume_in_usd ?? a.volume_usd ?? '0');
+                const tsMs      = a.block_timestamp ? new Date(a.block_timestamp).getTime() : Date.now();
+                const poolAddr  = a.pool_address ?? a.pair_address ?? 'unknown';
+
+                const txKey = `${wallet}-${poolAddr}-${tsMs}-${kind}`;
+                if (seenTxKeys.has(txKey)) continue;
+                seenTxKeys.add(txKey);
+
+                if (!walletHistory.has(wallet)) walletHistory.set(wallet, { buys: [], sells: [] });
+                const hist = walletHistory.get(wallet)!;
+                const rec: TradeRecord = { walletAddress: wallet, poolAddress: poolAddr, kind, priceUsd, volumeUsd, timestampMs: tsMs };
+                if (kind === 'buy') hist.buys.push(rec); else hist.sells.push(rec);
+            }
+        } catch { /* endpoint may not exist — silent */ }
+    }
+
+    // Scan recently created Base pools where whales often trade early
+    private async fetchNewPoolTrades(addressSet: Set<string>): Promise<void> {
+        try {
+            const res = await axios.get(`${GECKO_BASE}/networks/base/new_pools`, {
+                headers: GECKO_HEADERS,
+                params:  { page: 1 },
+                timeout: 8000,
+            });
+            const pools: any[] = res.data?.data ?? [];
+            for (const pool of pools.slice(0, 10)) {
+                const addr = pool.attributes?.address ?? pool.id?.split('_')[1];
+                if (!addr) continue;
+                await this.fetchTrades(addr, addressSet);
+                await delay(250);
+            }
+        } catch { /* silent */ }
     }
 
     private async fetchTrades(poolAddress: string, addressSet: Set<string>): Promise<void> {

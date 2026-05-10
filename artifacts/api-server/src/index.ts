@@ -605,6 +605,19 @@ app.post('/api/whale/promote/:address', (req: Request, res: Response) => {
     res.json({ ok: true, message: 'Wallet berhasil dipromosikan ke copy wallet aktif!' });
 });
 
+// POST /api/whale/force-promote/:address — manual override: promote regardless of AI verdict
+app.post('/api/whale/force-promote/:address', requireAuth, (req: Request, res: Response) => {
+    const { address } = req.params;
+    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+    }
+    const ok = bot.forcePromoteWallet(address);
+    if (!ok) {
+        res.status(404).json({ error: 'Wallet tidak ditemukan di monitoring' }); return;
+    }
+    res.json({ ok: true, message: 'Wallet dipromosikan secara manual ke copy wallet aktif!' });
+});
+
 // ============ FITUR BARU: EMERGENCY STOP, BACKTEST, CORRELATION, NARRATIVE, SAFETY ============
 
 // POST /api/emergency-stop — Feature 9: hentikan semua & jual semua posisi

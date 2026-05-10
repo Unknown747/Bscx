@@ -958,25 +958,97 @@ export class AISniperBot extends EventEmitter {
         this.addLog('info', `🔬 Wallet dihapus dari Monitoring`, address);
     }
 
-    async evaluateMonitoredWallet(address: string): Promise<{ verdict: 'approved' | 'rejected'; score: number; reason: string }> {
+    async evaluateMonitoredWallet(address: string): Promise<{
+        verdict: 'approved' | 'rejected' | 'pending';
+        score: number;
+        reason: string;
+        needsMoreData: boolean;
+        breakdown: { label: string; pass: boolean | null; value: string; threshold: string }[];
+    }> {
         const wallet = dbGetMonitoredWallet(address.toLowerCase());
         if (!wallet) throw new Error('Wallet tidak ditemukan di monitoring');
 
         const totalPairs  = wallet.winsObserved + wallet.lossesObserved;
         const winRate     = totalPairs > 0 ? Math.round((wallet.winsObserved / totalPairs) * 100) : 0;
-        const monitorDays = ((Date.now() - wallet.monitoredSince) / 86_400_000).toFixed(1);
+        const monitorDays = (Date.now() - wallet.monitoredSince) / 86_400_000;
+        const monitorDaysFmt = monitorDays.toFixed(1);
+
+        // ── Build criteria breakdown ───────────────────────────────────────────
+        const breakdown: { label: string; pass: boolean | null; value: string; threshold: string }[] = [
+            {
+                label:     'Win Rate',
+                pass:      totalPairs > 0 ? winRate >= 50 : null,
+                value:     totalPairs > 0 ? `${winRate}%` : 'Belum ada data',
+                threshold: '≥ 50%',
+            },
+            {
+                label:     'PnL Rata-rata',
+                pass:      totalPairs > 0 ? wallet.totalPnlPct > 0 : null,
+                value:     totalPairs > 0
+                    ? `${wallet.totalPnlPct >= 0 ? '+' : ''}${wallet.totalPnlPct.toFixed(1)}%`
+                    : 'Belum ada data',
+                threshold: '> 0%',
+            },
+            {
+                label:     'Frekuensi Trading',
+                pass:      wallet.tradesPerDay >= 0.3,
+                value:     wallet.tradesPerDay > 0 ? `${wallet.tradesPerDay} trade/hari` : 'Tidak aktif',
+                threshold: '≥ 0.3 trade/hari',
+            },
+            {
+                label:     'Pasang Buy-Sell',
+                pass:      totalPairs >= 3,
+                value:     `${totalPairs} pasang`,
+                threshold: '≥ 3 pasang',
+            },
+            {
+                label:     'Durasi Monitoring',
+                pass:      monitorDays >= 0.5,
+                value:     `${monitorDaysFmt} hari`,
+                threshold: '≥ 0.5 hari (12 jam)',
+            },
+        ];
+
+        // ── Data sufficiency check ─────────────────────────────────────────────
+        // Don't evaluate yet if we haven't seen enough activity
+        const hasEnoughData = totalPairs >= 3 || (wallet.tradesObserved >= 5 && monitorDays >= 1);
+        if (!hasEnoughData) {
+            const missingPairs = Math.max(0, 3 - totalPairs);
+            const reason =
+                `Data monitoring belum cukup untuk memberi verdict yang adil.\n` +
+                `Saat ini baru ${totalPairs} pasang buy-sell terobservasi (butuh minimal 3). ` +
+                `Sudah dimonitor ${monitorDaysFmt} hari.\n\n` +
+                `Kemungkinan penyebab: wallet ini tidak aktif di pool-pool trending yang dipantau bot, ` +
+                `atau wallet memang jarang trading. Terus tunggu atau gunakan "Paksa Promosikan" jika Anda percaya wallet ini.`;
+
+            // Store pending reason in DB (verdict stays 'pending')
+            dbSetMonitoredVerdict(address, 'pending', 0, reason);
+            this.addLog('info', `🔬 Evaluasi: data belum cukup ${address.slice(0, 10)}… (${totalPairs} pasang, butuh 3)`, '');
+            return { verdict: 'pending', score: 0, reason, needsMoreData: true, breakdown };
+        }
+
+        // ── AI evaluation ──────────────────────────────────────────────────────
+        const failedCriteria = breakdown.filter(c => c.pass === false).map(c => c.label);
+        const passedCriteria = breakdown.filter(c => c.pass === true).map(c => c.label);
 
         const prompt =
-            `Evaluasi wallet crypto untuk copy trade. Berikan JSON saja tanpa penjelasan lain.\n` +
-            `Wallet: ${address}\n` +
-            `Dimonitor: ${monitorDays} hari\n` +
-            `Trade terobservasi: ${wallet.tradesObserved}\n` +
-            `Pasang buy-sell tercatat: ${totalPairs} (${wallet.winsObserved} profit, ${wallet.lossesObserved} rugi)\n` +
-            `Win rate aktual: ${winRate}%\n` +
-            `Rata-rata PnL: ${wallet.totalPnlPct >= 0 ? '+' : ''}${wallet.totalPnlPct.toFixed(1)}%\n` +
-            `Trade per hari: ${wallet.tradesPerDay}\n\n` +
-            `Format respons: {"verdict":"APPROVE","score":75,"reason":"penjelasan singkat bahasa Indonesia"}\n` +
-            `Kriteria APPROVE: win rate ≥50%, PnL positif, aktif trading, data cukup valid.`;
+            `Kamu adalah evaluator wallet crypto untuk copy trading. Jawab dengan JSON saja.\n\n` +
+            `WALLET: ${address}\n` +
+            `Durasi monitoring: ${monitorDaysFmt} hari\n` +
+            `Trade terobservasi: ${wallet.tradesObserved} transaksi\n` +
+            `Pasang buy-sell: ${totalPairs} (${wallet.winsObserved} profit, ${wallet.lossesObserved} rugi)\n` +
+            `Win rate aktual: ${totalPairs > 0 ? winRate + '%' : 'N/A'}\n` +
+            `PnL rata-rata: ${totalPairs > 0 ? (wallet.totalPnlPct >= 0 ? '+' : '') + wallet.totalPnlPct.toFixed(1) + '%' : 'N/A'}\n` +
+            `Frekuensi: ${wallet.tradesPerDay} trade/hari\n\n` +
+            `Kriteria LULUS: ${passedCriteria.join(', ') || 'belum ada'}\n` +
+            `Kriteria GAGAL: ${failedCriteria.join(', ') || 'semua lulus'}\n\n` +
+            `Kriteria APPROVE:\n` +
+            `- Win rate ≥ 50% (dari pasang buy-sell yang terekam)\n` +
+            `- PnL rata-rata positif\n` +
+            `- Minimal 3 pasang buy-sell terobservasi\n` +
+            `CATATAN PENTING: Data GeckoTerminal terbatas hanya dari pool trending. ` +
+            `Jika data minim, pertimbangkan untuk APPROVE dengan catatan "data terbatas" daripada langsung REJECT.\n\n` +
+            `Format respons JSON: {"verdict":"APPROVE","score":75,"reason":"penjelasan singkat 1-2 kalimat bahasa Indonesia, sebutkan metrik spesifik"}`;
 
         try {
             const response = await this.ai.query(prompt);
@@ -984,30 +1056,56 @@ export class AISniperBot extends EventEmitter {
                 const jsonMatch = response.content.match(/\{[\s\S]*?\}/);
                 if (jsonMatch) {
                     const parsed  = JSON.parse(jsonMatch[0]);
-                    const verdict = parsed.verdict === 'APPROVE' ? 'approved' : 'rejected';
+                    const verdict = parsed.verdict?.toUpperCase() === 'APPROVE' ? 'approved' : 'rejected';
                     const score   = Math.max(0, Math.min(100, parseInt(parsed.score) || 50));
                     const reason  = parsed.reason || 'Evaluasi AI selesai';
                     dbSetMonitoredVerdict(address, verdict, score, reason);
-                    this.addLog('info', `🤖 AI evaluasi: ${verdict === 'approved' ? 'SETUJUI' : 'TOLAK'} ${address.slice(0, 10)}…`, reason);
-                    return { verdict, score, reason };
+                    this.addLog('info', `🤖 AI evaluasi: ${verdict === 'approved' ? 'SETUJUI ✅' : 'TOLAK ❌'} ${address.slice(0, 10)}…`, reason);
+                    return { verdict, score, reason, needsMoreData: false, breakdown };
                 }
             }
-        } catch { /* fall through */ }
+        } catch { /* fall through to rule-based */ }
 
-        // Rule-based fallback
-        const score   = Math.round(Math.min(100,
-            (winRate * 0.5) +
+        // ── Rule-based fallback ────────────────────────────────────────────────
+        const score = Math.round(Math.min(100,
+            (totalPairs > 0 ? winRate * 0.45 : 0) +
             (wallet.totalPnlPct > 0 ? Math.min(25, wallet.totalPnlPct) : 0) +
-            (wallet.tradesPerDay >= 1 ? 15 : 5) +
-            (totalPairs >= 3 ? 10 : 0)
+            (wallet.tradesPerDay >= 1 ? 15 : wallet.tradesPerDay >= 0.3 ? 8 : 0) +
+            (totalPairs >= 3 ? 10 : totalPairs >= 1 ? 5 : 0) +
+            (monitorDays >= 1 ? 5 : 0)
         ));
-        const verdict = score >= 50 && winRate >= 40 ? 'approved' : 'rejected';
-        const reason  = verdict === 'approved'
-            ? `Win rate ${winRate}%, PnL rata-rata ${wallet.totalPnlPct >= 0 ? '+' : ''}${wallet.totalPnlPct.toFixed(1)}%, ${wallet.tradesPerDay} trade/hari. Layak dicopy.`
-            : `Win rate ${winRate}% belum cukup atau data trade terbatas (${wallet.tradesObserved} terobservasi). Terus monitor.`;
+        const verdict: 'approved' | 'rejected' = score >= 50 && winRate >= 40 ? 'approved' : 'rejected';
+
+        // Build detailed reason listing each criterion's result
+        const criteriaLines = breakdown.map(c =>
+            `${c.pass === true ? '✅' : c.pass === false ? '❌' : '⏳'} ${c.label}: ${c.value} (target ${c.threshold})`
+        ).join('\n');
+        const reason = verdict === 'approved'
+            ? `Skor ${score}/100 — memenuhi kriteria minimum untuk copy trading.\n${criteriaLines}`
+            : `Skor ${score}/100 — belum memenuhi kriteria. Kriteria gagal: ${failedCriteria.join(', ') || 'tidak ada'}.\n${criteriaLines}`;
+
         dbSetMonitoredVerdict(address, verdict, score, reason);
-        this.addLog('info', `🤖 Evaluasi rule-based: ${verdict === 'approved' ? 'SETUJUI' : 'TOLAK'} ${address.slice(0, 10)}…`, reason);
-        return { verdict, score, reason };
+        this.addLog('info', `🤖 Evaluasi rule-based: ${verdict === 'approved' ? 'SETUJUI ✅' : 'TOLAK ❌'} ${address.slice(0, 10)}…`, `Skor: ${score}/100`);
+        return { verdict, score, reason, needsMoreData: false, breakdown };
+    }
+
+    forcePromoteWallet(address: string): boolean {
+        const wallet = dbGetMonitoredWallet(address.toLowerCase());
+        if (!wallet) return false;
+        // Override: set verdict to approved, then promote
+        dbSetMonitoredVerdict(address, 'approved', 0, 'Dipromosikan secara manual oleh pengguna (override AI)');
+        dbApproveWhale(address);
+        dbAddCopyWallet(address, wallet.name);
+        this.copyMonitor.addWallet(address, wallet.name, false);
+        dbRemoveMonitoredWallet(address);
+        this.addLog('info', `🚀 Whale dipaksa promosi (override) ke Copy!`, `${wallet.name}`);
+        dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'approved', recordedAt: Date.now() });
+        pushWhalePromoted(address, wallet.name);
+        this.sendTelegram(
+            `🚀 <b>Whale Dipromosikan Manual!</b>\n<code>${address}</code>\n` +
+            `Override oleh pengguna — aktif di-copy sekarang.`
+        );
+        return true;
     }
 
     promoteToActiveCopy(address: string): boolean {

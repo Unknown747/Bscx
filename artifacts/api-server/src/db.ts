@@ -429,7 +429,7 @@ export function dbUpdateMonitoredStats(address: string, stats: {
     db.prepare(`UPDATE monitored_wallets SET ${sets.join(', ')} WHERE address = ?`).run(...values);
 }
 
-export function dbSetMonitoredVerdict(address: string, verdict: 'approved' | 'rejected', score: number, reason: string): void {
+export function dbSetMonitoredVerdict(address: string, verdict: 'pending' | 'approved' | 'rejected', score: number, reason: string): void {
     db.prepare(`
         UPDATE monitored_wallets SET ai_verdict = ?, ai_score = ?, ai_reason = ? WHERE address = ?
     `).run(verdict, score, reason, address.toLowerCase());
