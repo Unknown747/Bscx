@@ -182,7 +182,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
                         className="text-xs text-green-500 hover:text-green-400 transition-colors px-2 py-0.5 rounded border border-green-900 hover:border-green-700">
                         ↻ Refresh
                     </button>
-                    <span className="text-xs text-gray-600">auto {nextRefresh}d</span>
+                    <span className="text-xs text-gray-600">auto {nextRefresh}s</span>
                 </div>
             </div>
 

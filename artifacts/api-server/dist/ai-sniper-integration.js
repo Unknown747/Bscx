@@ -431,6 +431,45 @@ class AISniperBot extends events_1.EventEmitter {
             console.log(`\n📡 [SmartScreener] ${signal.signal} — ${signal.tokenSymbol} (score: ${signal.score.total})`);
             // Always log the screener signal so the dashboard shows activity even without a wallet
             this.addLog('info', `📡 Screener: ${signal.signal} — ${signal.tokenSymbol}`, `score:${signal.score.total} liq:$${Math.round(signal.liquidityUsd).toLocaleString()} 1h:${signal.priceChangeH1 >= 0 ? '+' : ''}${signal.priceChangeH1.toFixed(1)}% addr:${signal.tokenAddress}`);
+            // ── Optimization 4: Volume velocity filter ──────────────────────────
+            // Skip if sell pressure dominates: buy ratio < 40% of total H1 transactions.
+            // Uses tx counts as a proxy for buy/sell volume momentum.
+            const totalTxH1 = signal.buyTxH1 + signal.sellTxH1;
+            const buyRatioH1 = totalTxH1 > 0 ? signal.buyTxH1 / totalTxH1 : 0.5;
+            if (totalTxH1 >= 5 && buyRatioH1 < 0.40) {
+                const buyRatioPct = (buyRatioH1 * 100).toFixed(0);
+                console.log(`   📉 Volume velocity: buy ratio ${buyRatioPct}% < 40% — momentum melemah, skip`);
+                this.addLog('info', `📡 Screener dilewati — buy ratio H1 ${buyRatioPct}% terlalu rendah`, signal.tokenSymbol);
+                return;
+            }
+            // ── Optimization 5: Deployer reputation pre-check ───────────────────
+            // Run BEFORE the expensive AI call to save latency for bad deployers.
+            if (this.runtimeConfig.serialRuggerEnabled) {
+                try {
+                    const sr = await (0, deployer_checker_1.checkSerialDeployer)(signal.tokenAddress, this.runtimeConfig.serialRuggerMaxDeploys, this.runtimeConfig.serialRuggerWindowHours);
+                    if (sr.isSerialRugger) {
+                        console.log(`   🚨 SERIAL RUGGER di screener signal — skip`);
+                        this.addLog('info', `🚨 Screener diblokir: serial rugger`, signal.tokenSymbol);
+                        this.addToBlacklist(signal.tokenAddress, 'Serial rugger (screener)');
+                        return;
+                    }
+                }
+                catch { /* non-critical — executeBuy will re-check */ }
+            }
+            if (this.runtimeConfig.reputationEnabled) {
+                try {
+                    const deployer = await (0, deployer_checker_1.getTokenDeployer)(signal.tokenAddress);
+                    if (deployer) {
+                        const rep = await (0, deployer_reputation_1.getDeployerReputation)(deployer);
+                        if (rep.score !== null && rep.score < this.runtimeConfig.reputationMinScore) {
+                            console.log(`   🔴 REPUTASI RENDAH di screener: ${rep.score}/100 — skip`);
+                            this.addLog('info', `🔴 Screener diblokir: reputasi deployer ${rep.score}/100`, signal.tokenSymbol);
+                            return;
+                        }
+                    }
+                }
+                catch { /* non-critical */ }
+            }
             // Run AI analysis on top of screener signal
             const analysis = await this.ai.analyzeToken(tokenAddress, {
                 liquidity: signal.liquidityUsd / 3000,
@@ -451,6 +490,12 @@ class AISniperBot extends events_1.EventEmitter {
                 const label = signal.signal === 'STRONG_BUY' ? '🔥 STRONG BUY' : '📡 BUY';
                 console.log(`   ✅ SmartScreener ${label}: ${amount.toFixed(5)} ETH for ${signal.tokenSymbol}`);
                 this.addLog('info', `📡 SmartScreener ${label}: ${signal.tokenSymbol}`, `score:${signal.score.total} liq:$${Math.round(signal.liquidityUsd).toLocaleString()} 1h:${signal.priceChangeH1 >= 0 ? '+' : ''}${signal.priceChangeH1.toFixed(1)}% | AI: ${analysis.confidence}%`);
+                // ── Optimization 3: Staged entry (60/40 split) ──────────────────
+                // Buy 60% immediately. If position is still open and TP1 not yet hit
+                // after 45 seconds, add the remaining 40% to average-in at a confirmed
+                // entry rather than buying the full size in one shot.
+                const firstAmt = parseFloat((amount * 0.60).toFixed(6));
+                const secondAmt = parseFloat((amount * 0.40).toFixed(6));
                 await this.sendTelegram(`📡 <b>SmartScreener ${label}!</b>\n` +
                     `Token: <code>${signal.tokenSymbol}</code>\n` +
                     `<code>${signal.tokenAddress}</code>\n\n` +
@@ -459,8 +504,30 @@ class AISniperBot extends events_1.EventEmitter {
                     `📈 1h: ${signal.priceChangeH1 >= 0 ? '+' : ''}${signal.priceChangeH1.toFixed(1)}% | Buys: ${signal.buyTxH1}\n` +
                     `⏱️ Age: ${signal.ageMinutes}min | 🛡️ Safety: ${signal.score.safety}/25\n` +
                     `🤖 AI: ${analysis.confidence}% confidence\n` +
-                    `💰 Buy: ${amount.toFixed(5)} ETH`);
-                await this.executeBuy(tokenAddress, amount, undefined, 'smart-screener');
+                    `💰 Entry bertahap: ${firstAmt.toFixed(5)} ETH (60%) + ${secondAmt.toFixed(5)} ETH (40%) dalam 45d`);
+                // First tranche: 60%
+                console.log(`   📊 Staged entry 1/2: ${firstAmt.toFixed(5)} ETH (60%) untuk ${signal.tokenSymbol}`);
+                this.addLog('info', `📊 Entry bertahap 1/2: ${firstAmt.toFixed(5)} ETH (60%)`, `${signal.tokenSymbol} — tranche ke-2 dalam 45d`);
+                await this.executeBuy(tokenAddress, firstAmt, undefined, 'smart-screener');
+                // Second tranche: 40% after 45 seconds — only if still holding and TP1 not hit
+                setTimeout(async () => {
+                    try {
+                        const pos = this.executor?.getOpenPositions().find((p) => p.tokenAddress.toLowerCase() === tokenAddress.toLowerCase());
+                        if (pos && !pos.takeProfit1Hit) {
+                            console.log(`   📊 Staged entry 2/2: ${secondAmt.toFixed(5)} ETH (40%) untuk ${signal.tokenSymbol}`);
+                            this.addLog('info', `📊 Entry bertahap 2/2: ${secondAmt.toFixed(5)} ETH (40%)`, `${signal.tokenSymbol} — konfirmasi harga stabil`);
+                            await this.executeBuy(tokenAddress, secondAmt, undefined, 'smart-screener-2nd');
+                        }
+                        else {
+                            const reason = !pos ? 'posisi ditutup' : 'TP1 sudah terpicu';
+                            console.log(`   📊 Staged entry 2/2 dilewati untuk ${signal.tokenSymbol} — ${reason}`);
+                            this.addLog('info', `📊 Tranche ke-2 dilewati (${reason})`, signal.tokenSymbol);
+                        }
+                    }
+                    catch (e) {
+                        console.warn(`   ⚠️ Staged entry 2/2 error: ${e?.message}`);
+                    }
+                }, 45000);
             }
             else {
                 console.log(`   ❌ AI rejected screener signal: ${analysis.reasoning}`);

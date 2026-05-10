@@ -243,6 +243,17 @@ export class SwapExecutor extends EventEmitter {
             }
             console.log(`   ✅ Price impact: ${impact.impact.toFixed(2)}% — OK`);
 
+            // ── Dynamic slippage: scale tolerance with trade size vs pool liquidity ──
+            // Small pool or large trade → wider tolerance (up to 15%)
+            // Large pool or tiny trade → tighter tolerance (as low as 1%)
+            let effectiveSlippage = slippagePercent;
+            if (impact.liquidityUsd > 0) {
+                const tradeUsd      = amountInEth * 3000; // rough ETH/USD for ratio calc
+                const tradeSharePct = (tradeUsd / impact.liquidityUsd) * 100;
+                effectiveSlippage   = Math.max(1, Math.min(15, 2 + tradeSharePct * 2));
+                console.log(`   🎯 Dynamic slippage: ${effectiveSlippage.toFixed(1)}% (trade $${tradeUsd.toFixed(0)} = ${tradeSharePct.toFixed(2)}% of pool $${impact.liquidityUsd.toFixed(0)})`);
+            }
+
             // ── Auto-detect best fee tier ──
             const bestFee = await this.getBestFeeTier(tokenAddress);
             console.log(`   ⛽ Using fee tier: ${bestFee / 10000}%`);
@@ -256,10 +267,10 @@ export class SwapExecutor extends EventEmitter {
                     if (tokenPriceEth > 0) {
                         const decimals      = await this.getTokenDecimals(tokenAddress);
                         const expectedTokens = amountInEth / tokenPriceEth;
-                        const minTokens     = expectedTokens * (1 - slippagePercent / 100);
+                        const minTokens     = expectedTokens * (1 - effectiveSlippage / 100);
                         const minFixed      = minTokens.toFixed(Math.min(decimals, 8));
                         amountOutMinimum    = parseUnits(minFixed, decimals);
-                        console.log(`   🛡️ Slippage guard: min ${minTokens.toFixed(4)} tokens (${slippagePercent}% max slippage)`);
+                        console.log(`   🛡️ Slippage guard: min ${minTokens.toFixed(4)} tokens (${effectiveSlippage.toFixed(1)}% max slippage)`);
                     }
                 }
             } catch {
@@ -545,6 +556,17 @@ export class SwapExecutor extends EventEmitter {
             : profitPct     <= -this.CONFIG.STOP_LOSS_PCT;
 
         console.log(`📊 ${position.tokenSymbol}: ${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(1)}% | ${multiplier.toFixed(2)}x | peak ${peakMult.toFixed(2)}x | ${holdMinsStr}m`);
+
+        // ─── BREAKEVEN GUARD: after TP1, never let position go net negative ───
+        // Once we've locked in partial profit at TP1, protect capital by selling
+        // everything the moment price falls back to entry (profitPct ≤ 0).
+        if (position.takeProfit1Hit && profitPct <= 0) {
+            const reason = `🛡️ Breakeven guard: ${profitPct.toFixed(1)}% setelah TP1 — jual sisa posisi`;
+            console.log(`🛡️ BREAKEVEN GUARD: ${position.tokenSymbol} balik ke ${profitPct.toFixed(1)}% setelah TP1 — protecting profits`);
+            this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult, sourceWallet: position.sourceWallet });
+            await this.sell(tokenAddress, 100);
+            return;
+        }
 
         // ─── STOP LOSS (Fixed or Trailing) ───
         if (slTriggered) {
