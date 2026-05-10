@@ -387,6 +387,17 @@ class AISniperBot extends events_1.EventEmitter {
         this.smartScreener.on('buy-signal', async (signal) => {
             if (!this.smartScreenerEnabled)
                 return;
+            // ── Hard circuit breaker: daily loss limit ──
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                console.log(`🔴 [CircuitBreaker] Signal ignored — ${this.riskManager.getCircuitBreakerReason()}`);
+                return;
+            }
+            // ── Hard circuit breaker: max open positions ──
+            const openCount = this.executor?.getOpenPositions().length ?? 0;
+            if (openCount >= this.CONFIG.MAX_OPEN_POSITIONS) {
+                console.log(`⚠️  [CircuitBreaker] Max positions (${openCount}/${this.CONFIG.MAX_OPEN_POSITIONS}) — SmartScreener signal ignored`);
+                return;
+            }
             const tokenAddress = signal.tokenAddress;
             console.log(`\n📡 [SmartScreener] ${signal.signal} — ${signal.tokenSymbol} (score: ${signal.score.total})`);
             // Run AI analysis on top of screener signal
@@ -423,6 +434,17 @@ class AISniperBot extends events_1.EventEmitter {
         });
         // ─── GeckoTerminal token opportunity ───
         this.geckoScanner.on('token-opportunity', async (opportunity) => {
+            // ── Hard circuit breaker: daily loss limit ──
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                console.log(`🔴 [CircuitBreaker] GeckoScanner signal ignored — ${this.riskManager.getCircuitBreakerReason()}`);
+                return;
+            }
+            // ── Hard circuit breaker: max open positions ──
+            const openCountGecko = this.executor?.getOpenPositions().length ?? 0;
+            if (openCountGecko >= this.CONFIG.MAX_OPEN_POSITIONS) {
+                console.log(`⚠️  [CircuitBreaker] Max positions (${openCountGecko}/${this.CONFIG.MAX_OPEN_POSITIONS}) — GeckoScanner signal ignored`);
+                return;
+            }
             const tokenAddress = opportunity.tokenAddress;
             console.log(`\n🦎 GeckoScanner opportunity: ${opportunity.tokenSymbol}`);
             const analysis = await this.ai.analyzeToken(tokenAddress, {
@@ -450,6 +472,17 @@ class AISniperBot extends events_1.EventEmitter {
         });
         // ─── Copy trade opportunity ───
         this.copyMonitor.on('copy-opportunity', async (opportunity) => {
+            // ── Hard circuit breaker: daily loss limit ──
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                console.log(`🔴 [CircuitBreaker] Copy trade ignored — ${this.riskManager.getCircuitBreakerReason()}`);
+                return;
+            }
+            // ── Hard circuit breaker: max open positions ──
+            const openCountCopy = this.executor?.getOpenPositions().length ?? 0;
+            if (openCountCopy >= this.CONFIG.MAX_OPEN_POSITIONS) {
+                console.log(`⚠️  [CircuitBreaker] Max positions (${openCountCopy}/${this.CONFIG.MAX_OPEN_POSITIONS}) — Copy trade ignored`);
+                return;
+            }
             console.log(`\n🐋 Copy opportunity from ${opportunity.walletName}`);
             const walletInfo = this.copyMonitor.getWallets().find(w => w.address.toLowerCase() === opportunity.walletAddress.toLowerCase());
             // ── Fetch live token info from GeckoTerminal ──
@@ -776,6 +809,15 @@ class AISniperBot extends events_1.EventEmitter {
                     riskGate.reason?.includes('consecutive') ? 'consecutive_loss' :
                         riskGate.reason?.includes('Cooldown') ? 'cooldown' : 'blocked';
                 this.tgBot.sendRiskAlert(alertType, riskGate.reason || '');
+            }
+            // If the circuit breaker just tripped, send a hard-stop Telegram alert
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                const resetTime = new Date(this.riskManager.getState().dailyResetAt)
+                    .toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+                await this.sendTelegram(`🔴 <b>CIRCUIT BREAKER AKTIF</b>\n\n` +
+                    `${riskGate.reason}\n\n` +
+                    `🛑 Semua sinyal baru akan <b>diabaikan</b> hingga reset tengah malam.\n` +
+                    `⏰ Reset pada: <b>${resetTime} UTC</b>`);
             }
             return;
         }
@@ -1673,6 +1715,7 @@ class AISniperBot extends events_1.EventEmitter {
     }
     getStatus() {
         const tradeHistory = (0, db_1.dbGetTrades)(1);
+        const riskState = this.riskManager.getState();
         return {
             connected: this.scanner.isConnectedToBase(),
             copyStats: this.copyMonitor.getStats(),
@@ -1684,7 +1727,18 @@ class AISniperBot extends events_1.EventEmitter {
                 enabled: this.runtimeConfig.geckoScannerEnabled,
                 seenTokens: this.geckoScanner.getSeenCount(),
             },
-            riskState: this.riskManager.getState(),
+            smartScreener: {
+                enabled: this.smartScreenerEnabled,
+            },
+            whaleAutoScan: {
+                enabled: this.runtimeConfig.whaleAutoScanEnabled,
+            },
+            riskState,
+            circuitBreaker: {
+                tripped: riskState.circuitBreakerTripped,
+                reason: riskState.circuitBreakerReason,
+                resetAt: riskState.dailyResetAt,
+            },
             pendingWhales: (0, db_1.dbGetPendingWhales)().length,
             emergencyStop: this.emergencyStopActive,
             lastTradeAt: tradeHistory[0]?.closedAt ?? null,

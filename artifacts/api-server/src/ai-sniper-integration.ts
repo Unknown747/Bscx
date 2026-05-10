@@ -437,6 +437,20 @@ export class AISniperBot extends EventEmitter {
         // ─── SmartScreener buy signal ───
         this.smartScreener.on('buy-signal', async (signal: ScreenerSignal) => {
             if (!this.smartScreenerEnabled) return;
+
+            // ── Hard circuit breaker: daily loss limit ──
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                console.log(`🔴 [CircuitBreaker] Signal ignored — ${this.riskManager.getCircuitBreakerReason()}`);
+                return;
+            }
+
+            // ── Hard circuit breaker: max open positions ──
+            const openCount = this.executor?.getOpenPositions().length ?? 0;
+            if (openCount >= this.CONFIG.MAX_OPEN_POSITIONS) {
+                console.log(`⚠️  [CircuitBreaker] Max positions (${openCount}/${this.CONFIG.MAX_OPEN_POSITIONS}) — SmartScreener signal ignored`);
+                return;
+            }
+
             const tokenAddress = signal.tokenAddress as Address;
             console.log(`\n📡 [SmartScreener] ${signal.signal} — ${signal.tokenSymbol} (score: ${signal.score.total})`);
 
@@ -481,6 +495,19 @@ export class AISniperBot extends EventEmitter {
 
         // ─── GeckoTerminal token opportunity ───
         this.geckoScanner.on('token-opportunity', async (opportunity: TokenOpportunity) => {
+            // ── Hard circuit breaker: daily loss limit ──
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                console.log(`🔴 [CircuitBreaker] GeckoScanner signal ignored — ${this.riskManager.getCircuitBreakerReason()}`);
+                return;
+            }
+
+            // ── Hard circuit breaker: max open positions ──
+            const openCountGecko = this.executor?.getOpenPositions().length ?? 0;
+            if (openCountGecko >= this.CONFIG.MAX_OPEN_POSITIONS) {
+                console.log(`⚠️  [CircuitBreaker] Max positions (${openCountGecko}/${this.CONFIG.MAX_OPEN_POSITIONS}) — GeckoScanner signal ignored`);
+                return;
+            }
+
             const tokenAddress = opportunity.tokenAddress as Address;
             console.log(`\n🦎 GeckoScanner opportunity: ${opportunity.tokenSymbol}`);
 
@@ -514,6 +541,19 @@ export class AISniperBot extends EventEmitter {
 
         // ─── Copy trade opportunity ───
         this.copyMonitor.on('copy-opportunity', async (opportunity) => {
+            // ── Hard circuit breaker: daily loss limit ──
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                console.log(`🔴 [CircuitBreaker] Copy trade ignored — ${this.riskManager.getCircuitBreakerReason()}`);
+                return;
+            }
+
+            // ── Hard circuit breaker: max open positions ──
+            const openCountCopy = this.executor?.getOpenPositions().length ?? 0;
+            if (openCountCopy >= this.CONFIG.MAX_OPEN_POSITIONS) {
+                console.log(`⚠️  [CircuitBreaker] Max positions (${openCountCopy}/${this.CONFIG.MAX_OPEN_POSITIONS}) — Copy trade ignored`);
+                return;
+            }
+
             console.log(`\n🐋 Copy opportunity from ${opportunity.walletName}`);
 
             const walletInfo = this.copyMonitor.getWallets().find(
@@ -893,6 +933,17 @@ export class AISniperBot extends EventEmitter {
                     riskGate.reason?.includes('consecutive') ? 'consecutive_loss' :
                     riskGate.reason?.includes('Cooldown') ? 'cooldown' : 'blocked';
                 this.tgBot.sendRiskAlert(alertType, riskGate.reason || '');
+            }
+            // If the circuit breaker just tripped, send a hard-stop Telegram alert
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                const resetTime = new Date(this.riskManager.getState().dailyResetAt)
+                    .toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+                await this.sendTelegram(
+                    `🔴 <b>CIRCUIT BREAKER AKTIF</b>\n\n` +
+                    `${riskGate.reason}\n\n` +
+                    `🛑 Semua sinyal baru akan <b>diabaikan</b> hingga reset tengah malam.\n` +
+                    `⏰ Reset pada: <b>${resetTime} UTC</b>`
+                );
             }
             return;
         }
@@ -1781,7 +1832,8 @@ export class AISniperBot extends EventEmitter {
     }
 
     getStatus() {
-        const tradeHistory = dbGetTrades(1);
+        const tradeHistory  = dbGetTrades(1);
+        const riskState     = this.riskManager.getState();
         return {
             connected:       this.scanner.isConnectedToBase(),
             copyStats:       this.copyMonitor.getStats(),
@@ -1793,7 +1845,18 @@ export class AISniperBot extends EventEmitter {
                 enabled:    this.runtimeConfig.geckoScannerEnabled,
                 seenTokens: this.geckoScanner.getSeenCount(),
             },
-            riskState:       this.riskManager.getState(),
+            smartScreener:   {
+                enabled:    this.smartScreenerEnabled,
+            },
+            whaleAutoScan:   {
+                enabled:    this.runtimeConfig.whaleAutoScanEnabled,
+            },
+            riskState,
+            circuitBreaker:  {
+                tripped:    riskState.circuitBreakerTripped,
+                reason:     riskState.circuitBreakerReason,
+                resetAt:    riskState.dailyResetAt,
+            },
             pendingWhales:   dbGetPendingWhales().length,
             emergencyStop:   this.emergencyStopActive,
             lastTradeAt:     tradeHistory[0]?.closedAt ?? null,

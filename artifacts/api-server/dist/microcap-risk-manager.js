@@ -4,6 +4,7 @@
  * Manajemen risiko untuk modal kecil (0.006 ETH)
  * - Daily loss limit, consecutive loss protection, cooldown setelah profit besar
  * - Dynamic position sizing: 12% dari modal aktif
+ * - Hard circuit breaker: when daily loss limit is hit, breaker trips until midnight reset
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MicroCapRiskManager = void 0;
@@ -20,9 +21,11 @@ class MicroCapRiskManager {
         this.cooldownUntil = 0;
         this.tradesBlockedToday = 0;
         this.lastTradeResult = null;
+        // ── Hard circuit breaker state ────────────────────────────────────────────
+        this.circuitBreakerTripped = false;
+        this.circuitBreakerReason = '';
         this.totalCapital = initialCapital;
         this.dailyResetAt = this.nextMidnightUtc();
-        // Schedule daily reset
         this.scheduleDailyReset();
     }
     nextMidnightUtc() {
@@ -35,23 +38,57 @@ class MicroCapRiskManager {
         setTimeout(() => {
             this.todayLossEth = 0;
             this.tradesBlockedToday = 0;
+            this.consecutiveLosses = 0;
+            this.circuitBreakerTripped = false;
+            this.circuitBreakerReason = '';
             this.dailyResetAt = this.nextMidnightUtc();
-            console.log('[RiskManager] Daily reset — loss counter cleared');
+            console.log('[RiskManager] ✅ Daily reset — loss counter + circuit breaker cleared');
             this.scheduleDailyReset();
         }, Math.max(msUntilReset, 1000));
     }
+    // ── Hard circuit breaker ──────────────────────────────────────────────────
+    /**
+     * Trip the hard circuit breaker. Once tripped, isCircuitBreakerTripped()
+     * returns true and ALL new signals should be rejected at the gate — not
+     * just individual executeBuy calls. Resets automatically at midnight.
+     */
+    tripCircuitBreaker(reason) {
+        if (this.circuitBreakerTripped)
+            return;
+        this.circuitBreakerTripped = true;
+        this.circuitBreakerReason = reason;
+        console.log(`\n🔴🔴🔴 [CircuitBreaker] HARD STOP TRIPPED: ${reason}`);
+        console.log(`[CircuitBreaker] All new signals will be rejected until midnight reset.`);
+    }
+    isCircuitBreakerTripped() {
+        return this.circuitBreakerTripped;
+    }
+    getCircuitBreakerReason() {
+        return this.circuitBreakerReason;
+    }
+    /** True when daily loss limit has been reached (used for pre-signal checks). */
+    isDailyLimitHit() {
+        return this.todayLossEth >= MAX_DAILY_LOSS_ETH;
+    }
     // ── Gate: called BEFORE each trade ────────────────────────────────────────
     beforeTrade(token = {}) {
+        // Hard circuit breaker — highest priority
+        if (this.circuitBreakerTripped) {
+            this.tradesBlockedToday++;
+            return { allowed: false, reason: `🔴 Circuit breaker active: ${this.circuitBreakerReason}` };
+        }
         // Cooldown check
         if (this.cooldownUntil > Date.now()) {
             const remaining = Math.ceil((this.cooldownUntil - Date.now()) / 60000);
             this.tradesBlockedToday++;
             return { allowed: false, reason: `⏳ Cooldown: ${remaining} menit tersisa` };
         }
-        // Daily loss limit
+        // Daily loss limit — trips the hard circuit breaker
         if (this.todayLossEth >= MAX_DAILY_LOSS_ETH) {
             this.tradesBlockedToday++;
-            return { allowed: false, reason: `🔴 Daily loss limit: ${this.todayLossEth.toFixed(5)} ETH (maks ${MAX_DAILY_LOSS_ETH} ETH)` };
+            const reason = `🔴 Daily loss limit: ${this.todayLossEth.toFixed(5)} ETH (maks ${MAX_DAILY_LOSS_ETH} ETH)`;
+            this.tripCircuitBreaker(reason);
+            return { allowed: false, reason };
         }
         // Consecutive losses → force cooldown
         if (this.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
@@ -79,6 +116,10 @@ class MicroCapRiskManager {
             this.consecutiveLosses++;
             this.lastTradeResult = 'loss';
             console.log(`[RiskManager] Loss: ${profitETH.toFixed(5)} ETH | Today: ${this.todayLossEth.toFixed(5)} | Streak: ${this.consecutiveLosses}`);
+            // Trip the hard circuit breaker immediately if daily limit is now exceeded
+            if (this.todayLossEth >= MAX_DAILY_LOSS_ETH && !this.circuitBreakerTripped) {
+                this.tripCircuitBreaker(`Daily loss limit reached: ${this.todayLossEth.toFixed(5)} ETH / ${MAX_DAILY_LOSS_ETH} ETH`);
+            }
         }
         else {
             this.consecutiveLosses = 0;
@@ -118,6 +159,8 @@ class MicroCapRiskManager {
             tradesBlockedToday: this.tradesBlockedToday,
             lastTradeResult: this.lastTradeResult,
             dailyResetAt: this.dailyResetAt,
+            circuitBreakerTripped: this.circuitBreakerTripped,
+            circuitBreakerReason: this.circuitBreakerReason,
         };
     }
     isInCooldown() {
