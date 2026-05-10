@@ -8,6 +8,7 @@
 
 export interface RiskState {
     todayLossEth:           number;
+    dailyLossLimit:         number;   // configured max daily loss in ETH
     consecutiveLosses:      number;
     cooldownUntil:          number;   // epoch ms, 0 = no cooldown
     totalCapital:           number;
@@ -193,6 +194,7 @@ export class MicroCapRiskManager {
     getState(): RiskState {
         return {
             todayLossEth:          this.todayLossEth,
+            dailyLossLimit:        MAX_DAILY_LOSS_ETH,
             consecutiveLosses:     this.consecutiveLosses,
             cooldownUntil:         this.cooldownUntil,
             totalCapital:          this.totalCapital,

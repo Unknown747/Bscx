@@ -153,6 +153,7 @@ class MicroCapRiskManager {
     getState() {
         return {
             todayLossEth: this.todayLossEth,
+            dailyLossLimit: MAX_DAILY_LOSS_ETH,
             consecutiveLosses: this.consecutiveLosses,
             cooldownUntil: this.cooldownUntil,
             totalCapital: this.totalCapital,
