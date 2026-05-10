@@ -12,6 +12,10 @@ artifacts/base-sniper/base.db
 artifacts/base-sniper/base.db-shm
 artifacts/base-sniper/base.db-wal
 
+# Runtime keys (Telegram + AI keys set via UI — gitignored for security)
+# PRIVATE_KEY must ALWAYS be a Replit Secret, never stored in files
+artifacts/api-server/.runtime-keys.json
+
 # Env & secrets
 .env
 .env.local

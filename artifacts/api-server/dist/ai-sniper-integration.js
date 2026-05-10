@@ -52,6 +52,7 @@ const whale_monitor_1 = require("./whale-monitor");
 const price_oracle_1 = require("./price-oracle");
 const db_1 = require("./db");
 const smart_screener_1 = __importDefault(require("./smart-screener"));
+const config_store_1 = require("./config-store");
 const telegram_bot_1 = require("./telegram-bot");
 const push_manager_1 = require("./push-manager");
 const microcap_risk_manager_1 = require("./microcap-risk-manager");
@@ -162,27 +163,50 @@ class AISniperBot extends events_1.EventEmitter {
     }
     // ============ SETTINGS PERSISTENCE ============
     loadPersistedSettings() {
+        // ── Layer 1: trading-config.json (committed, survives redeploy) ──
         try {
-            const saved = (0, db_1.dbLoadRuntimeConfig)();
-            if (saved && typeof saved === 'object') {
-                // Merge saved settings over defaults (env vars already applied above)
-                const merged = { ...this.runtimeConfig, ...saved };
-                this.runtimeConfig = merged;
-                console.log('⚙️  Loaded persisted settings from DB');
+            const fileCfg = (0, config_store_1.loadTradingConfig)();
+            const configKeys = Object.keys(fileCfg).filter(k => k !== '_note');
+            if (configKeys.length > 0) {
+                this.runtimeConfig = { ...this.runtimeConfig, ...fileCfg };
+                console.log(`⚙️  Loaded ${configKeys.length} settings from trading-config.json`);
             }
         }
         catch (e) {
-            console.warn('⚠️  Could not load persisted settings:', e?.message);
+            console.warn('⚠️  Could not load trading-config.json:', e?.message);
         }
+        // ── Layer 2: SQLite DB (latest UI changes, highest priority) ──
+        try {
+            const dbCfg = (0, db_1.dbLoadRuntimeConfig)();
+            if (dbCfg && typeof dbCfg === 'object') {
+                this.runtimeConfig = { ...this.runtimeConfig, ...dbCfg };
+                console.log('⚙️  Applied latest settings from DB (highest priority)');
+            }
+        }
+        catch (e) {
+            console.warn('⚠️  Could not load DB settings:', e?.message);
+        }
+        // ── Layer 3: Runtime keys (Telegram/AI keys set via UI, gitignored) ──
+        try {
+            const keys = (0, config_store_1.applyRuntimeKeys)();
+            if (keys.telegramToken)
+                this.telegramToken = keys.telegramToken;
+            if (keys.telegramChatId)
+                this.telegramChatId = keys.telegramChatId;
+            // AI keys are applied to process.env by applyRuntimeKeys(), MultiAIProvider reads them
+        }
+        catch { /* non-critical */ }
+        // ── Screener config ──
         try {
             const screenerCfg = (0, db_1.dbLoadScreenerConfig)();
             if (screenerCfg && typeof screenerCfg === 'object') {
                 this.smartScreener.updateConfig(screenerCfg);
-                console.log('🔍 Loaded persisted screener config from DB');
+                console.log('🔍 Loaded screener config from DB');
             }
         }
         catch { /* non-critical */ }
         this.smartScreenerEnabled = this.runtimeConfig.geckoScannerEnabled;
+        console.log(`⚙️  Final config: TP1=${this.runtimeConfig.tp1Multiplier}x SL=${this.runtimeConfig.stopLoss}% Screener=${this.smartScreenerEnabled}`);
     }
     // ============ ACTIVITY LOG ============
     addLog(type, message, detail) {
@@ -1298,9 +1322,16 @@ class AISniperBot extends events_1.EventEmitter {
         });
         // Sync smartScreener enable state
         this.smartScreenerEnabled = r.geckoScannerEnabled;
-        // Persist to DB so settings survive restart
+        // ── Persist to BOTH stores ──
+        // 1. SQLite DB (immediate, highest priority on next startup)
         try {
             (0, db_1.dbSaveRuntimeConfig)(r);
+        }
+        catch { /* non-critical */ }
+        // 2. trading-config.json (committed file, survives redeploy)
+        try {
+            const { _note: _, ...clean } = r;
+            (0, config_store_1.saveTradingConfig)(clean);
         }
         catch { /* non-critical */ }
         this.addLog('info', 'Pengaturan diperbarui via UI', `Capital: ${r.totalCapital} ETH`);
@@ -1341,12 +1372,18 @@ class AISniperBot extends events_1.EventEmitter {
     // ============ KEY MANAGEMENT ============
     updateKeys(keys) {
         const aiKeys = {};
-        if (keys.groqKey)
+        if (keys.groqKey) {
             aiKeys.groq = keys.groqKey;
-        if (keys.geminiKey)
+            process.env.GROQ_API_KEY = keys.groqKey;
+        }
+        if (keys.geminiKey) {
             aiKeys.gemini = keys.geminiKey;
-        if (keys.huggingfaceKey)
+            process.env.GEMINI_API_KEY = keys.geminiKey;
+        }
+        if (keys.huggingfaceKey) {
             aiKeys.huggingface = keys.huggingfaceKey;
+            process.env.HUGGINGFACE_API_KEY = keys.huggingfaceKey;
+        }
         if (Object.keys(aiKeys).length > 0)
             this.ai.updateKeys(aiKeys);
         if (keys.telegramToken) {
@@ -1357,6 +1394,19 @@ class AISniperBot extends events_1.EventEmitter {
             this.telegramChatId = keys.telegramChatId;
             process.env.TELEGRAM_CHAT_ID = keys.telegramChatId;
         }
+        // ── Persist Telegram + AI keys to .runtime-keys.json ──
+        // These survive server restarts (not redeployments).
+        // PRIVATE_KEY is intentionally NOT saved here — it must be a Replit Secret.
+        try {
+            (0, config_store_1.saveRuntimeKeys)({
+                groqKey: keys.groqKey,
+                geminiKey: keys.geminiKey,
+                huggingfaceKey: keys.huggingfaceKey,
+                telegramToken: keys.telegramToken,
+                telegramChatId: keys.telegramChatId,
+            });
+        }
+        catch { /* non-critical */ }
         if (keys.privateKey) {
             process.env.PRIVATE_KEY = keys.privateKey;
             try {

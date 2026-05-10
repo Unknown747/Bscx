@@ -163,20 +163,51 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
 
                 <div className="p-6 space-y-6">
 
-                    {/* Security notice */}
-                    <div className="bg-blue-900/20 border border-blue-800/50 rounded-xl p-4 flex gap-3">
-                        <span className="text-xl">🛡️</span>
-                        <p className="text-xs text-blue-300 leading-relaxed">
-                            Kunci disimpan di file <code className="bg-blue-900/40 px-1 rounded">.env</code> di server dan tidak pernah dikirim ke browser. Kosongkan field jika tidak ingin mengubah nilai yang sudah ada.
+                    {/* PRIVATE KEY — Replit Secret warning */}
+                    <div className="bg-red-900/25 border border-red-700/60 rounded-xl p-4 space-y-2">
+                        <div className="flex items-center gap-2">
+                            <span className="text-lg">🔐</span>
+                            <p className="text-sm font-semibold text-red-300">PRIVATE_KEY — Harus Simpan di Replit Secrets</p>
+                        </div>
+                        <p className="text-xs text-red-200/80 leading-relaxed">
+                            Field di bawah hanya mengaktifkan wallet untuk <strong>sesi ini saja</strong> — akan hilang setelah server restart atau redeploy.
+                            Agar permanen, kamu harus menyimpannya sebagai <strong>Replit Secret</strong> dengan nama <code className="bg-red-900/50 px-1.5 py-0.5 rounded font-mono">PRIVATE_KEY</code>.
                         </p>
+                        <ol className="text-xs text-red-200/70 space-y-0.5 list-decimal list-inside pl-1">
+                            <li>Di Replit: klik tab <strong>Secrets</strong> (ikon gembok di sidebar kiri)</li>
+                            <li>Tambah secret baru: Key = <code className="bg-red-900/40 px-1 rounded font-mono">PRIVATE_KEY</code>, Value = private key kamu</li>
+                            <li>Klik <strong>Add Secret</strong> → restart server → wallet otomatis terhubung</li>
+                        </ol>
+                    </div>
+
+                    {/* Security notice */}
+                    <div className="bg-blue-900/20 border border-blue-800/50 rounded-xl p-4 space-y-2">
+                        <div className="flex items-center gap-2">
+                            <span className="text-lg">🛡️</span>
+                            <p className="text-xs font-semibold text-blue-300">Apa yang tersimpan permanen?</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="bg-green-900/20 border border-green-800/40 rounded-lg p-2">
+                                <p className="text-green-400 font-medium mb-1">✅ Permanen (survive redeploy)</p>
+                                <p className="text-gray-400">PRIVATE_KEY via Replit Secrets</p>
+                                <p className="text-gray-400">Semua pengaturan trading</p>
+                                <p className="text-gray-400">(TP/SL, copy config, dsb)</p>
+                            </div>
+                            <div className="bg-yellow-900/20 border border-yellow-800/40 rounded-lg p-2">
+                                <p className="text-yellow-400 font-medium mb-1">⚠️ Sementara (survive restart)</p>
+                                <p className="text-gray-400">Telegram token/Chat ID</p>
+                                <p className="text-gray-400">Groq / Gemini / HF keys</p>
+                                <p className="text-gray-400">yang disimpan via form ini</p>
+                            </div>
+                        </div>
                     </div>
 
                     {/* Wallet */}
                     <div className="bg-gray-800/40 border border-gray-700 rounded-xl p-5 space-y-4">
                         <h3 className="text-sm font-semibold text-gray-200">💼 Wallet Trading</h3>
                         <KeyField
-                            label="Private Key"
-                            hint="Private key wallet Base Network kamu (diawali 0x...)"
+                            label="Private Key (sesi ini saja — lihat info merah di atas)"
+                            hint="Hanya aktif sampai server restart. Untuk permanen: simpan sebagai Replit Secret PRIVATE_KEY"
                             placeholder="0x..."
                             state={privateKey}
                             setState={setPrivateKey}
