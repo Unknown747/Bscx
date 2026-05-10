@@ -228,7 +228,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 </div>
 
                 {/* Action buttons — scrollable */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-hide -mx-1 px-1">
+                <div className="flex items-center gap-1.5 overflow-x-auto pt-2 pb-1 scrollbar-hide -mx-1 px-1">
                     <button
                         onClick={() => setShowBlacklist(true)}
                         className="flex-shrink-0 flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-2 rounded-lg transition-all"
@@ -244,8 +244,8 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         <span>🐋</span>
                         <span>Whale</span>
                         {(status?.pendingWhales ?? 0) > 0 && (
-                            <span className="absolute -top-1.5 -right-1.5 bg-blue-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
-                                {status!.pendingWhales}
+                            <span className="absolute -top-2.5 -right-2 bg-blue-500 text-white font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center leading-none" style={{fontSize:'10px'}}>
+                                {status!.pendingWhales > 99 ? '99+' : status!.pendingWhales}
                             </span>
                         )}
                     </button>
@@ -257,8 +257,8 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         <span>🔬</span>
                         <span>Monitor</span>
                         {monitorCount > 0 && (
-                            <span className="absolute -top-1.5 -right-1.5 bg-purple-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
-                                {monitorCount}
+                            <span className="absolute -top-2.5 -right-2 bg-purple-500 text-white font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center leading-none" style={{fontSize:'10px'}}>
+                                {monitorCount > 99 ? '99+' : monitorCount}
                             </span>
                         )}
                     </button>
