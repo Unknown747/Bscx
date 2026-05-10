@@ -33,7 +33,7 @@ interface HistoryData {
 
 function timeAgo(ts: number): string {
     const secs = Math.floor((Date.now() - ts) / 1000);
-    if (secs < 60)    return `${secs}d lalu`;
+    if (secs < 60)    return `${secs}s lalu`;
     if (secs < 3600)  return `${Math.floor(secs / 60)}m lalu`;
     if (secs < 86400) return `${Math.floor(secs / 3600)}j lalu`;
     return new Date(ts).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });

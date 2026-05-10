@@ -485,6 +485,12 @@ export class AISniperBot extends EventEmitter {
             const tokenAddress = signal.tokenAddress as Address;
             console.log(`\n📡 [SmartScreener] ${signal.signal} — ${signal.tokenSymbol} (score: ${signal.score.total})`);
 
+            // Always log the screener signal so the dashboard shows activity even without a wallet
+            this.addLog('info',
+                `📡 Screener: ${signal.signal} — ${signal.tokenSymbol}`,
+                `score:${signal.score.total} liq:$${Math.round(signal.liquidityUsd).toLocaleString()} 1h:${signal.priceChangeH1 >= 0 ? '+' : ''}${signal.priceChangeH1.toFixed(1)}% addr:${signal.tokenAddress}`
+            );
+
             // Run AI analysis on top of screener signal
             const analysis = await this.ai.analyzeToken(tokenAddress, {
                 liquidity:     signal.liquidityUsd / 3000,
@@ -825,7 +831,7 @@ export class AISniperBot extends EventEmitter {
                 closedAt:     Date.now(),
                 holdMs:       d.holdMs       ?? 0,
                 txHash:       d.txHash       || '',
-                reason:       'manual',
+                reason:       d.reason || 'manual',
             });
             this.sendTelegram(
                 `💰 <b>SELL manual</b>\n` +
@@ -846,7 +852,7 @@ export class AISniperBot extends EventEmitter {
                 id:           randomBytes(6).toString('hex'),
                 tokenAddress: d.tokenAddress || '',
                 tokenSymbol:  d.tokenSymbol  || 'UNKNOWN',
-                entryEth:     0,
+                entryEth:     d.entryEth ?? 0,
                 profitPct:    d.profitPct ?? (d.multiplier ? (d.multiplier - 1) * 100 : null),
                 percentSold:  d.level === 1 ? 50 : 100,
                 closedAt:     Date.now(),
