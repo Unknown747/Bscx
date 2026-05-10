@@ -27,6 +27,9 @@ const poolCache  = new Map<string, PoolEntry>();
 let ethPriceUsd  = 3000;       // updated periodically
 let ethPriceAt   = 0;
 
+// ── Sync getter for cached ETH price (safe to call synchronously) ─────────────
+export function getEthPriceSync(): number { return ethPriceUsd; }
+
 // ── ETH price refresh (every 60s) ─────────────────────────────────────────────
 async function refreshEthPrice(): Promise<void> {
     try {

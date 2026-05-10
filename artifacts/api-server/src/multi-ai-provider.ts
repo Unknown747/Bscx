@@ -381,39 +381,37 @@ Respond HANYA JSON (tidak ada teks lain):
         avgHoldTime: number;
         avgProfit: number;
     }): Promise<WalletAnalysis> {
-        const prompt = `
-            Analyze this wallet's trading pattern on Base Network:
-            Address: ${walletAddress}
-            Total Trades: ${walletHistory.totalTrades}
-            Win Rate: ${walletHistory.winRate}%
-            Avg Hold Time: ${walletHistory.avgHoldTime}s
-            Avg Profit: ${walletHistory.avgProfit}%
+        const holdMin = Math.round(walletHistory.avgHoldTime / 60);
+        const prompt =
+            `Evaluasi wallet copy trade di jaringan Base blockchain. Jawab HANYA JSON tanpa teks lain.\n` +
+            `Alamat: ${walletAddress}\n` +
+            `Total trade: ${walletHistory.totalTrades}\n` +
+            `Win rate: ${walletHistory.winRate}%\n` +
+            `Rata-rata hold: ${holdMin} menit\n` +
+            `Rata-rata profit: ${walletHistory.avgProfit >= 0 ? '+' : ''}${walletHistory.avgProfit}%\n\n` +
+            `Kriteria COPY: win rate ≥50%, profit positif, trade aktif (≥5 trade), hold <120 menit (scalper/sniper lebih baik).\n` +
+            `Format respons (JSON saja): {"score":<0-100>,"tradingPattern":"SCALPER|SNIPER|WHALE|SWING","shouldCopy":<true/false>,"reason":"<alasan singkat bahasa Indonesia>"}`;
 
-            Return JSON:
-            - score: number 0-100 (how good to copy)
-            - tradingPattern: "SCALPER", "SNIPER", "WHALE", or "SWING"
-            - shouldCopy: boolean
-            - reason: string
-        `;
-
-        const response = await this.query(prompt, 'gemini');
+        const response = await this.query(prompt);
 
         try {
-            const parsed = JSON.parse(response.content);
+            const jsonMatch = response.content.match(/\{[\s\S]*?\}/);
+            if (!jsonMatch) throw new Error('no JSON');
+            const parsed = JSON.parse(jsonMatch[0]);
             return {
                 address:        walletAddress,
-                score:          parsed.score          || 50,
+                score:          Math.max(0, Math.min(100, parseInt(parsed.score) || 50)),
                 tradingPattern: parsed.tradingPattern  || 'SWING',
-                shouldCopy:     parsed.shouldCopy      || false,
-                reason:         parsed.reason          || 'No reason provided'
+                shouldCopy:     parsed.shouldCopy      === true,
+                reason:         parsed.reason          || 'Evaluasi selesai'
             };
         } catch {
             return {
-                address: walletAddress,
-                score: 50,
+                address:        walletAddress,
+                score:          50,
                 tradingPattern: 'SWING',
-                shouldCopy: false,
-                reason: 'AI analysis failed'
+                shouldCopy:     false,
+                reason:         'Analisis AI gagal — evaluasi manual disarankan'
             };
         }
     }

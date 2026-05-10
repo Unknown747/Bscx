@@ -26,7 +26,7 @@ import {
 } from './db';
 import { startTelegramBot, type TelegramBot } from './telegram-bot';
 import { MicroCapRiskManager } from './microcap-risk-manager';
-import { getCacheStats } from './performance-optimizer';
+import { getCacheStats, getEthPriceSync } from './performance-optimizer';
 import { analyzeWhale } from './whale-analyzer-pro';
 import type { Address } from 'viem';
 import { randomBytes } from 'crypto';
@@ -170,7 +170,7 @@ export class AISniperBot extends EventEmitter {
         this.ai           = new MultiAIProvider();
         this.riskManager  = new MicroCapRiskManager(this.runtimeConfig.totalCapital);
         this.geckoScanner = new GeckoTokenScanner({
-            minLiquidityUsd: this.runtimeConfig.minLiquidity * 3000,
+            minLiquidityUsd: this.runtimeConfig.minLiquidity * getEthPriceSync(),
         });
 
         try {
@@ -330,7 +330,8 @@ export class AISniperBot extends EventEmitter {
 
             return { safe: true, sellTax, buyTax };
         } catch {
-            return { safe: true };
+            console.warn('   ⚠️  GoPlus API tidak tersedia — token dilewati untuk keamanan');
+            return { safe: false, reason: 'GoPlus tidak tersedia — skip untuk keamanan' };
         }
     }
 
@@ -738,7 +739,9 @@ export class AISniperBot extends EventEmitter {
         if (analysis.recommendation !== 'BUY')                        return false;
         if (analysis.confidence     < this.CONFIG.MIN_AI_CONFIDENCE)  return false;
         if (analysis.riskLevel      === 'CRITICAL')                    return false;
-        if (analysis.predictedProfit < 30)                             return false;
+        // Dynamic profit threshold: semakin tinggi confidence, semakin longgar batas profit
+        const minProfit = analysis.confidence >= 85 ? 10 : analysis.confidence >= 75 ? 15 : 20;
+        if (analysis.predictedProfit < minProfit)                      return false;
 
         const openCount = this.executor?.getOpenPositions().length ?? 0;
         if (openCount >= this.CONFIG.MAX_OPEN_POSITIONS) {

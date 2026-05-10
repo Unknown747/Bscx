@@ -49,14 +49,14 @@ Wallet masuk active copy list (CopyTradeMonitor aktif)
 | `multi-ai-provider.ts` | AI multi-provider: Groq → Gemini → HuggingFace → rule-based fallback |
 | `microcap-risk-manager.ts` | Risk gate: daily loss limit, consecutive loss cooldown, dynamic position sizing |
 | `dynamic-exit.ts` | Exit dinamis berbasis OHLCV GeckoTerminal: momentum, trailing stop, timeout |
-| `performance-optimizer.ts` | Cache harga token 3s, batch price fetch, ETH price refresh 60s |
+| `performance-optimizer.ts` | Cache harga token 3s, batch price fetch, ETH price refresh 60s, `getEthPriceSync()` |
 | `whale-analyzer-pro.ts` | Analisis whale on-chain: Sharpe ratio, entry timing, MEV detection, PnL 7d |
 | `whale-finder.ts` | Auto-scan whale di GeckoTerminal, scoring kandidat, simulasi copy trade |
 | `telegram-bot.ts` | Long-poll Telegram bot: commands + pro alerts (trade, risk, waitlist) |
 | `copy-trade-monitor.ts` | Monitor wallet whale via WebSocket, eksekusi copy trade |
 | `flashblocks-scanner.ts` | WebSocket ke Base Flashblocks untuk new pool detection |
 | `gecko-token-scanner.ts` | Polling GeckoTerminal untuk token opportunity |
-| `swap-executor.ts` | Eksekusi swap via Uniswap V3 on Base, TP/SL position manager |
+| `swap-executor.ts` | Eksekusi swap via Uniswap V3 on Base, TP/SL + dynamic exit position manager |
 | `price-oracle.ts` | Harga ETH + best DEX pair dari GeckoTerminal & DexScreener |
 | `deployer-checker.ts` | Deteksi serial rugger berdasarkan riwayat deployer |
 | `deployer-reputation.ts` | Skor reputasi deployer: wins/losses dari on-chain history |
@@ -147,9 +147,48 @@ Parameter trading (capital, slippage, TP/SL, dll) dikonfigurasi via UI atau `.re
 
 ## Telegram Commands
 
-`/help`, `/status`, `/balance`, `/candidates`, `/approve <addr>` (→ masuk monitoring), `/reject <addr>`, `/positions`, `/history`, `/blacklist`
+`/help`, `/status`, `/balance`, `/candidates`, `/approve <addr>` (→ masuk monitoring), `/reject <addr>`, `/positions`, `/history`, `/blacklist`, `/dailyreport`
 
-**Notifikasi otomatis:** whale masuk monitoring, whale dipromosikan ke copy, trade buy/sell, risk alert (daily loss, consecutive loss, cooldown).
+**Notifikasi otomatis:** whale masuk monitoring, whale dipromosikan ke copy, trade buy/sell, risk alert (daily loss, consecutive loss, cooldown), laporan P&L harian.
+
+## Perbaikan & Peningkatan (Audit Lengkap)
+
+### Bug Kritis yang Sudah Diperbaiki
+
+| # | File | Bug | Fix |
+|---|------|-----|-----|
+| 1 | `gecko-token-scanner.ts` | GoPlus fail-open di honeypot check | Fail-closed: `safe: false` saat error |
+| 2 | `ai-sniper-integration.ts` | `checkHoneypot` catch mengembalikan `safe: true` | Fail-closed + log warning |
+| 3 | `ai-sniper-integration.ts` | Filter `tx_from_address` pakai `filter:from` (tidak valid di viem) | Fix ke `getLogs` manual + decode |
+| 4 | `swap-executor.ts` | ABI decode error saat beli token baru | Wrap decode dalam try-catch |
+| 5 | `swap-executor.ts` | WETH tidak dideteksi sebagai output token | Cek `tokenOut === WETH_BASE` |
+| 6 | `swap-executor.ts` | Slippage 0 → selalu gagal | Hitung `amountOutMinimum` dari ETH price |
+| 7 | `price-oracle.ts` | ETH price hardcode 3500 | Fetch live dari CoinGecko + DexScreener |
+| 8 | `multi-ai-provider.ts` | AI BUY bias karena prompt tidak seimbang | Prompt baru + batasi BUY, minta reasoning |
+| 9 | `copy-trade-monitor.ts` | Stats hardcode 75%/50 trade | Hitung dari DB aktual |
+| 10 | `swap-executor.ts` | Duplicate `tokenAddress` di SELL_ALL_PANIC emit | Hapus duplikat |
+| 11 | `ai-sniper-integration.ts` | ETH price hardcode `* 3000` di GeckoTokenScanner | Gunakan `getEthPriceSync()` |
+
+### Peningkatan AI & Trading
+
+| # | Fitur | Deskripsi |
+|---|-------|-----------|
+| 1 | **Dynamic Exit** | `dynamic-exit.ts` sekarang benar-benar dipakai di `swap-executor.ts` position monitor |
+| 2 | **AI Token Prompt** | Tambah ETH price live, sinyal baru: priceChangeH1, buyTxH1, sellTxH1, fdvUsd |
+| 3 | **AI Response Cache** | Cache 30 detik untuk token analysis — kurangi latency & rate limit |
+| 4 | **Whale Correlation** | +0-20% copy size saat 2+ whale beli token yang sama |
+| 5 | **Rule-based Scoring** | Sinyal baru + hard gate untuk filter token buruk |
+| 6 | **analyzeWallet** | Prompt bahasa Indonesia, JSON-only, regex extract, fallback ke Groq dulu |
+| 7 | **shouldBuy threshold** | `predictedProfit` threshold dinamis: 10/15/20% sesuai confidence AI |
+| 8 | **getEthPriceSync()** | Fungsi baru di `performance-optimizer.ts` untuk akses ETH price secara sync |
+
+### Peningkatan Telegram
+
+- Notifikasi buy kaya: token name, harga ETH, USD value, sumber whale, confidence AI
+- Notifikasi take-profit: hold time, multiplier, level TP
+- Notifikasi stop-loss: hold time, peak multiplier, alasan
+- Notifikasi risk alert: detail tipe (daily loss / consecutive / cooldown)
+- Notifikasi whale waitlist: skor, WR, profit estimasi dengan format rich
 
 ## User Preferences
 

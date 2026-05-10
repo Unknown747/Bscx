@@ -635,7 +635,6 @@ export class SwapExecutor extends EventEmitter {
                         reason: `📉 Reversal momentum (dynamic exit)`,
                         peakMult, sourceWallet: position.sourceWallet,
                         holdMs: Date.now() - position.openedAt,
-                        tokenAddress: tokenAddress,
                     });
                     await this.sell(tokenAddress, 100);
                     return;
