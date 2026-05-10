@@ -136,7 +136,10 @@ Automated crypto trading bot for the **Base network** (ETH L2), built for small 
         │   │   ├── PositionCard.tsx       # Open position with live PnL + chart toggle
         │   │   ├── MiniChart.tsx          # SVG OHLCV sparkline (no external lib)
         │   │   ├── SettingsModal.tsx      # All config (trading, risk, AI, whale, gas)
-        │   │   ├── SmartScreener.tsx      # Screener signals UI
+        │   │   ├── SmartScreener.tsx      # Screener signals UI + signal history panel
+        │   │   ├── WhaleCorrelation.tsx   # Whale Correlation Map tab (new)
+        │   │   ├── DeployerRepCheck.tsx   # Deployer Reputation Checker tab (new)
+        │   │   ├── MempoolGauge.tsx       # Live mempool pressure widget (new)
         │   │   ├── WhaleLeaderboard.tsx   # Approved whale wallet performance table
         │   │   ├── VettedWalletsPage.tsx  # Manage monitored whale wallets
         │   │   ├── WalletMonitorPage.tsx  # Live whale on-chain activity
@@ -145,7 +148,7 @@ Automated crypto trading bot for the **Base network** (ETH L2), built for small 
         │   │   ├── Portfolio.tsx          # Wallet balance + token holdings
         │   │   ├── Backtest.tsx           # Backtest UI
         │   │   ├── PnLChart.tsx           # Historical P&L graph
-        │   │   ├── TradeHistory.tsx       # Closed trade log with filters
+        │   │   ├── TradeHistory.tsx       # Closed trade log with filters + CSV export button
         │   │   ├── DailyReport.tsx        # Daily P&L report view
         │   │   ├── ActivityLog.tsx        # Real-time event log
         │   │   ├── BlacklistModal.tsx     # Token blacklist management
@@ -361,6 +364,7 @@ All endpoints on `http://localhost:8080`. Protected endpoints require `Authoriza
 | `GET` | `/api/screener/config` | Current screener config |
 | `POST` | `/api/screener/config` | Update screener settings |
 | `POST` | `/api/screener/toggle` | Enable / disable screener |
+| `GET` | `/api/screener/history` | Persisted signal history from DB (query: `?signal=STRONG_BUY\|BUY\|WATCH&limit=100`) |
 
 ### Whale Management
 
@@ -387,6 +391,14 @@ All endpoints on `http://localhost:8080`. Protected endpoints require `Authoriza
 | `DELETE` | `/api/whale/monitored/:address` | Remove from background monitor |
 | `GET` | `/api/whale/monitor-status` | Monitor service health |
 | `GET` | `/api/whale/correlation` | Active multi-whale token correlations |
+
+### Dashboard Feature Endpoints (New)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/mempool` | Live Base Network mempool size + status (`quiet`/`normal`/`congested`) |
+| `GET` | `/api/history/export.csv` | Download all closed trades as CSV file |
+| `GET` | `/api/reputation/:address` | Deployer reputation score, survival rate, per-token checks |
 
 ### Data & Safety
 

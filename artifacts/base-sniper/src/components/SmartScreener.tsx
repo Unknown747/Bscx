@@ -250,7 +250,9 @@ const SmartScreener: React.FC<SmartScreenerProps> = ({ apiUrl }) => {
                 )}
             </div>
 
-            {/* ── Filter bar ── */}
+            {/* ── Live view: filter bar + signal cards ── */}
+            {view === 'live' && (
+            <>
             <div className="flex gap-1.5 overflow-x-auto scrollbar-hide">
                 {(['ALL', 'STRONG_BUY', 'BUY', 'WATCH'] as const).map(f => (
                     <button
@@ -428,6 +430,8 @@ const SmartScreener: React.FC<SmartScreenerProps> = ({ apiUrl }) => {
 
             {lastRefresh && (
                 <p className="text-center text-xs text-gray-700">Auto-refresh: {lastRefresh}</p>
+            )}
+            </>
             )}
 
             {/* ── History panel ── */}
