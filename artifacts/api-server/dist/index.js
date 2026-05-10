@@ -204,6 +204,41 @@ app.post('/api/settings', (req, res) => {
         res.status(400).json({ error: 'Invalid payload' });
         return;
     }
+    // Numeric range validation — prevent nonsensical values from corrupting bot state
+    const numChecks = [
+        ['totalCapital', 0.0001, 100],
+        ['maxTradeAmount', 0.00001, 10],
+        ['maxSlippage', 0.1, 50],
+        ['tp1Multiplier', 1.01, 100],
+        ['tp1Percentage', 1, 100],
+        ['tp2Multiplier', 1.01, 100],
+        ['tp2Percentage', 1, 100],
+        ['stopLoss', 1, 99],
+        ['maxPriorityFee', 0, 10],
+        ['maxFeePerGas', 0, 10],
+        ['copyAmount', 0.00001, 10],
+        ['copyMaxPerDay', 1, 1000],
+        ['minSafetyScore', 0, 100],
+        ['maxPoolAgeSeconds', 5, 3600],
+        ['maxTaxPercent', 0, 100],
+        ['minAiConfidence', 0, 100],
+        ['maxDailyLossEth', 0.00001, 10],
+        ['maxConsecutiveLosses', 1, 100],
+        ['cooldownAfterProfitMinutes', 0, 1440],
+        ['dailyLossCooldownHours', 0, 72],
+        ['tradingStartHour', 0, 23],
+        ['tradingEndHour', 0, 23],
+        ['tradeBalancePct', 1, 100],
+    ];
+    for (const [field, min, max] of numChecks) {
+        if (s[field] !== undefined && s[field] !== null) {
+            const v = Number(s[field]);
+            if (isNaN(v) || v < min || v > max) {
+                res.status(400).json({ error: `${field} must be between ${min} and ${max}` });
+                return;
+            }
+        }
+    }
     try {
         bot.updateRuntimeConfig({
             totalCapital: s.totalCapital,
@@ -981,28 +1016,6 @@ app.get('/api/report', requireAuth, async (_req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// ============ SERVE FRONTEND (production) ============
-const frontendDist = (() => {
-    const candidates = [
-        path_1.default.join(__dirname, '../../base-sniper/dist'),
-        path_1.default.join(process.cwd(), 'artifacts/base-sniper/dist'),
-        path_1.default.join(process.cwd(), 'base-sniper/dist'),
-    ];
-    return candidates.find(p => fs_1.default.existsSync(p)) ?? candidates[0];
-})();
-app.use(express_1.default.static(frontendDist, { maxAge: '1d', etag: true }));
-app.get('*', (req, res) => {
-    if (req.path.startsWith('/api/')) {
-        return res.status(404).json({ error: 'API endpoint not found' });
-    }
-    const indexFile = path_1.default.join(frontendDist, 'index.html');
-    if (fs_1.default.existsSync(indexFile)) {
-        res.sendFile(indexFile);
-    }
-    else {
-        res.status(503).send('Frontend not built. Run: cd artifacts/base-sniper && npm run build');
-    }
-});
 // ============ DEPLOYMENT STATUS ============
 const SERVER_START_TIME = Date.now();
 const BOT_VERSION = '1.0.0';
@@ -1033,6 +1046,28 @@ app.get('/api/deployment-status', (_req, res) => {
         network: process.env.BASE_HTTP_URL || 'https://mainnet.base.org',
         port: PORT,
     });
+});
+// ============ SERVE FRONTEND (production) ============
+const frontendDist = (() => {
+    const candidates = [
+        path_1.default.join(process.cwd(), 'artifacts/base-sniper/dist'),
+        path_1.default.join(__dirname, '../../base-sniper/dist'),
+        path_1.default.join(process.cwd(), 'base-sniper/dist'),
+    ];
+    return candidates.find(p => fs_1.default.existsSync(p)) ?? candidates[0];
+})();
+app.use(express_1.default.static(frontendDist, { maxAge: '1d', etag: true }));
+app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'API endpoint not found' });
+    }
+    const indexFile = path_1.default.join(frontendDist, 'index.html');
+    if (fs_1.default.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+    }
+    else {
+        res.status(503).send('Frontend not built. Run: cd artifacts/base-sniper && npm run build');
+    }
 });
 // ============ START SERVER ============
 app.listen(PORT, () => {

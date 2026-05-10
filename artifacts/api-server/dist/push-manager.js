@@ -23,9 +23,19 @@ exports.pushWhalePromoted = pushWhalePromoted;
 const web_push_1 = __importDefault(require("web-push"));
 const db_1 = require("./db");
 // ── VAPID Configuration ────────────────────────────────────────────────────────
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BD23jRxqCgCzdXZTFSu170FgkghSYuX1UqAjfbVyr732TNU_SwrWiPPZxQKfQZm8wfmGJDDMKY4jGX6eUhjbwuY';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'Y1vAvLm527TmA7XGz_f12j9PZHiXNmkj_PVbLEAgEJM';
-web_push_1.default.setVapidDetails('mailto:admin@base-sniper.local', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+// Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY as Replit Secrets to enable
+// browser push notifications. Generate a pair with:
+//   npx web-push generate-vapid-keys
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+let _pushEnabled = false;
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+    web_push_1.default.setVapidDetails('mailto:admin@base-sniper.local', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    _pushEnabled = true;
+}
+else {
+    console.warn('⚠️  Push notifications disabled — VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY not set in Replit Secrets');
+}
 function getVapidPublicKey() {
     return VAPID_PUBLIC_KEY;
 }
@@ -40,6 +50,8 @@ function getSubscriptionCount() {
     return (0, db_1.dbGetPushSubscriptions)().length;
 }
 async function sendPushToAll(payload) {
+    if (!_pushEnabled)
+        return;
     const subs = (0, db_1.dbGetPushSubscriptions)();
     if (!subs.length)
         return;

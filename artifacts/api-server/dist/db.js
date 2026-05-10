@@ -52,6 +52,7 @@ exports.dbLoadScreenerConfig = dbLoadScreenerConfig;
 const sql_js_1 = __importDefault(require("sql.js"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
+// __dirname is <project>/artifacts/api-server/dist at runtime, so ../../base-sniper = artifacts/base-sniper
 const DB_PATH = path_1.default.resolve(__dirname, '../../base-sniper/base.db');
 fs_1.default.mkdirSync(path_1.default.dirname(DB_PATH), { recursive: true });
 let _db = null;
