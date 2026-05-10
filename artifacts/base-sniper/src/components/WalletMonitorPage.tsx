@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { authFetch } from '../lib/authFetch';
+import TokenSafetyBadge from './TokenSafetyBadge';
 
 interface MonitoredWallet {
     address:        string;
@@ -58,6 +59,9 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
     const [promoting, setPromoting]       = useState<string | null>(null);
     const [removing, setRemoving]         = useState<string | null>(null);
     const [feedbackMsg, setFeedbackMsg]   = useState<{ addr: string; msg: string; ok: boolean } | null>(null);
+    // Token safety checker per wallet
+    const [tokenInputs, setTokenInputs]   = useState<Record<string, string>>({});
+    const [checkedTokens, setCheckedTokens] = useState<Record<string, string>>({});
 
     const fetchWallets = useCallback(async () => {
         try {
@@ -240,8 +244,42 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
                                     </div>
                                 )}
 
+                                {/* Token Safety Checker */}
+                                <div className="border-t border-gray-700/50 pt-3 mt-1">
+                                    <p className="text-xs text-gray-500 font-semibold mb-2">🔒 Cek Keamanan Token</p>
+                                    <div className="flex gap-2 mb-2">
+                                        <input
+                                            type="text"
+                                            placeholder="Tempel alamat token 0x..."
+                                            value={tokenInputs[w.address] ?? ''}
+                                            onChange={e => setTokenInputs(prev => ({ ...prev, [w.address]: e.target.value.trim() }))}
+                                            className="flex-1 text-xs bg-gray-900 border border-gray-700 focus:border-blue-600 text-gray-300 rounded-lg px-3 py-1.5 outline-none font-mono placeholder:text-gray-600 placeholder:font-sans"
+                                        />
+                                        <button
+                                            onClick={() => {
+                                                const token = tokenInputs[w.address] ?? '';
+                                                if (token.match(/^0x[0-9a-fA-F]{40}$/i)) {
+                                                    setCheckedTokens(prev => ({ ...prev, [w.address]: token }));
+                                                }
+                                            }}
+                                            disabled={!tokenInputs[w.address]?.match(/^0x[0-9a-fA-F]{40}$/i)}
+                                            className="text-xs bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-3 py-1.5 rounded-lg font-semibold transition-all flex-shrink-0"
+                                        >
+                                            Cek
+                                        </button>
+                                    </div>
+                                    {checkedTokens[w.address] && (
+                                        <TokenSafetyBadge
+                                            apiUrl={apiUrl}
+                                            tokenAddress={checkedTokens[w.address]}
+                                            size="full"
+                                            showFlags
+                                        />
+                                    )}
+                                </div>
+
                                 {/* Action buttons */}
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 mt-3">
                                     {w.aiVerdict === 'pending' && (
                                         <button
                                             onClick={() => handleEvaluate(w.address)}

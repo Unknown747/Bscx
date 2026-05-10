@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { authFetch } from '../lib/authFetch';
+import TokenSafetyBadge from './TokenSafetyBadge';
 
 interface QualityScore {
     totalScore:      number;
@@ -104,6 +105,23 @@ const WhaleDetailModal: React.FC<Props> = ({ apiUrl, address, name, onClose, onA
 
     const a = data?.analysis;
     const s = data?.summary;
+
+    // Extract up to 3 unique recent token addresses from buy events
+    const recentTokens = useMemo(() => {
+        if (!data?.events) return [];
+        const seen = new Set<string>();
+        const result: string[] = [];
+        for (const e of data.events) {
+            if (e.token && e.token.match(/^0x[0-9a-fA-F]{40}$/i) && !seen.has(e.token.toLowerCase())) {
+                seen.add(e.token.toLowerCase());
+                result.push(e.token);
+                if (result.length >= 3) break;
+            }
+        }
+        return result;
+    }, [data?.events]);
+
+    const [safetyExpanded, setSafetyExpanded] = useState(false);
 
     return (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60] p-4">
@@ -213,28 +231,77 @@ const WhaleDetailModal: React.FC<Props> = ({ apiUrl, address, name, onClose, onA
                                 </div>
                             )}
 
-                            {/* Recent waitlist events */}
+                            {/* Recent waitlist events — with inline safety badges */}
                             {(data?.events?.length ?? 0) > 0 && (
                                 <div>
                                     <p className="text-xs text-gray-600 font-medium uppercase tracking-wide mb-2">Event Terbaru</p>
                                     <div className="space-y-1.5">
                                         {data!.events.slice(0, 8).map((e, i) => (
-                                            <div key={i} className="flex items-center justify-between bg-gray-800/30 rounded-lg px-3 py-1.5">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-xs">{e.eventType === 'buy' ? '🟢' : e.eventType === 'sell' ? '🔴' : '⚪'}</span>
-                                                    <span className="text-xs text-gray-400 font-mono">{e.token ? `${e.token.slice(0,8)}...` : e.eventType}</span>
+                                            <div key={i} className="bg-gray-800/30 rounded-lg px-3 py-2">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <span className="text-xs flex-shrink-0">{e.eventType === 'buy' ? '🟢' : e.eventType === 'sell' ? '🔴' : '⚪'}</span>
+                                                        <span className="text-xs text-gray-400 font-mono truncate">{e.token ? `${e.token.slice(0,8)}...` : e.eventType}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                                        {e.profitPct != null && (
+                                                            <span className={`text-xs font-semibold ${e.profitPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                                {e.profitPct >= 0 ? '+' : ''}{e.profitPct.toFixed(1)}%
+                                                            </span>
+                                                        )}
+                                                        <span className="text-xs text-gray-700">{new Date(e.recordedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</span>
+                                                    </div>
                                                 </div>
-                                                <div className="text-right">
-                                                    {e.profitPct != null && (
-                                                        <span className={`text-xs font-semibold ${e.profitPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                                            {e.profitPct >= 0 ? '+' : ''}{e.profitPct.toFixed(1)}%
-                                                        </span>
-                                                    )}
-                                                    <p className="text-xs text-gray-700">{new Date(e.recordedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</p>
-                                                </div>
+                                                {/* Inline safety badge for buy events with token address */}
+                                                {e.token && e.token.match(/^0x[0-9a-fA-F]{40}$/i) && (
+                                                    <div className="mt-1.5 ml-5">
+                                                        <TokenSafetyBadge
+                                                            apiUrl={apiUrl}
+                                                            tokenAddress={e.token}
+                                                            size="compact"
+                                                        />
+                                                    </div>
+                                                )}
                                             </div>
                                         ))}
                                     </div>
+                                </div>
+                            )}
+
+                            {/* Token Safety Analysis — full scan for recent tokens */}
+                            {recentTokens.length > 0 && (
+                                <div>
+                                    <button
+                                        onClick={() => setSafetyExpanded(p => !p)}
+                                        className="w-full flex items-center justify-between text-xs font-semibold text-gray-400 hover:text-white transition-colors py-1"
+                                    >
+                                        <span>🔒 Analisis Keamanan Token ({recentTokens.length} token terakhir)</span>
+                                        <span className="text-gray-600">{safetyExpanded ? '▲' : '▼'}</span>
+                                    </button>
+
+                                    {safetyExpanded && (
+                                        <div className="space-y-3 mt-2">
+                                            {recentTokens.map((tokenAddr, i) => (
+                                                <div key={tokenAddr}>
+                                                    <p className="text-xs text-gray-600 font-mono mb-1.5">
+                                                        Token #{i + 1}: {tokenAddr.slice(0, 14)}…{tokenAddr.slice(-6)}
+                                                        <a
+                                                            href={`https://basescan.org/token/${tokenAddr}`}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="ml-2 text-blue-500 hover:text-blue-400"
+                                                        >BaseScan ↗</a>
+                                                    </p>
+                                                    <TokenSafetyBadge
+                                                        apiUrl={apiUrl}
+                                                        tokenAddress={tokenAddr}
+                                                        size="full"
+                                                        showFlags
+                                                    />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
