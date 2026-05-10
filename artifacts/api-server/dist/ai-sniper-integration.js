@@ -912,11 +912,13 @@ class AISniperBot extends events_1.EventEmitter {
             console.warn('   ⚠️  Live trading disabled');
             return;
         }
-        // ── Risk manager gate ──
-        const riskGate = this.riskManager.beforeTrade({});
+        // ── Risk manager gate — skipCooldown=true ──
+        // Copy trade mengikuti whale secara independen, tidak dipengaruhi cooldown screener.
+        // Hanya Emergency Stop (tombol 🚨) yang benar-benar menghentikannya.
+        const riskGate = this.riskManager.beforeTrade({}, true);
         if (!riskGate.allowed) {
-            console.log(`   🚫 [RiskManager] copy blocked: ${riskGate.reason}`);
-            this.addLog('info', `Copy trade diblokir`, riskGate.reason);
+            console.log(`   🚫 [CopyTrade] Diblokir Emergency Stop: ${riskGate.reason}`);
+            this.addLog('info', `Copy trade diblokir Emergency Stop`, riskGate.reason);
             return;
         }
         const addr = opportunity.tokenAddress.toLowerCase();

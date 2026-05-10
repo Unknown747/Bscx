@@ -85,14 +85,16 @@ class MicroCapRiskManager {
         console.log(`[RiskManager] ⏳ Cooldown ${mins >= 60 ? hrs + 'j' : mins + 'mnt'}: ${reason}`);
     }
     // ── Gate: called BEFORE each trade ────────────────────────────────────────
-    beforeTrade(token = {}) {
-        // Emergency stop — highest priority
+    // skipCooldown=true → hanya Emergency Stop yg memblokir (untuk copy trade)
+    beforeTrade(token = {}, skipCooldown = false) {
+        // Emergency stop — highest priority, selalu dipatuhi
         if (this.circuitBreakerTripped) {
             this.tradesBlockedToday++;
             return { allowed: false, reason: `🔴 Emergency Stop aktif: ${this.circuitBreakerReason}` };
         }
         // Cooldown check (covers: daily loss CD, consecutive loss CD, big-profit CD)
-        if (this.cooldownUntil > Date.now()) {
+        // Copy trade melewati ini — whale signal independen dari screener kami
+        if (!skipCooldown && this.cooldownUntil > Date.now()) {
             const remaining = this.cooldownUntil - Date.now();
             const remainingMins = Math.ceil(remaining / 60000);
             const display = remainingMins >= 60
