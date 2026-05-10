@@ -25,6 +25,7 @@ import {
     type TradeRow, type MonitoredWalletRow,
 } from './db';
 import { startTelegramBot, type TelegramBot } from './telegram-bot';
+import { pushBuySuccess, pushTakeProfit, pushStopLoss, pushWhaleMonitoring, pushWhalePromoted } from './push-manager';
 import { MicroCapRiskManager } from './microcap-risk-manager';
 import { getCacheStats, getEthPriceSync } from './performance-optimizer';
 import { analyzeWhale } from './whale-analyzer-pro';
@@ -581,6 +582,7 @@ export class AISniperBot extends EventEmitter {
             this.emit('buy-success', d);
             this.addLog('buy-success', `BUY ${d.tokenSymbol}`, `TX: ${d.txHash?.slice(0, 18)}...`);
             const amtEth = d.amountIn ? parseFloat(d.amountIn.toString()) / 1e18 : 0;
+            pushBuySuccess(d.tokenSymbol || 'TOKEN', amtEth, d.txHash);
             const sourceWalletLine = d.sourceWallet ? `🐋 Copy dari: <b>${sanitizeTg(d.sourceWallet)}</b>\n` : '';
             const tokenAddrLine = d.tokenAddress
                 ? `<code>${d.tokenAddress}</code> | <a href="https://basescan.org/token/${d.tokenAddress}">Info Token</a>\n`
@@ -644,6 +646,8 @@ export class AISniperBot extends EventEmitter {
         this.executor.on('take-profit', (d) => {
             this.emit('take-profit', d);
             this.addLog('take-profit', `TP${d.level} ${d.tokenSymbol} @ ${d.multiplier?.toFixed(2)}x`, 'Auto take profit triggered');
+            const tpProfitPct = d.profitPct ?? (d.multiplier ? (d.multiplier - 1) * 100 : 0);
+            pushTakeProfit(d.tokenSymbol || 'TOKEN', d.level, tpProfitPct, d.multiplier);
             if (d.sourceWallet && d.level === 2 && d.profitPct != null) {
                 this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct);
             }
@@ -680,6 +684,7 @@ export class AISniperBot extends EventEmitter {
         this.executor.on('stop-loss', (d) => {
             this.emit('stop-loss', d);
             this.addLog('stop-loss', `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`, d.reason || 'Auto stop loss triggered');
+            pushStopLoss(d.tokenSymbol || 'TOKEN', d.profitPct ?? 0, d.reason);
             // ── Update risk manager on loss ──
             if (d.profitPct != null) {
                 const lossEth = (Math.abs(d.profitPct) / 100) * this.runtimeConfig.maxTradeAmount;
@@ -935,6 +940,7 @@ export class AISniperBot extends EventEmitter {
         dbAddMonitoredWallet(address, label);
         this.addLog('info', `🔬 Whale masuk Monitoring`, `Score: ${c.score}/100 | WR: ${c.estimatedWinRate}%`);
         dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'monitoring', recordedAt: Date.now() });
+        pushWhaleMonitoring(address, label);
         this.sendTelegram(
             `🔬 <b>Whale Masuk Monitoring!</b>\n<code>${address}</code>\n` +
             `Skor: ${c.score}/100 | Est. WR: ${c.estimatedWinRate}%\n` +
@@ -1015,6 +1021,7 @@ export class AISniperBot extends EventEmitter {
 
         this.addLog('info', `🚀 Whale dipromosikan ke Copy!`, `${wallet.name} | AI Score: ${wallet.aiScore ?? '?'}/100`);
         dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'approved', recordedAt: Date.now() });
+        pushWhalePromoted(address, wallet.name);
         this.sendTelegram(
             `🚀 <b>Whale Dipromosikan ke Copy!</b>\n<code>${address}</code>\n` +
             `AI Score: ${wallet.aiScore ?? '?'}/100\n` +

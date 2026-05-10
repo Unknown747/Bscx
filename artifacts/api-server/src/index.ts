@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { AISniperBot } from './ai-sniper-integration';
+import { getVapidPublicKey, savePushSubscription, removePushSubscription, getSubscriptionCount } from './push-manager';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 
@@ -384,6 +385,42 @@ app.get('/api/logs', (_req: Request, res: Response) => {
 app.post('/api/telegram/test', async (_req: Request, res: Response) => {
     const result = await bot.testTelegram();
     res.status(result.ok ? 200 : 400).json(result);
+});
+
+// ============ WEB PUSH NOTIFICATIONS ============
+
+// GET /api/push/vapid-key — public VAPID key (no auth needed for service worker registration)
+app.get('/api/push/vapid-key', (_req: Request, res: Response) => {
+    res.json({ publicKey: getVapidPublicKey() });
+});
+
+// GET /api/push/status — how many subscriptions are active
+app.get('/api/push/status', requireAuth, (_req: Request, res: Response) => {
+    res.json({ count: getSubscriptionCount() });
+});
+
+// POST /api/push/subscribe — save a push subscription
+app.post('/api/push/subscribe', requireAuth, (req: Request, res: Response) => {
+    const sub = req.body;
+    if (!sub || !sub.endpoint || !sub.keys) {
+        res.status(400).json({ error: 'Subscription tidak valid' }); return;
+    }
+    try {
+        savePushSubscription(sub);
+        res.json({ ok: true, count: getSubscriptionCount() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// DELETE /api/push/unsubscribe — remove a push subscription
+app.delete('/api/push/unsubscribe', requireAuth, (req: Request, res: Response) => {
+    const { endpoint } = req.body;
+    if (!endpoint || typeof endpoint !== 'string') {
+        res.status(400).json({ error: 'Endpoint tidak valid' }); return;
+    }
+    removePushSubscription(endpoint);
+    res.json({ ok: true, count: getSubscriptionCount() });
 });
 
 // ============ REPUTATION ============

@@ -72,6 +72,12 @@ export function initDb(): void {
         CREATE INDEX IF NOT EXISTS idx_wwe_address ON whale_waitlist_events(address);
         CREATE INDEX IF NOT EXISTS idx_wwe_time    ON whale_waitlist_events(recorded_at);
 
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            endpoint   TEXT PRIMARY KEY,
+            data       TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
+        );
+
         CREATE TABLE IF NOT EXISTS monitored_wallets (
             address          TEXT    PRIMARY KEY,
             name             TEXT    NOT NULL,
@@ -427,6 +433,32 @@ export function dbSetMonitoredVerdict(address: string, verdict: 'approved' | 're
     db.prepare(`
         UPDATE monitored_wallets SET ai_verdict = ?, ai_score = ?, ai_reason = ? WHERE address = ?
     `).run(verdict, score, reason, address.toLowerCase());
+}
+
+// ── Push Subscriptions ────────────────────────────────────────────────────────
+
+export function dbGetPushSubscriptions(): string[] {
+    return (db.prepare('SELECT data FROM push_subscriptions').all() as any[]).map(r => r.data);
+}
+
+export function dbSavePushSubscription(data: string): void {
+    let endpoint = '';
+    try { endpoint = JSON.parse(data).endpoint || ''; } catch { return; }
+    if (!endpoint) return;
+    db.prepare(`
+        INSERT INTO push_subscriptions (endpoint, data, created_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(endpoint) DO UPDATE SET data = excluded.data
+    `).run(endpoint, data, Date.now());
+}
+
+export function dbDeletePushSubscription(endpoint: string): void {
+    db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').run(endpoint);
+}
+
+export function dbGetPushSubscriptionCount(): number {
+    const row = db.prepare('SELECT COUNT(*) as cnt FROM push_subscriptions').get() as any;
+    return row?.cnt ?? 0;
 }
 
 export default db;

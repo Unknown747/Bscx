@@ -11,6 +11,7 @@ import TradeHistory from './TradeHistory';
 import WhaleLeaderboard from './WhaleLeaderboard';
 import Backtest from './Backtest';
 import DailyReport from './DailyReport';
+import PushNotification from './PushNotification';
 import { authFetch } from '../lib/authFetch';
 
 interface Status {
@@ -230,6 +231,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                             </span>
                         )}
                     </button>
+
+                    {/* Push notification toggle */}
+                    <PushNotification apiUrl={apiUrl} />
 
                     {/* Wallet config button */}
                     <button
