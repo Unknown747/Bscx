@@ -101,6 +101,12 @@ interface RuntimeConfig {
     maxConsecutiveLosses:       number;
     cooldownAfterProfitMinutes: number;
     dailyLossCooldownHours:     number;
+    // Trading schedule (WIB = UTC+7)
+    tradingScheduleEnabled: boolean;
+    tradingStartHour:       number;
+    tradingEndHour:         number;
+    // Auto-compound profits
+    autoCompoundEnabled: boolean;
 }
 
 function sanitizeTg(s: string): string {
@@ -188,6 +194,10 @@ export class AISniperBot extends EventEmitter {
         maxConsecutiveLosses:       parseInt  (process.env.MAX_CONSECUTIVE_LOSSES         || '3'),
         cooldownAfterProfitMinutes: parseInt  (process.env.COOLDOWN_AFTER_BIG_PROFIT_MINUTES || '15'),
         dailyLossCooldownHours:     parseFloat(process.env.DAILY_LOSS_COOLDOWN_HOURS      || '2'),
+        tradingScheduleEnabled: process.env.TRADING_SCHEDULE_ENABLED === 'true',
+        tradingStartHour:       parseInt(process.env.TRADING_START_HOUR || '8'),
+        tradingEndHour:         parseInt(process.env.TRADING_END_HOUR   || '23'),
+        autoCompoundEnabled:    process.env.AUTO_COMPOUND_ENABLED === 'true',
     };
 
     private readonly CONFIG = {
@@ -282,6 +292,15 @@ export class AISniperBot extends EventEmitter {
     getActivityLog(): LogEntry[] { return this.activityLog; }
 
     // ============ TELEGRAM ============
+    private isWithinTradingHours(): boolean {
+        if (!this.runtimeConfig.tradingScheduleEnabled) return true;
+        const wibHour = (new Date().getUTCHours() + 7) % 24;
+        const start   = this.runtimeConfig.tradingStartHour;
+        const end     = this.runtimeConfig.tradingEndHour;
+        if (start <= end) return wibHour >= start && wibHour < end;
+        return wibHour >= start || wibHour < end; // Overnight span
+    }
+
     private async sendTelegram(message: string): Promise<void> {
         if (!this.telegramToken || !this.telegramChatId) return;
         try {
@@ -806,6 +825,33 @@ export class AISniperBot extends EventEmitter {
         // ─── Executor events ───
         this.wireExecutorEvents();
 
+        // ─── Feature: Smart Screener STRONG_BUY Telegram notifications ───
+        this.smartScreener.on('signal', (sig: any) => {
+            if (sig.signal !== 'STRONG_BUY') return;
+            this.addLog('info', `📡 STRONG BUY: ${sig.tokenSymbol || sig.tokenAddress?.slice(0,8)}`, `Score: ${sig.score?.total ?? '?'}/100`);
+            const sym        = sanitizeTg(sig.tokenSymbol || 'UNKNOWN');
+            const addr       = sig.tokenAddress || '';
+            const score      = sig.score?.total ?? '?';
+            const liqUsd     = sig.liquidityUsd ? `$${Number(sig.liquidityUsd).toLocaleString('en', { maximumFractionDigits: 0 })}` : '?';
+            const ch1h       = sig.priceChangeH1 != null ? `${sig.priceChangeH1 >= 0 ? '+' : ''}${Number(sig.priceChangeH1).toFixed(1)}%` : '?';
+            const ageMins    = sig.ageMinutes != null ? `${sig.ageMinutes} menit` : '?';
+            const buyTax     = sig.buyTax  != null ? `${sig.buyTax}%`  : '?';
+            const sellTax    = sig.sellTax != null ? `${sig.sellTax}%` : '?';
+            const geckoLink  = sig.dexUrl     ? `<a href="${sig.dexUrl}">GeckoTerminal</a>` : 'GeckoTerminal';
+            const bscanLink  = addr ? `<a href="https://basescan.org/token/${addr}">BaseScan</a>` : '';
+            this.sendTelegram(
+                `🔥 <b>STRONG BUY Signal!</b>\n\n` +
+                `🪙 Token: <b>${sym}</b>\n` +
+                (addr ? `<code>${addr}</code>\n` : '') +
+                `📊 Score: <b>${score}/100</b>\n` +
+                `💧 Likuiditas: <b>${liqUsd}</b>\n` +
+                `📈 1 jam: <b>${ch1h}</b>\n` +
+                `⏱️ Usia Pool: ${ageMins}\n` +
+                `🛡️ Tax B/S: ${buyTax}/${sellTax}\n\n` +
+                `🔗 ${geckoLink}${bscanLink ? ` | ${bscanLink}` : ''}`
+            );
+        });
+
         // ─── Periodic market sentiment ───
         this.sentimentInterval = setInterval(async () => {
             const sentiment = await this.ai.getMarketSentiment();
@@ -931,6 +977,30 @@ export class AISniperBot extends EventEmitter {
                 reason:       'take-profit',
                 tpLevel:      d.level,
             });
+
+            // ── Auto-compound: add profit back to totalCapital on full exit (TP2) ──
+            if (this.runtimeConfig.autoCompoundEnabled && d.level === 2 && (d.profitPct ?? 0) > 0) {
+                const entryEth   = d.entryEth ?? this.runtimeConfig.maxTradeAmount;
+                const profitEth  = (d.profitPct! / 100) * entryEth;
+                const newCapital = parseFloat((this.runtimeConfig.totalCapital + profitEth).toFixed(6));
+                this.runtimeConfig.totalCapital = newCapital;
+                this.riskManager.updateLimits(
+                    this.runtimeConfig.maxDailyLossEth,
+                    this.runtimeConfig.maxConsecutiveLosses,
+                    this.runtimeConfig.cooldownAfterProfitMinutes,
+                    this.runtimeConfig.dailyLossCooldownHours,
+                );
+                try { dbSaveRuntimeConfig(this.runtimeConfig); } catch { /* non-critical */ }
+                try { saveTradingConfig({ totalCapital: newCapital } as any); } catch { /* non-critical */ }
+                this.addLog('info', `💰 Auto-compound +${profitEth.toFixed(5)} ETH`, `Modal baru: ${newCapital.toFixed(5)} ETH`);
+                this.sendTelegram(
+                    `♻️ <b>Auto-Compound Aktif!</b>\n\n` +
+                    `🪙 Token: <b>${sanitizeTg(d.tokenSymbol || 'UNKNOWN')}</b>\n` +
+                    `🎯 TP2 Profit: <b>+${d.profitPct!.toFixed(1)}%</b>\n` +
+                    `📈 Profit dikompound: <b>+${profitEth.toFixed(5)} ETH</b>\n` +
+                    `💼 Modal baru: <b>${newCapital.toFixed(5)} ETH</b>`
+                );
+            }
             const holdStrTp   = d.holdMs ? fmtHoldTime(d.holdMs) : '?';
             const profitPctTp = d.profitPct ?? (d.multiplier ? (d.multiplier - 1) * 100 : 0);
             const srcLineTp   = d.sourceWallet ? `🐋 Whale: <b>${sanitizeTg(d.sourceWallet)}</b>\n` : '';
@@ -1063,6 +1133,15 @@ export class AISniperBot extends EventEmitter {
                     `⏰ Reset pada: <b>${resetTime} UTC</b>`
                 );
             }
+            return;
+        }
+
+        // ── Trading schedule gate ──
+        if (!this.isWithinTradingHours()) {
+            const s = this.runtimeConfig.tradingStartHour;
+            const e = this.runtimeConfig.tradingEndHour;
+            console.log(`   🕐 [Schedule] Diluar jam trading (${s}:00–${e}:00 WIB) — skip`);
+            this.addLog('info', 'Trade diblokir jadwal', `Jam aktif: ${s.toString().padStart(2,'0')}:00–${e.toString().padStart(2,'0')}:00 WIB`);
             return;
         }
 
@@ -1603,6 +1682,10 @@ export class AISniperBot extends EventEmitter {
         if (s.maxConsecutiveLosses       != null) r.maxConsecutiveLosses       = s.maxConsecutiveLosses;
         if (s.cooldownAfterProfitMinutes != null) r.cooldownAfterProfitMinutes = s.cooldownAfterProfitMinutes;
         if (s.dailyLossCooldownHours     != null) r.dailyLossCooldownHours     = s.dailyLossCooldownHours;
+        if (s.tradingScheduleEnabled != null) r.tradingScheduleEnabled = s.tradingScheduleEnabled;
+        if (s.tradingStartHour       != null) r.tradingStartHour       = s.tradingStartHour;
+        if (s.tradingEndHour         != null) r.tradingEndHour         = s.tradingEndHour;
+        if (s.autoCompoundEnabled    != null) r.autoCompoundEnabled    = s.autoCompoundEnabled;
 
         // Propagate limits to risk manager
         this.riskManager.updateLimits(

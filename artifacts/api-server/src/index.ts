@@ -146,6 +146,14 @@ app.get('/api/config', (_req: Request, res: Response) => {
         enableFlashblocks:        rc.enableFlashblocks,
         gasMode:                  rc.gasMode,
         dcaEnabled:               rc.dcaEnabled,
+        maxDailyLossEth:            rc.maxDailyLossEth,
+        maxConsecutiveLosses:       rc.maxConsecutiveLosses,
+        cooldownAfterProfitMinutes: rc.cooldownAfterProfitMinutes,
+        dailyLossCooldownHours:     rc.dailyLossCooldownHours,
+        tradingScheduleEnabled: rc.tradingScheduleEnabled,
+        tradingStartHour:       rc.tradingStartHour,
+        tradingEndHour:         rc.tradingEndHour,
+        autoCompoundEnabled:    rc.autoCompoundEnabled,
     });
 });
 
@@ -192,6 +200,10 @@ app.post('/api/settings', (req: Request, res: Response) => {
             maxConsecutiveLosses:        s.maxConsecutiveLosses,
             cooldownAfterProfitMinutes:  s.cooldownAfterProfitMinutes,
             dailyLossCooldownHours:      s.dailyLossCooldownHours,
+            tradingScheduleEnabled:      s.tradingScheduleEnabled,
+            tradingStartHour:            s.tradingStartHour,
+            tradingEndHour:              s.tradingEndHour,
+            autoCompoundEnabled:         s.autoCompoundEnabled,
         });
         res.json({ ok: true, message: 'Settings applied successfully' });
     } catch (err: any) {
@@ -445,6 +457,12 @@ app.patch('/api/config', (req: Request, res: Response) => {
             blockHoneypot: s.blockHoneypot, blockHighTax: s.blockHighTax,
             maxTaxPercent: s.maxTaxPercent, minAiConfidence: s.minAiConfidence,
             enableFlashblocks: s.enableFlashblocks, gasMode: s.gasMode,
+            maxDailyLossEth: s.maxDailyLossEth, maxConsecutiveLosses: s.maxConsecutiveLosses,
+            cooldownAfterProfitMinutes: s.cooldownAfterProfitMinutes, dailyLossCooldownHours: s.dailyLossCooldownHours,
+            tradingScheduleEnabled: s.tradingScheduleEnabled,
+            tradingStartHour: s.tradingStartHour,
+            tradingEndHour: s.tradingEndHour,
+            autoCompoundEnabled: s.autoCompoundEnabled,
         });
         res.json({ ok: true, message: 'Settings applied successfully' });
     } catch (err: any) {

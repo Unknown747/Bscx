@@ -53,6 +53,12 @@ export interface BotSettings {
     maxConsecutiveLosses: number;
     cooldownAfterProfitMinutes: number;
     dailyLossCooldownHours: number;
+    // Trading Schedule (WIB)
+    tradingScheduleEnabled: boolean;
+    tradingStartHour: number;
+    tradingEndHour: number;
+    // Auto-compound
+    autoCompoundEnabled: boolean;
 }
 
 interface KeyStatus {
@@ -110,6 +116,8 @@ const DEFAULTS: BotSettings = {
     serialRuggerEnabled: true, serialRuggerMaxDeploys: 3, serialRuggerWindowHours: 24,
     reputationEnabled: true, reputationMinScore: 25,
     maxDailyLossEth: 0.0015, maxConsecutiveLosses: 3, cooldownAfterProfitMinutes: 15, dailyLossCooldownHours: 2,
+    tradingScheduleEnabled: false, tradingStartHour: 8, tradingEndHour: 23,
+    autoCompoundEnabled: false,
 };
 
 function fromConfig(c: Record<string, any>): BotSettings {
@@ -153,6 +161,10 @@ function fromConfig(c: Record<string, any>): BotSettings {
         maxConsecutiveLosses:       pn(c.maxConsecutiveLosses, DEFAULTS.maxConsecutiveLosses),
         cooldownAfterProfitMinutes: pn(c.cooldownAfterProfitMinutes, DEFAULTS.cooldownAfterProfitMinutes),
         dailyLossCooldownHours:     pn(c.dailyLossCooldownHours, DEFAULTS.dailyLossCooldownHours),
+        tradingScheduleEnabled: pb(c.tradingScheduleEnabled, DEFAULTS.tradingScheduleEnabled),
+        tradingStartHour:       pn(c.tradingStartHour, DEFAULTS.tradingStartHour),
+        tradingEndHour:         pn(c.tradingEndHour, DEFAULTS.tradingEndHour),
+        autoCompoundEnabled:    pb(c.autoCompoundEnabled, DEFAULTS.autoCompoundEnabled),
     };
 }
 
@@ -303,6 +315,10 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
                 maxConsecutiveLosses: s.maxConsecutiveLosses,
                 cooldownAfterProfitMinutes: s.cooldownAfterProfitMinutes,
                 dailyLossCooldownHours: s.dailyLossCooldownHours,
+                tradingScheduleEnabled: s.tradingScheduleEnabled,
+                tradingStartHour: s.tradingStartHour,
+                tradingEndHour: s.tradingEndHour,
+                autoCompoundEnabled: s.autoCompoundEnabled,
             };
             const res = await authFetch(`${apiUrl}/api/settings`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
@@ -456,6 +472,17 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
                 </div>
             </Section>
 
+            <Section title="♻️ Auto-Compound Profit">
+                <Row label="Auto-Compound Aktif" sub="Profit TP2 otomatis ditambah ke modal">
+                    <Toggle checked={s.autoCompoundEnabled} onChange={v => upd({ autoCompoundEnabled: v })} color="green" />
+                </Row>
+                {s.autoCompoundEnabled && (
+                    <div className="mt-1 px-2 py-2 bg-green-950/30 rounded-lg border border-green-900/40">
+                        <p className="text-xs text-green-400">💡 Setiap TP2 tercapai, profit ETH langsung ditambahkan ke Total Modal — modal tumbuh otomatis tanpa perlu setting ulang.</p>
+                    </div>
+                )}
+            </Section>
+
             <Section title="🐋 Copy Trading">
                 <Row label="Copy Trading" sub="Ikuti transaksi whale wallet">
                     <Toggle checked={s.copyEnabled} onChange={v => upd({ copyEnabled: v })} color="purple" />
@@ -548,6 +575,35 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
     // ─── Tab: Risk ────────────────────────────────────────────────────────────
     const TabRisk = () => (
         <div>
+            <Section title="🕐 Jadwal Trading Otomatis (WIB)">
+                <Row label="Jadwal Aktif" sub="Batasi jam operasional bot (WIB = UTC+7)">
+                    <Toggle checked={s.tradingScheduleEnabled} onChange={v => upd({ tradingScheduleEnabled: v })} color="orange" />
+                </Row>
+                {s.tradingScheduleEnabled && (
+                    <>
+                        <Row label="Jam Mulai (WIB)" sub="Bot mulai eksekusi dari jam ini">
+                            <div className="flex items-center gap-1.5">
+                                <NumInput value={s.tradingStartHour} onChange={v => upd({ tradingStartHour: Math.round(v) })} step={1} min={0} max={23} />
+                                <span className="text-xs text-gray-500">:00</span>
+                            </div>
+                        </Row>
+                        <Row label="Jam Selesai (WIB)" sub="Bot berhenti eksekusi dari jam ini">
+                            <div className="flex items-center gap-1.5">
+                                <NumInput value={s.tradingEndHour} onChange={v => upd({ tradingEndHour: Math.round(v) })} step={1} min={0} max={23} />
+                                <span className="text-xs text-gray-500">:00</span>
+                            </div>
+                        </Row>
+                        <div className="mt-1 px-2 py-2 bg-orange-950/30 rounded-lg border border-orange-900/40">
+                            <p className="text-xs text-orange-400">
+                                ⏰ Bot aktif {s.tradingStartHour.toString().padStart(2,'0')}:00 – {s.tradingEndHour.toString().padStart(2,'0')}:00 WIB
+                                {s.tradingStartHour > s.tradingEndHour ? ' (overnight — melewati tengah malam)' : ''}
+                                . Di luar jam ini semua sinyal diabaikan.
+                            </p>
+                        </div>
+                    </>
+                )}
+            </Section>
+
             <Section title="⏳ Auto Cooldown (Circuit Breaker)">
                 <Row label="Max Rugi Harian (ETH)" sub="Picu cooldown otomatis jika rugi melebihi ini">
                     <NumInput value={s.maxDailyLossEth} onChange={v => upd({ maxDailyLossEth: v })} step={0.0005} min={0.0001} />
