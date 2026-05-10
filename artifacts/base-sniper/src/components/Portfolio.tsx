@@ -79,7 +79,8 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
     const [sendState, setSendState]   = useState<SendState | null>(null);
     const [swapState, setSwapState]   = useState<SwapState | null>(null);
     const countdownRef            = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const [nextRefresh, setNextRefresh] = useState(15);
+    const [nextRefresh, setNextRefresh] = useState(8);
+    const POLL_INTERVAL = 8000;
 
     const fetchPortfolio = useCallback(async () => {
         try {
@@ -88,7 +89,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
             setData(json);
             setLastUpdate(new Date().toLocaleTimeString('id-ID'));
             setError('');
-            setNextRefresh(15);
+            setNextRefresh(POLL_INTERVAL / 1000);
         } catch {
             setError('Gagal memuat portfolio');
         }
@@ -97,7 +98,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
 
     useEffect(() => {
         fetchPortfolio();
-        const interval = setInterval(fetchPortfolio, 15000);
+        const interval = setInterval(fetchPortfolio, POLL_INTERVAL);
         return () => clearInterval(interval);
     }, [fetchPortfolio]);
 

@@ -1183,6 +1183,24 @@ export class AISniperBot extends EventEmitter {
             console.log(`💾 Loaded ${savedWallets.length} copy wallets from DB`);
         }
 
+        // ── Restore known tokens from DB trade history ──
+        if (this.executor) {
+            const WETH_BASE = '0x4200000000000000000000000000000000000006';
+            this.executor.addKnownToken(WETH_BASE);
+            const recentTrades = dbGetTrades(200);
+            const restored = new Set<string>();
+            for (const t of recentTrades) {
+                const addr = t.tokenAddress?.toLowerCase();
+                if (addr && addr.startsWith('0x') && !restored.has(addr)) {
+                    this.executor.addKnownToken(addr);
+                    restored.add(addr);
+                }
+            }
+            if (restored.size > 0) {
+                console.log(`📦 Restored ${restored.size} token(s) from trade history into portfolio scanner`);
+            }
+        }
+
         await this.scanner.connect();
 
         if (this.runtimeConfig.copyEnabled) {
@@ -1590,6 +1608,7 @@ export class AISniperBot extends EventEmitter {
     }
 
     getStatus() {
+        const tradeHistory = dbGetTrades(1);
         return {
             connected:       this.scanner.isConnectedToBase(),
             copyStats:       this.copyMonitor.getStats(),
@@ -1604,6 +1623,7 @@ export class AISniperBot extends EventEmitter {
             riskState:       this.riskManager.getState(),
             pendingWhales:   dbGetPendingWhales().length,
             emergencyStop:   this.emergencyStopActive,
+            lastTradeAt:     tradeHistory[0]?.closedAt ?? null,
             timestamp:       Date.now()
         };
     }

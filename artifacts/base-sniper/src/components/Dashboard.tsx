@@ -193,40 +193,59 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         <div className="min-h-screen bg-gray-950 flex flex-col">
 
             {/* Header */}
-            <div className="flex items-center justify-between px-4 pt-5 pb-3">
-                <div className="flex items-center gap-3">
-                    <span className="text-3xl">🔥</span>
-                    <div>
-                        <h1 className="text-xl font-bold text-white leading-tight">Base Sniper</h1>
-                        {ethBalance !== null && (
-                            <p className="text-xs text-green-400 font-medium">Ξ {ethBalance} ETH</p>
-                        )}
+            <div className="px-4 pt-5 pb-2">
+                {/* Top row: logo + connection + STOP */}
+                <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                        <span className="text-3xl">🔥</span>
+                        <div>
+                            <h1 className="text-xl font-bold text-white leading-tight">Base Sniper</h1>
+                            {ethBalance !== null && (
+                                <p className="text-xs text-green-400 font-medium">Ξ {ethBalance} ETH</p>
+                            )}
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {/* Connection status */}
+                        <div className="flex items-center gap-1.5">
+                            <div className={`w-2 h-2 rounded-full ${status?.connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+                            <span className="text-xs text-gray-400 hidden sm:inline">{status?.connected ? 'Live' : 'Offline'}</span>
+                        </div>
+                        {/* Emergency Stop */}
+                        <button
+                            onClick={handleEmergencyStop}
+                            disabled={emergencyLoading || emergencyDone || (status?.emergencyStop === true)}
+                            className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg transition-all font-semibold border
+                                ${emergencyDone || status?.emergencyStop
+                                    ? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
+                                    : 'bg-red-900/80 hover:bg-red-800 border-red-700 text-red-300 hover:text-white'
+                                }`}
+                            title="Hentikan semua scanner & jual semua posisi"
+                        >
+                            <span>{emergencyLoading ? '⏳' : emergencyDone || status?.emergencyStop ? '🔴' : '🚨'}</span>
+                            <span>{emergencyDone || status?.emergencyStop ? 'STOPPED' : 'STOP'}</span>
+                        </button>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                    {/* Connection status */}
-                    <div className="flex items-center gap-1.5">
-                        <div className={`w-2 h-2 rounded-full ${status?.connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                        <span className="text-xs text-gray-400">{status?.connected ? 'Live' : 'Offline'}</span>
-                    </div>
-
+                {/* Action buttons row — scrollable on mobile */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
                     {/* Blacklist button */}
                     <button
                         onClick={() => setShowBlacklist(true)}
-                        className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                        className="flex-shrink-0 flex items-center gap-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-2.5 py-1.5 rounded-lg transition-all"
                     >
                         <span>🚫</span>
-                        <span>Blokir</span>
+                        <span className="hidden sm:inline">Blokir</span>
                     </button>
 
                     {/* Copy wallets button */}
                     <button
                         onClick={() => setShowCopyWallets(true)}
-                        className="relative flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                        className="flex-shrink-0 relative flex items-center gap-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-2.5 py-1.5 rounded-lg transition-all"
                     >
                         <span>🐋</span>
-                        <span>Whale</span>
+                        <span className="hidden sm:inline">Whale</span>
                         {(status?.pendingWhales ?? 0) > 0 && (
                             <span className="absolute -top-1.5 -right-1.5 bg-blue-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
                                 {status!.pendingWhales}
@@ -237,10 +256,10 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     {/* Monitor button */}
                     <button
                         onClick={() => setShowMonitor(true)}
-                        className="relative flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                        className="flex-shrink-0 relative flex items-center gap-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-2.5 py-1.5 rounded-lg transition-all"
                     >
                         <span>🔬</span>
-                        <span>Monitor</span>
+                        <span className="hidden sm:inline">Monitor</span>
                         {monitorCount > 0 && (
                             <span className="absolute -top-1.5 -right-1.5 bg-purple-500 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center leading-none">
                                 {monitorCount}
@@ -249,39 +268,26 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     </button>
 
                     {/* Push notification toggle */}
-                    <PushNotification apiUrl={apiUrl} />
+                    <div className="flex-shrink-0">
+                        <PushNotification apiUrl={apiUrl} />
+                    </div>
 
                     {/* Wallet config button */}
                     <button
                         onClick={() => setShowWalletConfig(true)}
-                        className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                        className="flex-shrink-0 flex items-center gap-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-2.5 py-1.5 rounded-lg transition-all"
                     >
                         <span>🔑</span>
-                        <span>Kunci</span>
+                        <span className="hidden sm:inline">Kunci</span>
                     </button>
 
                     {/* Settings button */}
                     <button
                         onClick={() => setShowSettings(true)}
-                        className="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-1.5 rounded-lg transition-all"
+                        className="flex-shrink-0 flex items-center gap-1 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 hover:text-white text-xs px-2.5 py-1.5 rounded-lg transition-all"
                     >
                         <span>⚙️</span>
-                        <span>Atur</span>
-                    </button>
-
-                    {/* Emergency Stop button */}
-                    <button
-                        onClick={handleEmergencyStop}
-                        disabled={emergencyLoading || emergencyDone || (status?.emergencyStop === true)}
-                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all font-semibold border
-                            ${emergencyDone || status?.emergencyStop
-                                ? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
-                                : 'bg-red-900/80 hover:bg-red-800 border-red-700 text-red-300 hover:text-white'
-                            }`}
-                        title="Hentikan semua scanner & jual semua posisi"
-                    >
-                        <span>{emergencyLoading ? '⏳' : emergencyDone || status?.emergencyStop ? '🔴' : '🚨'}</span>
-                        <span>{emergencyDone || status?.emergencyStop ? 'STOPPED' : 'STOP'}</span>
+                        <span className="hidden sm:inline">Atur</span>
                     </button>
                 </div>
             </div>
@@ -311,19 +317,19 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 </div>
             )}
 
-            {/* Tab Bar */}
-            <div className="flex mx-4 mb-4 bg-gray-900 rounded-xl p-1 gap-1">
+            {/* Tab Bar — scrollable on mobile */}
+            <div className="flex mx-4 mb-4 bg-gray-900 rounded-xl p-1 gap-1 overflow-x-auto scrollbar-hide">
                 {TAB_LIST.map((tab) => (
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
-                        className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-medium transition-all
+                        className={`flex-shrink-0 flex items-center justify-center gap-1 py-2 px-3 rounded-lg text-xs font-medium transition-all
                             ${activeTab === tab.id
                                 ? 'bg-gray-700 text-white shadow'
                                 : 'text-gray-500 hover:text-gray-300'}`}
                     >
                         <span>{tab.icon}</span>
-                        <span>{tab.label}</span>
+                        <span className="hidden sm:inline">{tab.label}</span>
                         {tab.id === 'positions' && openCount > 0 && (
                             <span className="bg-green-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center leading-none">
                                 {openCount}

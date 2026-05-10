@@ -848,7 +848,15 @@ export class SwapExecutor extends EventEmitter {
         const ethValueUsd = parseFloat(eth) * ethPriceUsd;
         const tokens: any[] = [];
 
-        await Promise.all(Array.from(this.knownTokens).map(async (addr) => {
+        // Always scan WETH + open positions + knownTokens regardless of session state
+        const WETH_ADDR = '0x4200000000000000000000000000000000000006' as Address;
+        const scanSet   = new Set<Address>([
+            WETH_ADDR,
+            ...Array.from(this.knownTokens),
+            ...Array.from(this.openPositions.keys()),
+        ]);
+
+        await Promise.all(Array.from(scanSet).map(async (addr) => {
             try {
                 const [balance, decimals, symbol] = await Promise.all([
                     this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [this.account.address] }) as Promise<bigint>,
