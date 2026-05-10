@@ -290,8 +290,14 @@ class AISniperBot extends events_1.EventEmitter {
                 const multiplier = aiConfidence >= 90 ? 1.5 : aiConfidence >= 85 ? 1.25 : aiConfidence >= 80 ? 1.0 : 0.6;
                 amount *= multiplier;
             }
-            const minTrade = 0.001;
-            const maxTrade = balanceEth * 0.30;
+            const GAS_RESERVE = 0.0002;
+            const spendable = Math.max(0, balanceEth - GAS_RESERVE);
+            const minTrade = Math.min(0.001, spendable);
+            const maxTrade = spendable * 0.30;
+            if (spendable <= 0) {
+                console.log(`   ⚠️  Dynamic sizing: saldo tidak cukup untuk trade (${balanceEth.toFixed(5)} ETH)`);
+                return 0;
+            }
             const result = Math.max(minTrade, Math.min(maxTrade, amount));
             console.log(`   💰 Dynamic sizing: balance=${balanceEth.toFixed(5)} ETH → trade=${result.toFixed(5)} ETH (${(result / balanceEth * 100).toFixed(1)}%)`);
             return result;
@@ -310,9 +316,13 @@ class AISniperBot extends events_1.EventEmitter {
             if (balanceEth <= 0)
                 return this.runtimeConfig.copyAmount;
             // Copy trade: 7% of balance (slightly less than self-snipe)
-            const amount = balanceEth * 0.07;
-            const minCopy = 0.001;
-            const maxCopy = balanceEth * 0.25;
+            const GAS_RESERVE = 0.0002;
+            const spendable = Math.max(0, balanceEth - GAS_RESERVE);
+            if (spendable <= 0)
+                return 0;
+            const amount = spendable * 0.07;
+            const minCopy = Math.min(0.001, spendable);
+            const maxCopy = spendable * 0.25;
             return Math.max(minCopy, Math.min(maxCopy, amount));
         }
         catch {

@@ -873,8 +873,24 @@ export class SwapExecutor extends EventEmitter {
                     );
                     const pool = res.data?.data?.[0];
                     if (pool) {
-                        priceUsd  = parseFloat(pool.attributes?.base_token_price_usd  || '0') || null;
-                        change24h = parseFloat(pool.attributes?.price_change_percentage?.h24 || '0') || null;
+                        const baseTokenId  = (pool.relationships?.base_token?.data?.id  || '').toLowerCase();
+                        const quoteTokenId = (pool.relationships?.quote_token?.data?.id || '').toLowerCase();
+                        const addrId = `base_${addr.toLowerCase()}`;
+                        const isBase  = baseTokenId  === addrId;
+                        const isQuote = quoteTokenId === addrId;
+                        if (isBase) {
+                            priceUsd  = parseFloat(pool.attributes?.base_token_price_usd  || '0') || null;
+                            const raw = parseFloat(pool.attributes?.price_change_percentage?.h24 || '0');
+                            change24h = raw !== 0 ? raw : null;
+                        } else if (isQuote) {
+                            priceUsd  = parseFloat(pool.attributes?.quote_token_price_usd || '0') || null;
+                            const raw = parseFloat(pool.attributes?.price_change_percentage?.h24 || '0');
+                            change24h = raw !== 0 ? -raw : null;
+                        } else {
+                            priceUsd  = parseFloat(pool.attributes?.base_token_price_usd  || '0') || null;
+                            const raw = parseFloat(pool.attributes?.price_change_percentage?.h24 || '0');
+                            change24h = raw !== 0 ? raw : null;
+                        }
                     }
                 } catch { /* silent */ }
                 const valueUsd = priceUsd !== null ? balanceHuman * priceUsd : null;
