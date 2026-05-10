@@ -31,7 +31,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/api-server && node supervisor.js"
+args = "cd artifacts/api-server && npm install --prefer-offline && npm run build && node supervisor.js"
 waitForPort = 8080
 
 [[workflows.workflow]]
@@ -43,7 +43,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/base-sniper && ./node_modules/.bin/vite --host 0.0.0.0 --port 5000"
+args = "cd artifacts/base-sniper && npm install --prefer-offline && npx vite --host 0.0.0.0 --port 5000"
 waitForPort = 5000
 
 [[ports]]
