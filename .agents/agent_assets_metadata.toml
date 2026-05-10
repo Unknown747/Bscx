@@ -1,8 +1,0 @@
-uploads = []
-generated = []
-
-[[outputs]]
-id = "naFKo_eVoNocUz_kRf64q"
-uri = "file://README.md"
-type = "text"
-title = "README.md — Base Sniper Ultimate (Updated)"
