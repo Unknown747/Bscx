@@ -18,6 +18,7 @@ import DeploymentStatus from './DeploymentStatus';
 import WhaleCorrelation from './WhaleCorrelation';
 import DeployerRepCheck from './DeployerRepCheck';
 import MempoolGauge from './MempoolGauge';
+import LiveDashboard from './LiveDashboard';
 import { authFetch } from '../lib/authFetch';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 
@@ -92,13 +93,14 @@ interface Config {
     dcaEnabled: boolean;
 }
 
-type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report' | 'screener' | 'deployment' | 'correlation' | 'deployer';
+type Tab = 'live' | 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report' | 'screener' | 'deployment' | 'correlation' | 'deployer';
 
 interface DashboardProps {
     apiUrl: string;
 }
 
 const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
+    { id: 'live',         label: 'Live',        icon: '🔴' },
     { id: 'overview',     label: 'Overview',    icon: '📊' },
     { id: 'screener',     label: 'Screener',    icon: '📡' },
     { id: 'correlation',  label: 'Korelasi',    icon: '🔗' },
@@ -113,7 +115,7 @@ const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
-    const [activeTab, setActiveTab]             = useState<Tab>('overview');
+    const [activeTab, setActiveTab]             = useState<Tab>('live');
     const [status, setStatus]                   = useState<Status | null>(null);
     const [config, setConfig]                   = useState<Config | null>(null);
     const [lastUpdate, setLastUpdate]           = useState('');
@@ -398,6 +400,11 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
 
             {/* ── Tab Content ── */}
             <div className="flex-1 px-4 pb-8 overflow-y-auto">
+
+                {/* LIVE DASHBOARD */}
+                {activeTab === 'live' && (
+                    <LiveDashboard apiUrl={apiUrl} />
+                )}
 
                 {/* OVERVIEW */}
                 {activeTab === 'overview' && (
