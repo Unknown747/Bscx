@@ -15,6 +15,7 @@ interface MonitoredWallet {
     aiVerdict:      'pending' | 'approved' | 'rejected';
     aiReason?:      string;
     aiScore?:       number;
+    dataSource?:    'basescan' | 'gecko';
 }
 
 interface EvalBreakdown {
@@ -67,11 +68,13 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
     const [promoting, setPromoting]       = useState<string | null>(null);
     const [forcePromo, setForcePromo]     = useState<string | null>(null);
     const [removing, setRemoving]         = useState<string | null>(null);
+    const [rescanning, setRescanning]     = useState<string | null>(null);
     const [expanded, setExpanded]         = useState<Record<string, boolean>>({});
     const [breakdowns, setBreakdowns]     = useState<Record<string, EvalBreakdown[]>>({});
     const [feedbackMsg, setFeedbackMsg]   = useState<{ addr: string; msg: string; ok: boolean } | null>(null);
     const [tokenInputs, setTokenInputs]   = useState<Record<string, string>>({});
     const [checkedTokens, setCheckedTokens] = useState<Record<string, string>>({});
+    const [basescanEnabled, setBasescanEnabled] = useState<boolean | null>(null);
 
     const fetchWallets = useCallback(async () => {
         try {
@@ -82,7 +85,15 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
         setLoading(false);
     }, [apiUrl]);
 
-    useEffect(() => { fetchWallets(); }, [fetchWallets]);
+    const fetchMonitorStatus = useCallback(async () => {
+        try {
+            const res  = await authFetch(`${apiUrl}/api/whale/monitor-status`);
+            const data = await res.json();
+            setBasescanEnabled(!!data.basescanEnabled);
+        } catch { }
+    }, [apiUrl]);
+
+    useEffect(() => { fetchWallets(); fetchMonitorStatus(); }, [fetchWallets, fetchMonitorStatus]);
     useEffect(() => {
         const t = setInterval(fetchWallets, 15_000);
         return () => clearInterval(t);
@@ -91,6 +102,21 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
     const showFeedback = (addr: string, msg: string, ok: boolean) => {
         setFeedbackMsg({ addr, msg, ok });
         setTimeout(() => setFeedbackMsg(null), 6000);
+    };
+
+    const handleRescan = async (address: string) => {
+        setRescanning(address);
+        try {
+            const res  = await authFetch(`${apiUrl}/api/whale/rescan/${address}`, { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                showFeedback(address, `🔗 Rescan Blockscout selesai — data diperbarui dari blockchain Base`, true);
+                await fetchWallets();
+            } else {
+                showFeedback(address, data.error || 'Rescan gagal', false);
+            }
+        } catch { showFeedback(address, 'Gagal menghubungi server', false); }
+        setRescanning(null);
     };
 
     const handleEvaluate = async (address: string) => {
@@ -175,7 +201,19 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
                 {/* ── Header ── */}
                 <div className="sticky top-0 bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between rounded-t-2xl">
                     <div>
-                        <h2 className="text-lg font-bold text-white">🔬 Monitoring Whale</h2>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <h2 className="text-lg font-bold text-white">🔬 Monitoring Whale</h2>
+                            {basescanEnabled === true && (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-900/50 border border-blue-700/60 text-blue-300 font-semibold">
+                                    🔗 Blockscout On-Chain
+                                </span>
+                            )}
+                            {basescanEnabled === false && (
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-800 border border-gray-700 text-gray-500">
+                                    🦎 GeckoTerminal
+                                </span>
+                            )}
+                        </div>
                         <p className="text-xs text-gray-500 mt-0.5">
                             {wallets.length} wallet dimonitor
                             {approvedCount > 0 && <span className="ml-2 text-green-400">· {approvedCount} siap copy</span>}
@@ -187,14 +225,27 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
                 </div>
 
                 {/* ── Info banner ── */}
-                <div className="mx-5 mt-4 bg-blue-900/20 border border-blue-800/40 rounded-xl p-3">
+                <div className={`mx-5 mt-4 rounded-xl p-3 border ${basescanEnabled ? 'bg-blue-900/20 border-blue-800/40' : 'bg-gray-800/40 border-gray-700/50'}`}>
                     <div className="flex gap-2.5">
-                        <span className="text-lg flex-shrink-0">🤖</span>
-                        <div className="text-xs text-blue-300 leading-relaxed space-y-0.5">
-                            <p><span className="text-white font-semibold">Tahap 1:</span> Kandidat disetujui → masuk Monitoring</p>
-                            <p><span className="text-white font-semibold">Tahap 2:</span> Bot kumpulkan data: trade, win/loss, PnL (setiap 10 menit)</p>
-                            <p><span className="text-white font-semibold">Tahap 3:</span> Klik "Evaluasi AI" → lihat alasan → promosikan ke Copy</p>
-                            <p className="text-gray-400 pt-0.5">⚠️ Bot hanya bisa mendeteksi trade di pool trending. Jika wallet jarang trade, gunakan <b className="text-yellow-300">Paksa Promosi</b>.</p>
+                        <span className="text-lg flex-shrink-0">{basescanEnabled ? '🔗' : '🤖'}</span>
+                        <div className="text-xs leading-relaxed space-y-0.5">
+                            {basescanEnabled ? (
+                                <>
+                                    <p className="text-blue-200 font-semibold">Blockscout aktif — data langsung dari blockchain Base</p>
+                                    <p className="text-blue-300"><span className="text-white font-semibold">Tahap 1:</span> Kandidat disetujui → masuk Monitoring</p>
+                                    <p className="text-blue-300"><span className="text-white font-semibold">Tahap 2:</span> Semua ERC-20 tx on-chain dibaca tiap 10 menit via Blockscout</p>
+                                    <p className="text-blue-300"><span className="text-white font-semibold">Tahap 3:</span> Klik "Evaluasi AI" → lihat alasan → promosikan ke Copy</p>
+                                    <p className="text-green-400/80 pt-0.5">✅ Data lengkap & akurat: riwayat swap, realized PnL, frekuensi trading</p>
+                                </>
+                            ) : (
+                                <>
+                                    <p className="text-yellow-300 font-semibold">Mode GeckoTerminal — hanya mencakup pool trending</p>
+                                    <p className="text-gray-300"><span className="text-white font-semibold">Tahap 1:</span> Kandidat disetujui → masuk Monitoring</p>
+                                    <p className="text-gray-300"><span className="text-white font-semibold">Tahap 2:</span> Bot kumpulkan data: trade, win/loss, PnL (setiap 10 menit)</p>
+                                    <p className="text-gray-300"><span className="text-white font-semibold">Tahap 3:</span> Klik "Evaluasi AI" → lihat alasan → promosikan ke Copy</p>
+                                    <p className="text-blue-400/80 pt-0.5">ℹ️ Migrasi ke Blockscout sedang berlangsung secara otomatis</p>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -218,6 +269,7 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
                         const isPromote  = promoting   === w.address;
                         const isFP       = forcePromo  === w.address;
                         const isRemove   = removing    === w.address;
+                        const isRescan   = rescanning  === w.address;
                         const isExpanded = expanded[w.address] ?? false;
                         const bd         = breakdowns[w.address];
 
@@ -451,6 +503,18 @@ const WalletMonitorPage: React.FC<WalletMonitorPageProps> = ({ apiUrl, onClose }
                                             {isFP ? '...' : '⚡ Paksa'}
                                         </button>
                                     )}
+
+                                    {/* Rescan (Blockscout) */}
+                                    <button
+                                        onClick={() => handleRescan(w.address)}
+                                        disabled={isRescan}
+                                        title="Rescan ulang data on-chain via Blockscout"
+                                        className="bg-blue-900/30 hover:bg-blue-900/60 border border-blue-800/50 text-blue-400 hover:text-blue-300 text-xs px-3 py-2 rounded-lg font-semibold transition-all disabled:opacity-50"
+                                    >
+                                        {isRescan ? (
+                                            <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>
+                                        ) : '🔗'}
+                                    </button>
 
                                     {/* Remove */}
                                     <button

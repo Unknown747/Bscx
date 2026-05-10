@@ -550,6 +550,34 @@ app.get('/api/cache', (_req: Request, res: Response) => {
 
 // ============ WHALE MONITORING FLOW ============
 
+// GET /api/whale/monitor-status — returns on-chain monitoring status
+app.get('/api/whale/monitor-status', (_req: Request, res: Response) => {
+    res.json({
+        basescanEnabled: true,
+        dataSource: 'blockscout',
+        blockscoutEnabled: true,
+        timestamp: Date.now(),
+    });
+});
+
+// POST /api/whale/rescan/:address — force re-scan a wallet from scratch via Blockscout
+app.post('/api/whale/rescan/:address', async (req: Request, res: Response) => {
+    const { address } = req.params;
+    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+    }
+    try {
+        const { resetWalletCache, analyzeWalletOnChain } = await import('./basescan-monitor');
+        resetWalletCache(address);
+        const wallet = bot.getMonitoredWallets().find(w => w.address.toLowerCase() === address.toLowerCase());
+        const sinceMs = wallet ? wallet.monitoredSince : Date.now() - 30 * 86_400_000;
+        const result = await analyzeWalletOnChain(address, sinceMs);
+        res.json({ ok: true, result });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // POST /api/whale/monitor — move pending candidate to monitoring (not copied yet)
 app.post('/api/whale/monitor', (req: Request, res: Response) => {
     const { address, name } = req.body;

@@ -94,6 +94,12 @@ export function initDb(): void {
             promoted_at      INTEGER
         );
     `);
+    // Migration: add data_source column if it doesn't exist yet
+    const cols = (db.prepare("PRAGMA table_info(monitored_wallets)").all() as any[]).map(c => c.name);
+    if (!cols.includes('data_source')) {
+        db.exec("ALTER TABLE monitored_wallets ADD COLUMN data_source TEXT NOT NULL DEFAULT 'gecko'");
+    }
+
     console.log(`💾 SQLite DB ready: ${DB_PATH}`);
 }
 
@@ -362,6 +368,7 @@ export interface MonitoredWalletRow {
     aiReason?:      string;
     aiScore?:       number;
     promotedAt?:    number;
+    dataSource:     'basescan' | 'gecko';
 }
 
 function rowToMonitored(row: any): MonitoredWalletRow {
@@ -379,6 +386,7 @@ function rowToMonitored(row: any): MonitoredWalletRow {
         aiReason:       row.ai_reason  ?? undefined,
         aiScore:        row.ai_score   ?? undefined,
         promotedAt:     row.promoted_at ?? undefined,
+        dataSource:     (row.data_source ?? 'gecko') as 'basescan' | 'gecko',
     };
 }
 
@@ -415,6 +423,7 @@ export function dbUpdateMonitoredStats(address: string, stats: {
     totalPnlPct?:    number;
     tradesPerDay?:   number;
     lastTradeMs?:    number;
+    dataSource?:     'basescan' | 'gecko';
 }): void {
     const sets: string[]  = [];
     const values: any[]   = [];
@@ -424,6 +433,7 @@ export function dbUpdateMonitoredStats(address: string, stats: {
     if (stats.totalPnlPct    !== undefined) { sets.push('total_pnl_pct = ?');    values.push(stats.totalPnlPct);    }
     if (stats.tradesPerDay   !== undefined) { sets.push('trades_per_day = ?');   values.push(stats.tradesPerDay);   }
     if (stats.lastTradeMs    !== undefined) { sets.push('last_trade_ms = ?');    values.push(stats.lastTradeMs);    }
+    if (stats.dataSource     !== undefined) { sets.push('data_source = ?');      values.push(stats.dataSource);     }
     if (sets.length === 0) return;
     values.push(address.toLowerCase());
     db.prepare(`UPDATE monitored_wallets SET ${sets.join(', ')} WHERE address = ?`).run(...values);

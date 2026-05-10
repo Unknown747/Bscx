@@ -2,16 +2,20 @@
  * whale-monitor.ts
  *
  * Monitors "approved-for-monitoring" whale wallets.
- * Polls GeckoTerminal every 10 minutes for trade activity,
- * tracks win/loss statistics, and prepares data for AI evaluation.
+ * PRIMARY: Blockscout API — baca riwayat tx langsung dari blockchain Base
+ * FALLBACK: GeckoTerminal pool trades — jika Blockscout tidak tersedia
+ *
+ * Poll interval: 10 menit
  */
 
 import axios from 'axios';
 import {
     dbGetMonitoredWallets, dbUpdateMonitoredStats,
+    dbGetMonitoredWallet,
     type MonitoredWalletRow,
 } from './db';
 import { getGeckoTrendingPools } from './price-oracle';
+import { analyzeWalletOnChain, isBasescanAvailable } from './basescan-monitor';
 
 const GECKO_BASE    = 'https://api.geckoterminal.com/api/v2';
 const GECKO_HEADERS = { Accept: 'application/json;version=20230302' };
@@ -35,7 +39,8 @@ export class WhaleMonitorService {
     private readonly POLL_MS = 10 * 60 * 1000;
 
     start(): void {
-        console.log('🔬 WhaleMonitorService started — polling every 10 min');
+        const mode = isBasescanAvailable() ? 'Blockscout API (on-chain)' : 'GeckoTerminal (pool-only)';
+        console.log(`🔬 WhaleMonitorService started — polling every 10 min via ${mode}`);
         this.poll().catch(() => {});
         this.pollTimer = setInterval(() => this.poll().catch(() => {}), this.POLL_MS);
     }
@@ -49,42 +54,113 @@ export class WhaleMonitorService {
         const monitored = dbGetMonitoredWallets();
         if (monitored.length === 0) return;
 
-        const addressSet = new Set(monitored.map(w => w.address.toLowerCase()));
-        console.log(`🔬 [Monitor] Polling ${monitored.length} wallets...`);
+        console.log(`🔬 [Monitor] Polling ${monitored.length} wallets... (${isBasescanAvailable() ? '🔗 Blockscout' : '🦎 GeckoTerminal'})`);
 
+        if (isBasescanAvailable()) {
+            await this.pollWithBasescan(monitored);
+        } else {
+            await this.pollWithGecko(monitored);
+        }
+    }
+
+    // ── PRIMARY: Blockscout on-chain analysis ─────────────────────────────────
+
+    private async pollWithBasescan(monitored: MonitoredWalletRow[]): Promise<void> {
+        for (const wallet of monitored) {
+            try {
+                // Fetch since monitoring start — basescan-monitor handles caching lastBlock
+                const result = await analyzeWalletOnChain(wallet.address, wallet.monitoredSince);
+
+                if (result.error && result.dataSource === 'fallback') {
+                    console.warn(`🔬 [Blockscout] ${wallet.address.slice(0, 10)}… error: ${result.error} — fallback ke Gecko`);
+                    await this.fetchWalletTradesDirect(wallet.address.toLowerCase(), new Set([wallet.address.toLowerCase()]));
+                    this.updateStatsGecko(wallet);
+                    continue;
+                }
+
+                // Merge basescan data with existing DB stats (incremental)
+                const existing = dbGetMonitoredWallet(wallet.address);
+                if (!existing) continue;
+
+                // Basescan returns cumulative data since monitoredSince — replace stats directly
+                const monitorDays = Math.max(0.04, (Date.now() - wallet.monitoredSince) / 86_400_000);
+
+                if (result.tradesObserved > 0 || result.tradePairs.length > 0) {
+                    const newTotal  = Math.max(existing.tradesObserved, result.tradesObserved);
+                    const newWins   = Math.max(existing.winsObserved,   result.winsObserved);
+                    const newLosses = Math.max(existing.lossesObserved, result.lossesObserved);
+                    const pairs     = newWins + newLosses;
+
+                    // Weighted merge: Basescan data is ground truth, but keep existing if it has more pairs
+                    const finalWins   = pairs > existing.winsObserved + existing.lossesObserved ? newWins : existing.winsObserved;
+                    const finalLosses = pairs > existing.winsObserved + existing.lossesObserved ? newLosses : existing.lossesObserved;
+                    const finalPairs  = finalWins + finalLosses;
+                    const finalPnl    = finalPairs > 0 ? result.avgPnlPct : existing.totalPnlPct;
+                    const finalTrades = Math.max(newTotal, existing.tradesObserved);
+                    const finalTpd    = parseFloat((finalTrades / monitorDays).toFixed(2));
+                    const finalLastMs = result.lastTradeMs > 0
+                        ? Math.max(result.lastTradeMs, existing.lastTradeMs)
+                        : existing.lastTradeMs;
+
+                    dbUpdateMonitoredStats(wallet.address, {
+                        tradesObserved: finalTrades,
+                        winsObserved:   finalWins,
+                        lossesObserved: finalLosses,
+                        totalPnlPct:    parseFloat(finalPnl.toFixed(2)),
+                        tradesPerDay:   finalTpd,
+                        lastTradeMs:    finalLastMs,
+                        dataSource:     'basescan',
+                    });
+
+                    console.log(
+                        `🔬 [Blockscout] ${wallet.address.slice(0, 10)}… ` +
+                        `${finalTrades} tx | ${finalWins}W/${finalLosses}L | ` +
+                        `PnL: ${finalPnl >= 0 ? '+' : ''}${finalPnl.toFixed(1)}%`
+                    );
+                } else {
+                    // No new txs found — update dataSource but keep existing stats
+                    dbUpdateMonitoredStats(wallet.address, { dataSource: 'basescan' });
+                    console.log(`🔬 [Blockscout] ${wallet.address.slice(0, 10)}… tidak ada tx baru`);
+                }
+
+                // Rate limit: 5 req/s on free tier
+                await delay(250);
+            } catch (err: any) {
+                console.warn(`🔬 [Blockscout] Poll error ${wallet.address.slice(0, 10)}…: ${err.message}`);
+                await delay(500);
+            }
+        }
+    }
+
+    // ── FALLBACK: GeckoTerminal pool scanning ─────────────────────────────────
+
+    private async pollWithGecko(monitored: MonitoredWalletRow[]): Promise<void> {
+        const addressSet = new Set(monitored.map(w => w.address.toLowerCase()));
         try {
-            // Strategy 1: Try direct per-wallet trade lookup via GeckoTerminal
             for (const wallet of monitored) {
                 await this.fetchWalletTradesDirect(wallet.address.toLowerCase(), addressSet);
                 await delay(300);
             }
 
-            // Strategy 2: Scan top trending pools (broader net — top 30)
             const pools = await getGeckoTrendingPools().catch(() => []);
-            const top   = pools.slice(0, 30);
-
-            for (const pool of top) {
+            for (const pool of pools.slice(0, 30)) {
                 if (!pool.pairAddress) continue;
                 await this.fetchTrades(pool.pairAddress, addressSet);
                 await delay(300);
             }
 
-            // Strategy 3: Also scan recent new pools (whales often trade new launches)
             await this.fetchNewPoolTrades(addressSet);
 
             for (const wallet of monitored) {
-                this.updateStats(wallet);
+                this.updateStatsGecko(wallet);
             }
         } catch (err: any) {
-            console.warn(`[Monitor] Poll error: ${err.message}`);
+            console.warn(`[Monitor] Gecko poll error: ${err.message}`);
         }
     }
 
-    // Attempt direct lookup of a wallet's recent trades via GeckoTerminal
     private async fetchWalletTradesDirect(walletAddress: string, addressSet: Set<string>): Promise<void> {
         try {
-            // GeckoTerminal doesn't have a wallet endpoint, but we can query
-            // its trades with address filter across Base network
             const res = await axios.get(
                 `${GECKO_BASE}/networks/base/addresses/${walletAddress}/transactions`,
                 { headers: GECKO_HEADERS, params: { page: 1 }, timeout: 8000 }
@@ -109,19 +185,15 @@ export class WhaleMonitorService {
                 const rec: TradeRecord = { walletAddress: wallet, poolAddress: poolAddr, kind, priceUsd, volumeUsd, timestampMs: tsMs };
                 if (kind === 'buy') hist.buys.push(rec); else hist.sells.push(rec);
             }
-        } catch { /* endpoint may not exist — silent */ }
+        } catch { /* silent */ }
     }
 
-    // Scan recently created Base pools where whales often trade early
     private async fetchNewPoolTrades(addressSet: Set<string>): Promise<void> {
         try {
             const res = await axios.get(`${GECKO_BASE}/networks/base/new_pools`, {
-                headers: GECKO_HEADERS,
-                params:  { page: 1 },
-                timeout: 8000,
+                headers: GECKO_HEADERS, params: { page: 1 }, timeout: 8000,
             });
-            const pools: any[] = res.data?.data ?? [];
-            for (const pool of pools.slice(0, 10)) {
+            for (const pool of (res.data?.data ?? []).slice(0, 10)) {
                 const addr = pool.attributes?.address ?? pool.id?.split('_')[1];
                 if (!addr) continue;
                 await this.fetchTrades(addr, addressSet);
@@ -137,7 +209,6 @@ export class WhaleMonitorService {
                 params:  { trade_volume_in_usd_greater_than: 10 },
                 timeout: 8000,
             });
-
             for (const t of (res.data?.data ?? []) as any[]) {
                 const a      = t.attributes ?? {};
                 const wallet = (a.tx_from_address ?? '').toLowerCase();
@@ -165,7 +236,7 @@ export class WhaleMonitorService {
         } catch { /* skip pool on error */ }
     }
 
-    private updateStats(wallet: MonitoredWalletRow): void {
+    private updateStatsGecko(wallet: MonitoredWalletRow): void {
         const hist = walletHistory.get(wallet.address.toLowerCase());
         if (!hist || (hist.buys.length === 0 && hist.sells.length === 0)) return;
 
@@ -202,10 +273,11 @@ export class WhaleMonitorService {
             totalPnlPct:    parseFloat(avgPnl.toFixed(2)),
             tradesPerDay,
             lastTradeMs,
+            dataSource:     'gecko',
         });
 
         walletHistory.set(wallet.address.toLowerCase(), { buys: [], sells: [] });
-        console.log(`🔬 [Monitor] ${wallet.address.slice(0, 10)}… +${all.length} trades | ${newWins}W/${newLosses}L`);
+        console.log(`🔬 [Gecko] ${wallet.address.slice(0, 10)}… +${all.length} trades | ${newWins}W/${newLosses}L`);
     }
 }
 
