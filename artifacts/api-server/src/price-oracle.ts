@@ -60,6 +60,7 @@ export interface NormalizedPair {
     pairCreatedAt?: number;   // ms timestamp
     chainId:      string;
     dexId:        string;
+    feeTier?:     500 | 3000 | 10000;   // Uniswap V3 fee tier in basis points
 }
 
 // ─── GeckoTerminal Cache ─────────────────────────────────────────────────────
@@ -147,6 +148,22 @@ function adaptPoolData(gtData: any, included: any[] = []): NormalizedPair | null
         ? new Date(attr.pool_created_at).getTime()
         : undefined;
 
+    // Extract Uniswap V3 fee tier — try direct attribute first, then parse pool name
+    // GeckoTerminal pool names look like "TOKEN / WETH 0.05%" | "0.3%" | "1%"
+    let feeTier: 500 | 3000 | 10000 | undefined;
+    const rawFt = attr.fee_tier !== undefined ? parseInt(String(attr.fee_tier)) : NaN;
+    if (rawFt === 500 || rawFt === 3000 || rawFt === 10000) {
+        feeTier = rawFt;
+    } else {
+        const nameMatch = String(attr.name ?? '').match(/([\d.]+)%/);
+        if (nameMatch) {
+            const pct = parseFloat(nameMatch[1]);
+            if (Math.abs(pct - 0.05) < 0.01)  feeTier = 500;
+            else if (Math.abs(pct - 0.3) < 0.01) feeTier = 3000;
+            else if (Math.abs(pct - 1.0) < 0.01) feeTier = 10000;
+        }
+    }
+
     return {
         pairAddress:  attr.address || '',
         baseToken: {
@@ -166,6 +183,7 @@ function adaptPoolData(gtData: any, included: any[] = []): NormalizedPair | null
         pairCreatedAt,
         chainId: 'base',
         dexId:   'uniswap_v3',
+        feeTier,
     };
 }
 

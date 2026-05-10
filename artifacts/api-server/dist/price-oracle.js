@@ -134,6 +134,25 @@ function adaptPoolData(gtData, included = []) {
     const pairCreatedAt = attr.pool_created_at
         ? new Date(attr.pool_created_at).getTime()
         : undefined;
+    // Extract Uniswap V3 fee tier — try direct attribute first, then parse pool name
+    // GeckoTerminal pool names look like "TOKEN / WETH 0.05%" | "0.3%" | "1%"
+    let feeTier;
+    const rawFt = attr.fee_tier !== undefined ? parseInt(String(attr.fee_tier)) : NaN;
+    if (rawFt === 500 || rawFt === 3000 || rawFt === 10000) {
+        feeTier = rawFt;
+    }
+    else {
+        const nameMatch = String(attr.name ?? '').match(/([\d.]+)%/);
+        if (nameMatch) {
+            const pct = parseFloat(nameMatch[1]);
+            if (Math.abs(pct - 0.05) < 0.01)
+                feeTier = 500;
+            else if (Math.abs(pct - 0.3) < 0.01)
+                feeTier = 3000;
+            else if (Math.abs(pct - 1.0) < 0.01)
+                feeTier = 10000;
+        }
+    }
     return {
         pairAddress: attr.address || '',
         baseToken: {
@@ -153,6 +172,7 @@ function adaptPoolData(gtData, included = []) {
         pairCreatedAt,
         chainId: 'base',
         dexId: 'uniswap_v3',
+        feeTier,
     };
 }
 // ─── Get pools for a token address ───────────────────────────────────────────

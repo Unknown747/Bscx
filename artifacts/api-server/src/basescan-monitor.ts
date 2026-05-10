@@ -88,8 +88,8 @@ async function fetchTokenTransfers(
     while (url && page < maxPages) {
         page++;
         try {
-            const res  = await axios.get(url, { timeout: 12000, headers: { Accept: 'application/json' } });
-            const data = res.data;
+            const res: any  = await axios.get(url, { timeout: 12000, headers: { Accept: 'application/json' } });
+            const data: any = res.data;
 
             const items: any[] = data.items ?? [];
             if (items.length === 0) break;
@@ -122,9 +122,9 @@ async function fetchTokenTransfers(
             }
 
             // Build cursor from next_page_params
-            const npp = data.next_page_params;
+            const npp: any = data.next_page_params;
             if (npp && url !== null) {
-                const qs  = Object.entries(npp).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&');
+                const qs: string = Object.entries(npp).map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&');
                 latestCursor = qs;
                 url = `${BLOCKSCOUT_BASE}/addresses/${wallet}/token-transfers?type=ERC-20&${qs}`;
             } else {
