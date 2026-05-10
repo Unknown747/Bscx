@@ -97,9 +97,10 @@ interface RuntimeConfig {
     enableFlashblocks:        boolean;
     gasMode:                  string;
     // Circuit breaker
-    maxDailyLossEth:          number;
-    maxConsecutiveLosses:     number;
+    maxDailyLossEth:            number;
+    maxConsecutiveLosses:       number;
     cooldownAfterProfitMinutes: number;
+    dailyLossCooldownHours:     number;
 }
 
 function sanitizeTg(s: string): string {
@@ -183,9 +184,10 @@ export class AISniperBot extends EventEmitter {
         minAiConfidence:         parseInt  (process.env.MIN_AI_CONFIDENCE    || '75'),
         enableFlashblocks:       process.env.ENABLE_FLASHBLOCKS === 'true',
         gasMode:                 process.env.GAS_MODE || 'auto',
-        maxDailyLossEth:         parseFloat(process.env.MAX_DAILY_LOSS_ETH || '0.0015'),
-        maxConsecutiveLosses:    parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3'),
-        cooldownAfterProfitMinutes: parseInt(process.env.COOLDOWN_AFTER_BIG_PROFIT_MINUTES || '15'),
+        maxDailyLossEth:            parseFloat(process.env.MAX_DAILY_LOSS_ETH             || '0.0015'),
+        maxConsecutiveLosses:       parseInt  (process.env.MAX_CONSECUTIVE_LOSSES         || '3'),
+        cooldownAfterProfitMinutes: parseInt  (process.env.COOLDOWN_AFTER_BIG_PROFIT_MINUTES || '15'),
+        dailyLossCooldownHours:     parseFloat(process.env.DAILY_LOSS_COOLDOWN_HOURS      || '2'),
     };
 
     private readonly CONFIG = {
@@ -1519,15 +1521,17 @@ export class AISniperBot extends EventEmitter {
         if (s.minAiConfidence  != null) r.minAiConfidence  = s.minAiConfidence;
         if (s.enableFlashblocks        != null) r.enableFlashblocks        = s.enableFlashblocks;
         if (s.gasMode                  != null) r.gasMode                  = s.gasMode;
-        if (s.maxDailyLossEth          != null) r.maxDailyLossEth          = s.maxDailyLossEth;
-        if (s.maxConsecutiveLosses     != null) r.maxConsecutiveLosses     = s.maxConsecutiveLosses;
+        if (s.maxDailyLossEth            != null) r.maxDailyLossEth            = s.maxDailyLossEth;
+        if (s.maxConsecutiveLosses       != null) r.maxConsecutiveLosses       = s.maxConsecutiveLosses;
         if (s.cooldownAfterProfitMinutes != null) r.cooldownAfterProfitMinutes = s.cooldownAfterProfitMinutes;
+        if (s.dailyLossCooldownHours     != null) r.dailyLossCooldownHours     = s.dailyLossCooldownHours;
 
-        // Propagate circuit breaker limits to risk manager
+        // Propagate limits to risk manager
         this.riskManager.updateLimits(
             r.maxDailyLossEth,
             r.maxConsecutiveLosses,
-            r.cooldownAfterProfitMinutes
+            r.cooldownAfterProfitMinutes,
+            r.dailyLossCooldownHours,
         );
 
         if (this.executor) {

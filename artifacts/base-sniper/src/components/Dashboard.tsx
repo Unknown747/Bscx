@@ -40,8 +40,10 @@ interface Status {
 interface RiskState {
     todayLossEth: number;
     dailyLossLimit: number;
+    dailyLossCooldownHours: number;
     consecutiveLosses: number;
     cooldownUntil: number;
+    cooldownReason: string;
     tradesBlockedToday: number;
     circuitBreakerTripped: boolean;
     circuitBreakerReason: string;
@@ -461,68 +463,82 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                             </div>
                         </div>
 
-                        {/* Circuit Breaker Status */}
-                        {riskState && (
-                            <div className={`rounded-xl border p-4 ${
-                                riskState.circuitBreakerTripped
-                                    ? 'bg-red-950/50 border-red-700'
-                                    : riskState.todayLossEth > 0
-                                    ? 'bg-gray-900 border-gray-800'
+                        {/* Auto Cooldown / Circuit Breaker Status */}
+                        {riskState && (() => {
+                            const now           = Date.now();
+                            const inCooldown    = riskState.cooldownUntil > now;
+                            const emergencyStop = riskState.circuitBreakerTripped;
+                            const remainingMs   = Math.max(0, riskState.cooldownUntil - now);
+                            const remainingMins = Math.ceil(remainingMs / 60_000);
+                            const remainingDisp = remainingMins >= 60
+                                ? `${(remainingMs / 3_600_000).toFixed(1)} jam`
+                                : `${remainingMins} menit`;
+                            const lossRatioPct  = riskState.dailyLossLimit > 0
+                                ? Math.min(100, (riskState.todayLossEth / riskState.dailyLossLimit) * 100) : 0;
+
+                            return (
+                                <div className={`rounded-xl border p-4 ${
+                                    emergencyStop ? 'bg-red-950/50 border-red-700'
+                                    : inCooldown  ? 'bg-yellow-950/30 border-yellow-800/60'
                                     : 'bg-gray-900 border-gray-800'
-                            }`}>
-                                <div className="flex items-center justify-between mb-3">
-                                    <h2 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
-                                        <span>{riskState.circuitBreakerTripped ? '🔴' : '🟢'}</span>
-                                        Circuit Breaker
-                                    </h2>
-                                    {riskState.circuitBreakerTripped && (
-                                        <span className="text-xs bg-red-900 text-red-300 border border-red-700 px-2 py-0.5 rounded-full font-semibold animate-pulse">
-                                            TRIP — Trading Dihentikan
-                                        </span>
+                                }`}>
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h2 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
+                                            <span>{emergencyStop ? '🔴' : inCooldown ? '⏳' : '🟢'}</span>
+                                            Auto Cooldown
+                                        </h2>
+                                        {emergencyStop && (
+                                            <span className="text-xs bg-red-900 text-red-300 border border-red-700 px-2 py-0.5 rounded-full font-semibold animate-pulse">
+                                                EMERGENCY STOP
+                                            </span>
+                                        )}
+                                        {!emergencyStop && inCooldown && (
+                                            <span className="text-xs bg-yellow-900/60 text-yellow-300 border border-yellow-700 px-2 py-0.5 rounded-full font-semibold">
+                                                ⏳ {remainingDisp} tersisa
+                                            </span>
+                                        )}
+                                        {!emergencyStop && !inCooldown && (
+                                            <span className="text-xs bg-green-900/40 text-green-400 border border-green-800 px-2 py-0.5 rounded-full">
+                                                Trading Aktif
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    {emergencyStop && riskState.circuitBreakerReason && (
+                                        <p className="text-xs text-red-400 mb-3 bg-red-900/30 rounded-lg px-3 py-2">{riskState.circuitBreakerReason}</p>
                                     )}
-                                    {!riskState.circuitBreakerTripped && riskState.cooldownUntil > Date.now() && (
-                                        <span className="text-xs bg-yellow-900/50 text-yellow-400 border border-yellow-800 px-2 py-0.5 rounded-full">
-                                            ⏳ Cooldown aktif
-                                        </span>
+                                    {!emergencyStop && inCooldown && riskState.cooldownReason && (
+                                        <p className="text-xs text-yellow-400/80 mb-3 bg-yellow-900/20 rounded-lg px-3 py-2">
+                                            Alasan: {riskState.cooldownReason} — lanjut otomatis setelah {remainingDisp}
+                                        </p>
                                     )}
-                                </div>
-                                {riskState.circuitBreakerTripped && riskState.circuitBreakerReason && (
-                                    <p className="text-xs text-red-400 mb-3 bg-red-900/30 rounded-lg px-3 py-2">{riskState.circuitBreakerReason}</p>
-                                )}
-                                <div className="grid grid-cols-2 gap-2">
-                                    {[
-                                        {
-                                            label: 'Rugi Hari Ini',
-                                            value: `${riskState.todayLossEth.toFixed(5)} ETH`,
-                                            sub: `limit: ${riskState.dailyLossLimit.toFixed(5)} ETH`,
-                                            pct: riskState.dailyLossLimit > 0 ? Math.min(100, (riskState.todayLossEth / riskState.dailyLossLimit) * 100) : 0,
-                                            warn: riskState.todayLossEth / riskState.dailyLossLimit > 0.7,
-                                        },
-                                        {
-                                            label: 'Kalah Berturut',
-                                            value: `${riskState.consecutiveLosses}×`,
-                                            sub: 'cooldown di 3×',
-                                            pct: null,
-                                            warn: riskState.consecutiveLosses >= 2,
-                                        },
-                                    ].map(({ label, value, sub, pct, warn }) => (
-                                        <div key={label} className={`rounded-lg p-3 ${warn ? 'bg-red-900/30 border border-red-800/60' : 'bg-gray-950 border border-gray-800'}`}>
-                                            <p className="text-xs text-gray-500 mb-1">{label}</p>
-                                            <p className={`text-sm font-bold ${warn ? 'text-red-400' : 'text-white'}`}>{value}</p>
-                                            {pct !== null && (
-                                                <div className="mt-1.5 h-1 bg-gray-800 rounded-full overflow-hidden">
-                                                    <div className={`h-full rounded-full transition-all ${pct > 70 ? 'bg-red-500' : pct > 40 ? 'bg-yellow-500' : 'bg-green-500'}`} style={{ width: `${pct}%` }} />
-                                                </div>
-                                            )}
-                                            <p className="text-xs text-gray-600 mt-1">{sub}</p>
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div className={`rounded-lg p-3 ${lossRatioPct > 70 ? 'bg-red-900/30 border border-red-800/60' : 'bg-gray-950 border border-gray-800'}`}>
+                                            <p className="text-xs text-gray-500 mb-1">Rugi Hari Ini</p>
+                                            <p className={`text-sm font-bold ${lossRatioPct > 70 ? 'text-red-400' : 'text-white'}`}>
+                                                {riskState.todayLossEth.toFixed(5)} ETH
+                                            </p>
+                                            <div className="mt-1.5 h-1 bg-gray-800 rounded-full overflow-hidden">
+                                                <div className={`h-full rounded-full transition-all ${lossRatioPct >= 100 ? 'bg-red-500' : lossRatioPct > 70 ? 'bg-orange-500' : lossRatioPct > 40 ? 'bg-yellow-500' : 'bg-green-500'}`}
+                                                    style={{ width: `${lossRatioPct}%` }} />
+                                            </div>
+                                            <p className="text-xs text-gray-600 mt-1">limit: {riskState.dailyLossLimit.toFixed(5)} ETH → CD {riskState.dailyLossCooldownHours}j</p>
                                         </div>
-                                    ))}
+                                        <div className={`rounded-lg p-3 ${riskState.consecutiveLosses >= 2 ? 'bg-orange-900/30 border border-orange-800/60' : 'bg-gray-950 border border-gray-800'}`}>
+                                            <p className="text-xs text-gray-500 mb-1">Kalah Berturut</p>
+                                            <p className={`text-sm font-bold ${riskState.consecutiveLosses >= 2 ? 'text-orange-400' : 'text-white'}`}>
+                                                {riskState.consecutiveLosses}×
+                                            </p>
+                                            <p className="text-xs text-gray-600 mt-1">CD 30 mnt di {riskState.consecutiveLosses >= 3 ? '3×' : `${riskState.consecutiveLosses}/3`}</p>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-gray-700 mt-2 text-right">
+                                        Counter reset: {new Date(riskState.dailyResetAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} (tengah malam UTC)
+                                    </p>
                                 </div>
-                                <p className="text-xs text-gray-700 mt-2 text-right">
-                                    Reset: {new Date(riskState.dailyResetAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
-                                </p>
-                            </div>
-                        )}
+                            );
+                        })()}
 
                         {/* Realtime P&L Chart */}
                         <PnLChart apiUrl={apiUrl} compact={true} />

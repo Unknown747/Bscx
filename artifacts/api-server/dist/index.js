@@ -235,6 +235,7 @@ app.post('/api/settings', (req, res) => {
             maxDailyLossEth: s.maxDailyLossEth,
             maxConsecutiveLosses: s.maxConsecutiveLosses,
             cooldownAfterProfitMinutes: s.cooldownAfterProfitMinutes,
+            dailyLossCooldownHours: s.dailyLossCooldownHours,
         });
         res.json({ ok: true, message: 'Settings applied successfully' });
     }

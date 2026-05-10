@@ -52,6 +52,7 @@ export interface BotSettings {
     maxDailyLossEth: number;
     maxConsecutiveLosses: number;
     cooldownAfterProfitMinutes: number;
+    dailyLossCooldownHours: number;
 }
 
 interface KeyStatus {
@@ -108,7 +109,7 @@ const DEFAULTS: BotSettings = {
     minSafetyScore: 65, maxPoolAgeSeconds: 3600,
     serialRuggerEnabled: true, serialRuggerMaxDeploys: 3, serialRuggerWindowHours: 24,
     reputationEnabled: true, reputationMinScore: 25,
-    maxDailyLossEth: 0.0015, maxConsecutiveLosses: 3, cooldownAfterProfitMinutes: 15,
+    maxDailyLossEth: 0.0015, maxConsecutiveLosses: 3, cooldownAfterProfitMinutes: 15, dailyLossCooldownHours: 2,
 };
 
 function fromConfig(c: Record<string, any>): BotSettings {
@@ -151,6 +152,7 @@ function fromConfig(c: Record<string, any>): BotSettings {
         maxDailyLossEth:            pn(c.maxDailyLossEth, DEFAULTS.maxDailyLossEth),
         maxConsecutiveLosses:       pn(c.maxConsecutiveLosses, DEFAULTS.maxConsecutiveLosses),
         cooldownAfterProfitMinutes: pn(c.cooldownAfterProfitMinutes, DEFAULTS.cooldownAfterProfitMinutes),
+        dailyLossCooldownHours:     pn(c.dailyLossCooldownHours, DEFAULTS.dailyLossCooldownHours),
     };
 }
 
@@ -300,6 +302,7 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
                 maxDailyLossEth: s.maxDailyLossEth,
                 maxConsecutiveLosses: s.maxConsecutiveLosses,
                 cooldownAfterProfitMinutes: s.cooldownAfterProfitMinutes,
+                dailyLossCooldownHours: s.dailyLossCooldownHours,
             };
             const res = await authFetch(`${apiUrl}/api/settings`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
@@ -545,18 +548,21 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
     // ─── Tab: Risk ────────────────────────────────────────────────────────────
     const TabRisk = () => (
         <div>
-            <Section title="🔴 Circuit Breaker">
-                <Row label="Max Rugi Harian (ETH)" sub="Bot berhenti total jika rugi melebihi ini dalam sehari">
+            <Section title="⏳ Auto Cooldown (Circuit Breaker)">
+                <Row label="Max Rugi Harian (ETH)" sub="Picu cooldown otomatis jika rugi melebihi ini">
                     <NumInput value={s.maxDailyLossEth} onChange={v => upd({ maxDailyLossEth: v })} step={0.0005} min={0.0001} />
                 </Row>
-                <Row label="Max Kalah Berturut-turut" sub="Cooldown 30 menit jika kalah sebanyak ini berturut">
+                <Row label="Durasi Cooldown Rugi Harian (jam)" sub="Bot jeda X jam lalu lanjut otomatis — tanpa perlu restart">
+                    <NumInput value={s.dailyLossCooldownHours} onChange={v => upd({ dailyLossCooldownHours: v })} step={0.5} min={0.5} max={24} />
+                </Row>
+                <Row label="Max Kalah Berturut-turut" sub="Cooldown 30 menit jika kalah sebanyak ini berurutan">
                     <NumInput value={s.maxConsecutiveLosses} onChange={v => upd({ maxConsecutiveLosses: v })} step={1} min={1} max={20} />
                 </Row>
-                <Row label="Cooldown Setelah Profit Besar (menit)" sub="Jeda trading setelah profit > 50% modal">
+                <Row label="Cooldown Setelah Profit Besar (menit)" sub="Jeda setelah profit > 50% modal (biarkan profit aman dulu)">
                     <NumInput value={s.cooldownAfterProfitMinutes} onChange={v => upd({ cooldownAfterProfitMinutes: v })} step={5} min={0} max={120} />
                 </Row>
-                <div className="mt-2 px-2 py-2 bg-red-950/30 rounded-lg border border-red-900/40">
-                    <p className="text-xs text-red-400">⚠️ Circuit breaker reset otomatis tiap tengah malam UTC. Jika trip, semua sinyal ditolak hingga reset.</p>
+                <div className="mt-2 px-2 py-2 bg-blue-950/30 rounded-lg border border-blue-900/40">
+                    <p className="text-xs text-blue-400">✅ Bot lanjut otomatis setelah cooldown — tidak perlu restart atau ubah settings. Emergency Stop tetap tersedia di header untuk stop manual.</p>
                 </div>
             </Section>
 

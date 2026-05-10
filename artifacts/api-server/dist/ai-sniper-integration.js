@@ -140,6 +140,7 @@ class AISniperBot extends events_1.EventEmitter {
             maxDailyLossEth: parseFloat(process.env.MAX_DAILY_LOSS_ETH || '0.0015'),
             maxConsecutiveLosses: parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3'),
             cooldownAfterProfitMinutes: parseInt(process.env.COOLDOWN_AFTER_BIG_PROFIT_MINUTES || '15'),
+            dailyLossCooldownHours: parseFloat(process.env.DAILY_LOSS_COOLDOWN_HOURS || '2'),
         };
         this.CONFIG = {
             MIN_AI_CONFIDENCE: parseInt(process.env.MIN_AI_CONFIDENCE || '75'),
@@ -1393,8 +1394,10 @@ class AISniperBot extends events_1.EventEmitter {
             r.maxConsecutiveLosses = s.maxConsecutiveLosses;
         if (s.cooldownAfterProfitMinutes != null)
             r.cooldownAfterProfitMinutes = s.cooldownAfterProfitMinutes;
-        // Propagate circuit breaker limits to risk manager
-        this.riskManager.updateLimits(r.maxDailyLossEth, r.maxConsecutiveLosses, r.cooldownAfterProfitMinutes);
+        if (s.dailyLossCooldownHours != null)
+            r.dailyLossCooldownHours = s.dailyLossCooldownHours;
+        // Propagate limits to risk manager
+        this.riskManager.updateLimits(r.maxDailyLossEth, r.maxConsecutiveLosses, r.cooldownAfterProfitMinutes, r.dailyLossCooldownHours);
         if (this.executor) {
             this.executor.updateConfig({
                 maxSlippage: r.maxSlippage,
