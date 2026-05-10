@@ -109,20 +109,10 @@ export function pushStopLoss(symbol: string, profitPct: number, reason?: string)
     }).catch(() => {});
 }
 
-export function pushWhaleMonitoring(address: string, name?: string): void {
-    sendPushToAll({
-        title: '🐋 Whale Masuk Monitoring',
-        body:  `${name || address.slice(0, 10) + '...'} mulai dimonitor`,
-        tag:   'whale',
-        data:  { type: 'whale', address },
-    }).catch(() => {});
+export function pushWhaleMonitoring(_address: string, _name?: string): void {
+    // Disabled — hanya BUY/SELL yang kirim notifikasi
 }
 
-export function pushWhalePromoted(address: string, name?: string): void {
-    sendPushToAll({
-        title: '✅ Whale Dipromosikan!',
-        body:  `${name || address.slice(0, 10) + '...'} masuk ke active copy list`,
-        tag:   'whale-promote',
-        data:  { type: 'whale-promote', address },
-    }).catch(() => {});
+export function pushWhalePromoted(_address: string, _name?: string): void {
+    // Disabled — hanya BUY/SELL yang kirim notifikasi
 }

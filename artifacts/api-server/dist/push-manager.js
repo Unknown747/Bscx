@@ -107,20 +107,10 @@ function pushStopLoss(symbol, profitPct, reason) {
         data: { type: 'stop-loss', symbol, profitPct },
     }).catch(() => { });
 }
-function pushWhaleMonitoring(address, name) {
-    sendPushToAll({
-        title: '🐋 Whale Masuk Monitoring',
-        body: `${name || address.slice(0, 10) + '...'} mulai dimonitor`,
-        tag: 'whale',
-        data: { type: 'whale', address },
-    }).catch(() => { });
+function pushWhaleMonitoring(_address, _name) {
+    // Disabled — hanya BUY/SELL yang kirim notifikasi
 }
-function pushWhalePromoted(address, name) {
-    sendPushToAll({
-        title: '✅ Whale Dipromosikan!',
-        body: `${name || address.slice(0, 10) + '...'} masuk ke active copy list`,
-        tag: 'whale-promote',
-        data: { type: 'whale-promote', address },
-    }).catch(() => { });
+function pushWhalePromoted(_address, _name) {
+    // Disabled — hanya BUY/SELL yang kirim notifikasi
 }
 //# sourceMappingURL=push-manager.js.map
