@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { authFetch } from '../lib/authFetch';
+import PnLChart from './PnLChart';
 
 interface ClosedTrade {
     id: string;
@@ -54,6 +55,7 @@ const REASON_CONFIG: Record<string, { icon: string; color: string; label: string
 interface Props { apiUrl: string; }
 
 const TradeHistory: React.FC<Props> = ({ apiUrl }) => {
+
     const [data, setData]   = useState<HistoryData | null>(null);
     const [error, setError] = useState('');
 
@@ -122,6 +124,9 @@ const TradeHistory: React.FC<Props> = ({ apiUrl }) => {
                     )}
                 </div>
             )}
+
+            {/* P&L Chart */}
+            <PnLChart apiUrl={apiUrl} />
 
             {trades.length === 0 && (
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">

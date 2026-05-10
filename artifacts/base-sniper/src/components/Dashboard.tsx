@@ -13,6 +13,7 @@ import Backtest from './Backtest';
 import DailyReport from './DailyReport';
 import SmartScreener from './SmartScreener';
 import PushNotification from './PushNotification';
+import PnLChart from './PnLChart';
 import { authFetch } from '../lib/authFetch';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 
@@ -433,6 +434,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                                 ))}
                             </div>
                         </div>
+
+                        {/* Realtime P&L Chart */}
+                        <PnLChart apiUrl={apiUrl} compact={true} />
 
                         <WhaleLeaderboard apiUrl={apiUrl} />
 
