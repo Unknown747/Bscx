@@ -102,7 +102,7 @@ const PnLChart: React.FC<Props> = ({ apiUrl, compact = false }) => {
     const rangeY   = maxY - minY || 0.00001;
 
     const n = points.length;
-    const xStep = n > 1 ? chartW / (n) : chartW;
+    const _xStep = n > 1 ? chartW / (n) : chartW; void _xStep;
 
     function px(i: number) { return PAD_L + (i + 0.5) * (chartW / n); }
     function py(v: number)  { return PAD_T + chartH - ((v - minY) / rangeY) * chartH; }

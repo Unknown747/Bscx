@@ -48,9 +48,11 @@ interface PositionCardProps {
     apiUrl: string;
 }
 
+const MAX_HISTORY = 40;
+
 function holdTime(ms: number): string {
     const secs = Math.floor(ms / 1000);
-    if (secs < 60)   return `${secs}d`;
+    if (secs < 60)   return `${secs}s`;
     if (secs < 3600) return `${Math.floor(secs / 60)}m`;
     return `${Math.floor(secs / 3600)}j ${Math.floor((secs % 3600) / 60)}m`;
 }
@@ -81,6 +83,115 @@ function progressPct(current: number, start: number, target: number): number {
     return Math.round(((current - start) / (target - start)) * 100);
 }
 
+// ─── Inline P&L Sparkline ────────────────────────────────────────────────────
+
+interface PnLSparklineProps {
+    history: number[];  // array of profitPct values, oldest first
+    width?: number;
+    height?: number;
+    id: string;
+}
+
+const PnLSparkline: React.FC<PnLSparklineProps> = ({ history, width = 260, height = 36, id }) => {
+    if (history.length < 2) {
+        // Not enough data yet — show a faint flatline
+        const midY = height / 2;
+        return (
+            <svg width={width} height={height} className="block w-full">
+                <line x1={0} y1={midY} x2={width} y2={midY}
+                    stroke="#374151" strokeWidth="1" strokeDasharray="3 3" />
+                <text x={width / 2} y={midY - 4} textAnchor="middle"
+                    fill="#4b5563" fontSize="7">Mengumpulkan data...</text>
+            </svg>
+        );
+    }
+
+    const PAD_T = 3;
+    const PAD_B = 3;
+    const PAD_L = 0;
+    const PAD_R = 0;
+    const chartH = height - PAD_T - PAD_B;
+    const chartW = width - PAD_L - PAD_R;
+
+    const minV = Math.min(...history, 0);
+    const maxV = Math.max(...history, 0);
+    const range = maxV - minV || 1;
+
+    const n = history.length;
+    const xStep = chartW / Math.max(n - 1, 1);
+
+    function px(i: number) { return PAD_L + i * xStep; }
+    function py(v: number) { return PAD_T + chartH - ((v - minV) / range) * chartH; }
+
+    const pts = history.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`);
+    const linePath = `M ${pts.join(' L ')}`;
+    const areaPath =
+        `M ${px(0).toFixed(1)},${(PAD_T + chartH).toFixed(1)} ` +
+        pts.map(p => `L ${p}`).join(' ') +
+        ` L ${px(n - 1).toFixed(1)},${(PAD_T + chartH).toFixed(1)} Z`;
+
+    const lastVal   = history[history.length - 1];
+    const isProfit  = lastVal >= 0;
+    const lineColor = lastVal > 5  ? '#22c55e'
+                    : lastVal >= 0 ? '#4ade80'
+                    : lastVal > -10 ? '#facc15'
+                    : '#ef4444';
+    const fillId = `pnlFill_${id}`;
+
+    // Zero baseline
+    const zeroY = py(0);
+    const showZeroLine = minV < 0 && maxV > 0;
+
+    return (
+        <svg width={width} height={height} className="block w-full overflow-visible">
+            <defs>
+                <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stopColor={lineColor} stopOpacity={isProfit ? 0.30 : 0.20} />
+                    <stop offset="100%" stopColor={lineColor} stopOpacity="0.02" />
+                </linearGradient>
+                <clipPath id={`clip_${fillId}`}>
+                    <rect x={PAD_L} y={PAD_T} width={chartW} height={chartH} />
+                </clipPath>
+            </defs>
+
+            {/* Zero baseline */}
+            {showZeroLine && (
+                <line
+                    x1={PAD_L} y1={zeroY} x2={PAD_L + chartW} y2={zeroY}
+                    stroke="#374151" strokeWidth="0.8" strokeDasharray="3 2"
+                    opacity="0.6"
+                />
+            )}
+
+            {/* Area fill */}
+            <path d={areaPath} fill={`url(#${fillId})`} clipPath={`url(#clip_${fillId})`} />
+
+            {/* Line */}
+            <path
+                d={linePath}
+                fill="none"
+                stroke={lineColor}
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                clipPath={`url(#clip_${fillId})`}
+            />
+
+            {/* Latest dot */}
+            <circle
+                cx={px(n - 1)}
+                cy={py(lastVal)}
+                r="2"
+                fill={lineColor}
+                stroke="#111827"
+                strokeWidth="1"
+            />
+        </svg>
+    );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const SELL_PRESETS = [25, 50, 75, 100];
 
 const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
@@ -94,6 +205,9 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
     const [expandedCharts, setExpandedCharts] = useState<Set<string>>(new Set());
     const [ethPriceUsd, setEthPriceUsd] = useState<number>(3000);
     const prevPnlRef                    = useRef<Map<string, number | null>>(new Map());
+    // Rolling P&L history: address → array of profitPct values (oldest first)
+    const pnlHistoryRef                 = useRef<Map<string, number[]>>(new Map());
+    const [pnlHistoryVer, setPnlHistoryVer] = useState(0); // triggers re-render on history update
     const [tick, setTick]               = useState(0);
 
     const fetchPositions = useCallback(async () => {
@@ -139,14 +253,33 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
             const json = await res.json();
             const newMap = new Map<string, PnLEntry>();
             const flashing = new Set<string>();
+            let historyChanged = false;
+
             for (const entry of (json.pnl || [])) {
                 const key = entry.tokenAddress.toLowerCase();
                 newMap.set(key, entry);
+
+                // Flash detection
                 const prev = prevPnlRef.current.get(key);
                 if (prev !== undefined && prev !== entry.profitPct) flashing.add(key);
                 prevPnlRef.current.set(key, entry.profitPct);
+
+                // Append to rolling P&L history
+                if (entry.profitPct !== null) {
+                    const hist = pnlHistoryRef.current.get(key) ?? [];
+                    // Only append if value changed or history is empty
+                    const last = hist[hist.length - 1];
+                    if (last === undefined || last !== entry.profitPct) {
+                        hist.push(entry.profitPct);
+                        if (hist.length > MAX_HISTORY) hist.shift();
+                        pnlHistoryRef.current.set(key, hist);
+                        historyChanged = true;
+                    }
+                }
             }
+
             setPnlMap(newMap);
+            if (historyChanged) setPnlHistoryVer(v => v + 1);
             if (flashing.size > 0) {
                 setFlashSet(flashing);
                 setTimeout(() => setFlashSet(new Set()), 700);
@@ -199,6 +332,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
     }, []);
 
     void tick;
+    void pnlHistoryVer; // consumed to trigger re-render
 
     const positions = data?.positions ?? [];
 
@@ -254,8 +388,10 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
                 const tp2Prog = mult !== null && pos.takeProfit1Hit
                     ? progressPct(mult, tpsl.tp1Multiplier, tpsl.tp2Multiplier)
                     : 0;
-                const chartOpen       = expandedCharts.has(key);
-                const entryPriceUsd   = pos.entryPrice * ethPriceUsd;
+                const chartOpen     = expandedCharts.has(key);
+                const entryPriceUsd = pos.entryPrice * ethPriceUsd;
+
+                const pnlHistory = pnlHistoryRef.current.get(key) ?? [];
 
                 return (
                     <div
@@ -291,21 +427,31 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
 
                         {/* PnL hero row */}
                         <div className="grid grid-cols-3 gap-2">
-                            <div className="col-span-2 bg-black/20 rounded-xl p-3 flex flex-col justify-center">
+                            <div className="col-span-2 bg-black/20 rounded-xl p-3 space-y-2">
                                 {profitPct !== null ? (
                                     <>
-                                        <p className={`text-2xl font-bold leading-none ${pnlColor(profitPct)}`}>
-                                            {profitPct >= 0 ? '+' : ''}{profitPct.toFixed(1)}%
-                                        </p>
-                                        <p className="text-xs text-gray-500 mt-1">
-                                            {mult !== null ? `${mult.toFixed(3)}x` : '—'}
-                                            {currentEth !== null ? ` · ${currentEth.toFixed(5)} ETH` : ''}
-                                        </p>
+                                        <div className="flex items-baseline gap-2">
+                                            <p className={`text-2xl font-bold leading-none ${pnlColor(profitPct)}`}>
+                                                {profitPct >= 0 ? '+' : ''}{profitPct.toFixed(1)}%
+                                            </p>
+                                            <p className="text-xs text-gray-500">
+                                                {mult !== null ? `${mult.toFixed(3)}x` : '—'}
+                                                {currentEth !== null ? ` · ${currentEth.toFixed(5)} ETH` : ''}
+                                            </p>
+                                        </div>
+                                        {/* ── Inline P&L Sparkline ── */}
+                                        <div className="pt-0.5">
+                                            <PnLSparkline
+                                                history={pnlHistory}
+                                                height={36}
+                                                id={key.slice(2, 10)}
+                                            />
+                                        </div>
                                     </>
                                 ) : (
                                     <>
                                         <p className="text-lg font-bold text-gray-500">—</p>
-                                        <p className="text-xs text-gray-600 mt-1">Memuat harga...</p>
+                                        <p className="text-xs text-gray-600">Memuat harga...</p>
                                     </>
                                 )}
                             </div>
@@ -370,7 +516,7 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
                             </div>
                         )}
 
-                        {/* ── PRICE CHART ── */}
+                        {/* ── PRICE CHART (toggle) ── */}
                         {chartOpen && (
                             <div className="transition-all duration-300">
                                 <MiniChart
