@@ -2,8 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import PositionCard from './PositionCard';
 import ActivityLog from './ActivityLog';
 import Portfolio from './Portfolio';
-import Modal100k, { ModalSettings } from './Modal100k';
-import WalletConfigModal from './WalletConfigModal';
+import SettingsModal from './SettingsModal';
 import CopyWalletsModal from './CopyWalletsModal';
 import WalletMonitorPage from './WalletMonitorPage';
 import BlacklistModal from './BlacklistModal';
@@ -99,12 +98,10 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const [todayPnl, setTodayPnl]               = useState<{ eth: number; pct: number } | null>(null);
     const [showSettings, setShowSettings]       = useState(false);
     const { canInstall, install }               = usePwaInstall();
-    const [showWalletConfig, setShowWalletConfig]   = useState(false);
     const [showCopyWallets, setShowCopyWallets]     = useState(false);
     const [showMonitor, setShowMonitor]             = useState(false);
     const [showBlacklist, setShowBlacklist]         = useState(false);
     const [monitorCount, setMonitorCount]           = useState(0);
-    const [saveStatus, setSaveStatus]           = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
     const [emergencyLoading, setEmergencyLoading] = useState(false);
     const [emergencyDone, setEmergencyDone]       = useState(false);
 
@@ -177,27 +174,8 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         return () => clearInterval(interval);
     }, [fetchTodayPnl]);
 
-    const handleSaveSettings = useCallback(async (settings: ModalSettings) => {
-        setSaveStatus('saving');
-        try {
-            const res = await authFetch(`${apiUrl}/api/settings`, {
-                method:  'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify(settings)
-            });
-            if (!res.ok) throw new Error('Server error');
-            setSaveStatus('saved');
-            setShowSettings(false);
-            await fetchData();
-            setTimeout(() => setSaveStatus('idle'), 2000);
-        } catch {
-            setSaveStatus('error');
-            setTimeout(() => setSaveStatus('idle'), 3000);
-        }
-    }, [apiUrl, fetchData]);
 
     const openCount = status?.openPositions?.length ?? 0;
-    const currentCapital = config?.capital ? parseFloat(config.capital) : 0.006;
 
     const handleEmergencyStop = useCallback(async () => {
         if (!window.confirm('⚠️ EMERGENCY STOP: Ini akan menghentikan semua scanner dan menjual SEMUA posisi terbuka sekarang. Lanjutkan?')) return;
@@ -302,19 +280,11 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     </div>
 
                     <button
-                        onClick={() => setShowWalletConfig(true)}
-                        className="flex-shrink-0 flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-2 rounded-lg transition-all"
-                    >
-                        <span>🔑</span>
-                        <span>Kunci</span>
-                    </button>
-
-                    <button
                         onClick={() => setShowSettings(true)}
                         className="flex-shrink-0 flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-2 rounded-lg transition-all"
                     >
                         <span>⚙️</span>
-                        <span>Atur</span>
+                        <span>Pengaturan</span>
                     </button>
                 </div>
             </div>
@@ -340,16 +310,6 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
             {(emergencyDone || status?.emergencyStop) && (
                 <div className="mx-4 mt-2 bg-red-900/50 border border-red-700 rounded-xl px-4 py-2 text-sm text-red-300 text-center font-semibold">
                     🚨 EMERGENCY STOP AKTIF — Restart server untuk lanjutkan trading
-                </div>
-            )}
-            {saveStatus === 'saved' && (
-                <div className="mx-4 mt-2 bg-green-900/40 border border-green-700 rounded-xl px-4 py-2 text-sm text-green-400 text-center">
-                    ✅ Pengaturan berhasil disimpan
-                </div>
-            )}
-            {saveStatus === 'error' && (
-                <div className="mx-4 mt-2 bg-red-900/40 border border-red-700 rounded-xl px-4 py-2 text-sm text-red-400 text-center">
-                    ❌ Gagal menyimpan — coba lagi
                 </div>
             )}
             {error && (
@@ -472,17 +432,10 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
 
             {/* Modals */}
             {showSettings && (
-                <Modal100k
-                    currentBalance={currentCapital}
-                    onClose={() => setShowSettings(false)}
-                    onSave={handleSaveSettings}
-                    currentConfig={config ?? undefined}
-                />
-            )}
-            {showWalletConfig && (
-                <WalletConfigModal
+                <SettingsModal
                     apiUrl={apiUrl}
-                    onClose={() => setShowWalletConfig(false)}
+                    onClose={() => { setShowSettings(false); fetchData(); }}
+                    currentConfig={config ?? undefined}
                 />
             )}
             {showCopyWallets && (
