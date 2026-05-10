@@ -92,6 +92,9 @@ function requireAuth(req, res, next) {
     next();
 }
 app.use((req, res, next) => {
+    // Allow static assets and auth endpoint without session token
+    if (!req.path.startsWith('/api/'))
+        return next();
     if (req.path === '/api/auth/verify')
         return next();
     requireAuth(req, res, next);

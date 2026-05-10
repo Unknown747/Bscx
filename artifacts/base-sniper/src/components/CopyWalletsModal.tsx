@@ -47,10 +47,12 @@ interface CopyWalletsModalProps {
 }
 
 type ModalTab = 'manual' | 'finder';
+type StatusFilter = 'all' | 'pending' | 'monitoring' | 'approved' | 'rejected';
+type SortMode = 'score' | 'winrate' | 'recent';
 
 interface DetailTarget {
     address: string;
-    name?:   string;
+    name?: string;
     showActions?: boolean;
 }
 
@@ -67,11 +69,25 @@ function scoreColor(score: number): string {
     return 'text-red-400';
 }
 
+function scoreBg(score: number): string {
+    if (score >= 75) return 'bg-green-900/30 border-green-800';
+    if (score >= 55) return 'bg-yellow-900/20 border-yellow-800';
+    return 'bg-red-900/20 border-red-800';
+}
+
 function riskColor(risk: 'LOW' | 'MEDIUM' | 'HIGH'): string {
     if (risk === 'LOW')    return 'text-green-400 bg-green-900/30 border-green-800';
     if (risk === 'MEDIUM') return 'text-yellow-400 bg-yellow-900/20 border-yellow-800';
     return 'text-red-400 bg-red-900/20 border-red-800';
 }
+
+const STATUS_FILTERS: { key: StatusFilter; label: string; color: string }[] = [
+    { key: 'all',        label: 'Semua',     color: 'bg-gray-700 text-white' },
+    { key: 'pending',    label: '⏳ Pending', color: 'bg-blue-700 text-white' },
+    { key: 'monitoring', label: '🔬 Monitor', color: 'bg-purple-700 text-white' },
+    { key: 'approved',   label: '✅ OK',      color: 'bg-green-700 text-white' },
+    { key: 'rejected',   label: '❌ Tolak',   color: 'bg-red-900 text-red-200' },
+];
 
 const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) => {
     const [activeTab, setActiveTab] = useState<ModalTab>('manual');
@@ -87,13 +103,16 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
     const [editName, setEditName]       = useState('');
 
     // ─── Finder tab state ───────────────────────────────────────────────────────
-    const [candidates, setCandidates]   = useState<WhaleCandidate[]>([]);
-    const [scanning, setScanning]       = useState(false);
-    const [actionLoading, setActionLoading] = useState<string | null>(null); // address being acted on
-    const [simResult, setSimResult]     = useState<SimResult | null>(null);
-    const [simAddress, setSimAddress]   = useState('');
-    const [simToken, setSimToken]       = useState('');
-    const [simLoading, setSimLoading]   = useState(false);
+    const [candidates, setCandidates]       = useState<WhaleCandidate[]>([]);
+    const [scanning, setScanning]           = useState(false);
+    const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [simResult, setSimResult]         = useState<SimResult | null>(null);
+    const [simAddress, setSimAddress]       = useState('');
+    const [simToken, setSimToken]           = useState('');
+    const [simLoading, setSimLoading]       = useState(false);
+    const [statusFilter, setStatusFilter]   = useState<StatusFilter>('all');
+    const [sortMode, setSortMode]           = useState<SortMode>('score');
+    const [scoreMin, setScoreMin]           = useState(0);
 
     // ─── Detail modal state ─────────────────────────────────────────────────────
     const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
@@ -195,9 +214,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ address })
             });
-            if (res.ok) {
-                await fetchCandidates();
-            }
+            if (res.ok) await fetchCandidates();
         } catch { }
         setActionLoading(null);
     };
@@ -231,38 +248,51 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
         setSimLoading(false);
     };
 
+    // ─── Filtered + sorted candidates ─────────────────────────────────────────
+    const filteredCandidates = candidates
+        .filter(c => statusFilter === 'all' || c.status === statusFilter)
+        .filter(c => c.score >= scoreMin)
+        .sort((a, b) => {
+            if (sortMode === 'score')   return b.score - a.score;
+            if (sortMode === 'winrate') return b.estimatedWinRate - a.estimatedWinRate;
+            return b.lastActiveMs - a.lastActiveMs;
+        });
+
+    const countByStatus = (s: StatusFilter) =>
+        s === 'all' ? candidates.length : candidates.filter(c => c.status === s).length;
+
     const activeCount  = wallets.filter(w => w.isActive).length;
     const pausedByBot  = wallets.filter(w => w.autoPaused).length;
     const pendingCount = candidates.filter(c => c.status === 'pending').length;
 
     return (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-            <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+            <div className="bg-gray-900 border border-gray-700 rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[92vh] overflow-y-auto shadow-2xl">
 
                 {/* Header */}
-                <div className="sticky top-0 bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between rounded-t-2xl">
+                <div className="sticky top-0 bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-4 flex items-center justify-between rounded-t-2xl">
                     <div>
-                        <h2 className="text-lg font-bold text-white">🐋 Whale Manager</h2>
+                        <h2 className="text-base sm:text-lg font-bold text-white">🐋 Whale Manager</h2>
                         <p className="text-xs text-gray-500 mt-0.5">
                             {activeCount} aktif · {wallets.length} total
                             {pausedByBot > 0 && <span className="ml-2 text-orange-400">· {pausedByBot} auto-paused</span>}
-                            {pendingCount > 0 && <span className="ml-2 text-blue-400">· {pendingCount} pending approval</span>}
+                            {pendingCount > 0 && <span className="ml-2 text-blue-400">· {pendingCount} pending</span>}
                         </p>
                     </div>
-                    <button onClick={onClose} className="text-gray-500 hover:text-white text-2xl leading-none transition-colors">&times;</button>
+                    <button onClick={onClose} className="text-gray-500 hover:text-white text-2xl leading-none transition-colors w-10 h-10 flex items-center justify-center">&times;</button>
                 </div>
 
                 {/* Tab selector */}
-                <div className="flex mx-5 mt-4 bg-gray-800 rounded-xl p-1 gap-1">
+                <div className="flex mx-4 sm:mx-5 mt-4 bg-gray-800 rounded-xl p-1 gap-1">
                     <button
                         onClick={() => setActiveTab('manual')}
-                        className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${activeTab === 'manual' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                        className={`flex-1 py-2.5 rounded-lg text-xs font-semibold transition-all ${activeTab === 'manual' ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
                     >
                         📝 Manual
                     </button>
                     <button
                         onClick={() => setActiveTab('finder')}
-                        className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1 ${activeTab === 'finder' ? 'bg-blue-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                        className={`flex-1 py-2.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1 ${activeTab === 'finder' ? 'bg-blue-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}
                     >
                         🔍 Auto Finder
                         {pendingCount > 0 && (
@@ -275,7 +305,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
 
                 {/* ═══════════════════ MANUAL TAB ═══════════════════ */}
                 {activeTab === 'manual' && (
-                    <div className="p-5 space-y-5">
+                    <div className="p-4 sm:p-5 space-y-4">
                         {/* Add wallet form */}
                         <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-3">
                             <h3 className="text-sm font-semibold text-gray-200">➕ Tambah Whale Baru</h3>
@@ -284,7 +314,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                 value={addAddress}
                                 onChange={e => { setAddAddress(e.target.value); setAddError(''); }}
                                 placeholder="0x... (alamat wallet)"
-                                className="w-full bg-gray-900 border border-gray-700 focus:border-green-500 rounded-xl px-4 py-2.5 text-white placeholder-gray-600 text-sm font-mono focus:outline-none transition-colors"
+                                className="w-full bg-gray-900 border border-gray-700 focus:border-green-500 rounded-xl px-4 py-3 text-white placeholder-gray-600 text-sm font-mono focus:outline-none transition-colors"
                             />
                             <div className="flex gap-2">
                                 <input
@@ -293,12 +323,12 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                     onChange={e => setAddLabel(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && handleAdd()}
                                     placeholder="Label (opsional)"
-                                    className="flex-1 bg-gray-900 border border-gray-700 focus:border-green-500 rounded-xl px-4 py-2.5 text-white placeholder-gray-600 text-sm focus:outline-none transition-colors"
+                                    className="flex-1 bg-gray-900 border border-gray-700 focus:border-green-500 rounded-xl px-4 py-3 text-white placeholder-gray-600 text-sm focus:outline-none transition-colors"
                                 />
                                 <button
                                     onClick={handleAdd}
                                     disabled={adding}
-                                    className="bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all whitespace-nowrap"
+                                    className="bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:cursor-not-allowed text-white px-4 py-3 rounded-xl text-sm font-semibold transition-all whitespace-nowrap"
                                 >
                                     {adding ? '...' : '+ Tambah'}
                                 </button>
@@ -328,9 +358,9 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                     <div className="flex items-start gap-3">
                                         <button
                                             onClick={() => handleToggle(w.address, w.isActive)}
-                                            className={`mt-0.5 flex-shrink-0 w-9 h-5 rounded-full transition-colors relative ${w.isActive ? 'bg-green-600' : 'bg-gray-700'}`}
+                                            className={`mt-0.5 flex-shrink-0 w-10 h-6 rounded-full transition-colors relative ${w.isActive ? 'bg-green-600' : 'bg-gray-700'}`}
                                         >
-                                            <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${w.isActive ? 'left-4' : 'left-0.5'}`} />
+                                            <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${w.isActive ? 'left-4' : 'left-0.5'}`} />
                                         </button>
                                         <div className="flex-1 min-w-0">
                                             {editingAddr === w.address ? (
@@ -349,7 +379,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                                                     <span className="text-sm font-semibold text-white truncate">{w.name}</span>
                                                     <button onClick={() => { setEditingAddr(w.address); setEditName(w.name); }} className="text-gray-600 hover:text-gray-400 text-xs" title="Ganti nama">✏️</button>
-                                                    {w.autoPaused && <span className="text-xs px-2 py-0.5 rounded-full border bg-orange-900/40 text-orange-400 border-orange-700">⏸ Auto-paused</span>}
+                                                    {w.autoPaused && <span className="text-xs px-2 py-0.5 rounded-full border bg-orange-900/40 text-orange-400 border-orange-700">⏸ Paused</span>}
                                                 </div>
                                             )}
                                             <p className="text-xs text-gray-500 font-mono truncate">{w.address}</p>
@@ -360,15 +390,14 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                     <span className={`text-xs font-medium ${w.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>{w.totalPnL >= 0 ? '+' : ''}{w.totalPnL.toFixed(1)}%</span>
                                                 </div>
                                             ) : (
-                                                <p className="text-xs text-gray-600 mt-1.5 italic">Belum ada copy trade tercatat</p>
+                                                <p className="text-xs text-gray-600 mt-1.5 italic">Belum ada copy trade</p>
                                             )}
-                                            {w.autoPaused && <p className="text-xs text-orange-500/80 mt-1">Win rate turun — toggle untuk aktifkan kembali</p>}
                                         </div>
                                         <div className="flex items-center gap-2 flex-shrink-0">
                                             <span className={`text-xs px-2 py-0.5 rounded-full border ${w.autoPaused ? 'bg-orange-900/30 text-orange-400 border-orange-800' : w.isActive ? 'bg-green-900/40 text-green-400 border-green-800' : 'bg-gray-800 text-gray-500 border-gray-700'}`}>
-                                                {w.autoPaused ? 'Auto-Pause' : w.isActive ? 'Aktif' : 'Jeda'}
+                                                {w.autoPaused ? 'Paused' : w.isActive ? 'Aktif' : 'Jeda'}
                                             </span>
-                                            <button onClick={() => handleRemove(w.address)} className="text-gray-600 hover:text-red-400 text-base transition-colors" title="Hapus wallet">🗑️</button>
+                                            <button onClick={() => handleRemove(w.address)} className="text-gray-600 hover:text-red-400 text-base transition-colors p-1" title="Hapus">🗑️</button>
                                         </div>
                                     </div>
                                 </div>
@@ -380,9 +409,9 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                             <div className="flex gap-3">
                                 <span className="text-lg">📊</span>
                                 <div className="text-xs text-blue-300 leading-relaxed space-y-1">
-                                    <p><span className="text-green-400 font-semibold">Win Rate ≥ 60%</span> — whale performa bagus</p>
-                                    <p><span className="text-yellow-400 font-semibold">Win Rate 40–60%</span> — performa sedang</p>
-                                    <p><span className="text-red-400 font-semibold">Win Rate &lt; 40%</span> — hati-hati</p>
+                                    <p><span className="text-green-400 font-semibold">WR ≥ 60%</span> — performa bagus</p>
+                                    <p><span className="text-yellow-400 font-semibold">WR 40–60%</span> — performa sedang</p>
+                                    <p><span className="text-red-400 font-semibold">WR &lt; 40%</span> — hati-hati</p>
                                     <p className="text-orange-400 font-semibold">⏸ Auto-paused jika WR &lt; 30% setelah 5 trade</p>
                                 </div>
                             </div>
@@ -392,7 +421,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
 
                 {/* ═══════════════════ AUTO FINDER TAB ═══════════════════ */}
                 {activeTab === 'finder' && (
-                    <div className="p-5 space-y-5">
+                    <div className="p-4 sm:p-5 space-y-4">
                         {/* Scan button */}
                         <div className="bg-blue-900/20 border border-blue-800/40 rounded-xl p-4">
                             <div className="flex items-start gap-3 mb-3">
@@ -401,14 +430,13 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                     <p className="text-sm font-semibold text-blue-300">Auto Whale Finder</p>
                                     <p className="text-xs text-blue-400/70 mt-0.5">
                                         Scan GeckoTerminal trending pools untuk menemukan whale profitabel.
-                                        Semua kandidat harus Anda setujui sebelum dicopy.
                                     </p>
                                 </div>
                             </div>
                             <button
                                 onClick={handleScan}
                                 disabled={scanning}
-                                className="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-blue-900 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2"
+                                className="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-blue-900 disabled:cursor-not-allowed text-white py-3 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2"
                             >
                                 {scanning ? (
                                     <>
@@ -419,18 +447,77 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                             </button>
                         </div>
 
+                        {/* ── Filter & Sort Controls ── */}
+                        {candidates.length > 0 && (
+                            <div className="space-y-3">
+                                {/* Status filter pills */}
+                                <div>
+                                    <p className="text-xs text-gray-500 font-medium mb-2 uppercase tracking-wide">Filter Status</p>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {STATUS_FILTERS.map(f => (
+                                            <button
+                                                key={f.key}
+                                                onClick={() => setStatusFilter(f.key)}
+                                                className={`text-xs px-3 py-1.5 rounded-full font-semibold transition-all border ${
+                                                    statusFilter === f.key
+                                                        ? `${f.color} border-transparent`
+                                                        : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-500'
+                                                }`}
+                                            >
+                                                {f.label}
+                                                <span className="ml-1 opacity-70">({countByStatus(f.key)})</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Sort + min score row */}
+                                <div className="flex items-center gap-3 flex-wrap">
+                                    <div className="flex bg-gray-800 rounded-lg p-0.5 gap-0.5">
+                                        {(['score', 'winrate', 'recent'] as SortMode[]).map(s => (
+                                            <button
+                                                key={s}
+                                                onClick={() => setSortMode(s)}
+                                                className={`text-xs px-2.5 py-1.5 rounded-md font-medium transition-all ${sortMode === s ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                                            >
+                                                {s === 'score' ? '🏅 Skor' : s === 'winrate' ? '📈 WR' : '🕐 Terbaru'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-1 min-w-[130px]">
+                                        <span className="text-xs text-gray-500 whitespace-nowrap">Min skor:</span>
+                                        <input
+                                            type="range"
+                                            min={0}
+                                            max={90}
+                                            step={10}
+                                            value={scoreMin}
+                                            onChange={e => setScoreMin(Number(e.target.value))}
+                                            className="flex-1 accent-blue-500"
+                                        />
+                                        <span className="text-xs text-blue-400 font-bold w-6">{scoreMin}</span>
+                                    </div>
+                                </div>
+
+                                <p className="text-xs text-gray-600">
+                                    Menampilkan <span className="text-white font-semibold">{filteredCandidates.length}</span> dari {candidates.length} kandidat
+                                </p>
+                            </div>
+                        )}
+
                         {/* Candidate list */}
                         {candidates.length === 0 ? (
-                            <div className="text-center py-8 text-gray-600 text-sm">
+                            <div className="text-center py-10 text-gray-600 text-sm">
                                 Belum ada kandidat whale.<br />
                                 Klik "Scan Sekarang" untuk mencari.
                             </div>
+                        ) : filteredCandidates.length === 0 ? (
+                            <div className="text-center py-8 text-gray-600 text-sm">
+                                Tidak ada kandidat yang cocok dengan filter ini.
+                            </div>
                         ) : (
                             <div className="space-y-3">
-                                <p className="text-xs text-gray-500 font-medium uppercase tracking-wide">
-                                    {candidates.length} kandidat ditemukan
-                                </p>
-                                {candidates.map(c => {
+                                {filteredCandidates.map(c => {
                                     const daysSince = ((Date.now() - c.lastActiveMs) / 86_400_000).toFixed(1);
                                     const isLoading = actionLoading === c.address;
                                     return (
@@ -446,35 +533,35 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                             <div className="flex items-start justify-between gap-3 mb-3">
                                                 <div className="flex-1 min-w-0">
                                                     <div className="flex items-center gap-2 flex-wrap">
-                                                        <p className="text-xs font-mono text-gray-400 truncate">{c.address.slice(0, 14)}...{c.address.slice(-6)}</p>
+                                                        <p className="text-xs font-mono text-gray-400">{c.address.slice(0, 10)}...{c.address.slice(-6)}</p>
                                                         <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${
                                                             c.status === 'approved'   ? 'text-green-400 border-green-700 bg-green-900/30' :
                                                             c.status === 'rejected'   ? 'text-gray-500 border-gray-700 bg-gray-800' :
                                                             c.status === 'monitoring' ? 'text-purple-400 border-purple-700 bg-purple-900/30' :
                                                             'text-blue-400 border-blue-700 bg-blue-900/30'
                                                         }`}>
-                                                            {c.status === 'approved'   ? '✅ Approved' :
+                                                            {c.status === 'approved'   ? '✅ OK' :
                                                              c.status === 'rejected'   ? '❌ Ditolak' :
-                                                             c.status === 'monitoring' ? '🔬 Monitoring' :
-                                                             '⏳ Waitlist'}
+                                                             c.status === 'monitoring' ? '🔬 Monitor' :
+                                                             '⏳ Pending'}
                                                         </span>
                                                     </div>
                                                 </div>
                                                 <div className="flex items-center gap-2 flex-shrink-0">
                                                     <button
                                                         onClick={() => setDetailTarget({ address: c.address, showActions: c.status === 'pending' })}
-                                                        className="text-xs text-blue-400 hover:text-blue-300 bg-blue-900/20 border border-blue-800/50 px-2 py-0.5 rounded-lg transition-colors"
+                                                        className="text-xs text-blue-400 hover:text-blue-300 bg-blue-900/20 border border-blue-800/50 px-2 py-1 rounded-lg transition-colors"
                                                     >
                                                         🔬 Analisis
                                                     </button>
-                                                    <span className={`text-sm font-bold ${scoreColor(c.score)}`}>{c.score}/100</span>
+                                                    <span className={`text-sm font-bold px-2 py-0.5 rounded-lg border ${scoreColor(c.score)} ${scoreBg(c.score)}`}>{c.score}</span>
                                                 </div>
                                             </div>
 
                                             <div className="grid grid-cols-3 gap-2 mb-3">
                                                 <div className="text-center bg-gray-800/50 rounded-lg p-2">
                                                     <p className="text-xs text-gray-500">Est. WR</p>
-                                                    <p className="text-sm font-bold text-white">{c.estimatedWinRate}%</p>
+                                                    <p className={`text-sm font-bold ${c.estimatedWinRate >= 60 ? 'text-green-400' : c.estimatedWinRate >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>{c.estimatedWinRate}%</p>
                                                 </div>
                                                 <div className="text-center bg-gray-800/50 rounded-lg p-2">
                                                     <p className="text-xs text-gray-500">Avg Profit</p>
@@ -482,14 +569,14 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                 </div>
                                                 <div className="text-center bg-gray-800/50 rounded-lg p-2">
                                                     <p className="text-xs text-gray-500">Terakhir</p>
-                                                    <p className="text-sm font-bold text-white">{daysSince}h lalu</p>
+                                                    <p className="text-sm font-bold text-white">{daysSince}h</p>
                                                 </div>
                                             </div>
 
                                             {c.status === 'monitoring' && (
                                                 <div className="bg-purple-900/20 border border-purple-800/40 rounded-lg px-3 py-2 text-xs text-purple-300 flex items-center gap-2">
                                                     <span>🔬</span>
-                                                    <span>Bot sedang mengamati trade wallet ini. Buka tab <strong className="text-purple-200">🔬 Monitor</strong> di dashboard untuk evaluasi AI.</span>
+                                                    <span>Wallet sedang dimonitor. Buka tab <strong className="text-purple-200">🔬 Monitor</strong> untuk evaluasi AI.</span>
                                                 </div>
                                             )}
                                             {c.status === 'pending' && (
@@ -497,14 +584,14 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                                     <button
                                                         onClick={() => handleApprove(c.address)}
                                                         disabled={isLoading}
-                                                        className="flex-1 bg-green-700 hover:bg-green-600 disabled:bg-gray-700 text-white text-xs py-2 rounded-lg font-semibold transition-all"
+                                                        className="flex-1 bg-green-700 hover:bg-green-600 disabled:bg-gray-700 text-white text-xs py-2.5 rounded-lg font-semibold transition-all"
                                                     >
-                                                        {isLoading ? '...' : '🔬 Setujui untuk Monitor'}
+                                                        {isLoading ? '...' : '🔬 Monitor'}
                                                     </button>
                                                     <button
                                                         onClick={() => handleReject(c.address)}
                                                         disabled={isLoading}
-                                                        className="flex-1 bg-red-900/40 hover:bg-red-900/70 border border-red-800 disabled:bg-gray-700 text-red-400 text-xs py-2 rounded-lg font-semibold transition-all"
+                                                        className="flex-1 bg-red-900/40 hover:bg-red-900/70 border border-red-800 disabled:bg-gray-700 text-red-400 text-xs py-2.5 rounded-lg font-semibold transition-all"
                                                     >
                                                         {isLoading ? '...' : '❌ Tolak'}
                                                     </button>
@@ -519,25 +606,25 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                         {/* Simulation Panel */}
                         <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 space-y-3">
                             <h3 className="text-sm font-semibold text-gray-200">🔮 Simulasi Copy Trade</h3>
-                            <p className="text-xs text-gray-500">Estimasi P&L jika mengikuti whale pada token tertentu sebelum eksekusi.</p>
+                            <p className="text-xs text-gray-500">Estimasi P&L jika mengikuti whale pada token tertentu.</p>
                             <input
                                 type="text"
                                 value={simAddress}
                                 onChange={e => setSimAddress(e.target.value)}
                                 placeholder="0x... (alamat whale wallet)"
-                                className="w-full bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-xl px-4 py-2.5 text-white placeholder-gray-600 text-xs font-mono focus:outline-none transition-colors"
+                                className="w-full bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-xl px-4 py-3 text-white placeholder-gray-600 text-xs font-mono focus:outline-none transition-colors"
                             />
                             <input
                                 type="text"
                                 value={simToken}
                                 onChange={e => setSimToken(e.target.value)}
                                 placeholder="0x... (alamat token)"
-                                className="w-full bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-xl px-4 py-2.5 text-white placeholder-gray-600 text-xs font-mono focus:outline-none transition-colors"
+                                className="w-full bg-gray-900 border border-gray-700 focus:border-blue-500 rounded-xl px-4 py-3 text-white placeholder-gray-600 text-xs font-mono focus:outline-none transition-colors"
                             />
                             <button
                                 onClick={handleSimulate}
                                 disabled={simLoading || !simAddress.trim() || !simToken.trim()}
-                                className="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2"
+                                className="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 disabled:cursor-not-allowed text-white py-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2"
                             >
                                 {simLoading ? (
                                     <><svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>Menghitung...</>
@@ -547,7 +634,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                             {simResult && (
                                 <div className="mt-3 bg-gray-900 border border-gray-700 rounded-xl p-4 space-y-3">
                                     <div className="flex items-center justify-between">
-                                        <p className="text-xs font-semibold text-gray-300">Hasil Simulasi: <span className="text-blue-400">{simResult.tokenSymbol || '?'}</span></p>
+                                        <p className="text-xs font-semibold text-gray-300">Hasil: <span className="text-blue-400">{simResult.tokenSymbol || '?'}</span></p>
                                         <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${riskColor(simResult.estimatedRisk)}`}>
                                             {simResult.estimatedRisk} Risk
                                         </span>
@@ -569,9 +656,6 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                         </div>
                                     </div>
                                     <p className="text-xs text-gray-400 leading-relaxed">{simResult.summary}</p>
-                                    {!simResult.simulated && (
-                                        <p className="text-xs text-yellow-500/80">⚠️ Data historis terbatas — estimasi berdasarkan performa umum whale</p>
-                                    )}
                                 </div>
                             )}
                         </div>
@@ -581,17 +665,16 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                             <p className="text-xs text-gray-500 leading-relaxed">
                                 <span className="text-blue-400 font-semibold">🤖 Filter ketat:</span> WR ≥55%, min 8 trade, aktif dalam 3 hari, skor ≥60.
                                 Simulasi P&L otomatis dijalankan sebelum setiap copy trade.
-                                Candidate yang memiliki estimasi profit rendah &amp; risiko tinggi akan diblokir otomatis.
                             </p>
                         </div>
                     </div>
                 )}
 
                 {/* Footer */}
-                <div className="sticky bottom-0 bg-gray-900 border-t border-gray-800 px-6 py-4 rounded-b-2xl">
+                <div className="sticky bottom-0 bg-gray-900 border-t border-gray-800 px-4 sm:px-6 py-4 rounded-b-2xl">
                     <button
                         onClick={onClose}
-                        className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white py-2.5 rounded-xl text-sm font-medium transition-all"
+                        className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white py-3 rounded-xl text-sm font-medium transition-all"
                     >
                         Tutup
                     </button>

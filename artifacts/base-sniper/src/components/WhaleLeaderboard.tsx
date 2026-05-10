@@ -46,9 +46,9 @@ function statusDot(w: Wallet): { color: string; label: string } {
 }
 
 const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
-    const [wallets, setWallets]   = useState<Wallet[]>([]);
-    const [sortBy, setSortBy]     = useState<SortKey>('winRate');
-    const [loading, setLoading]   = useState(true);
+    const [wallets, setWallets]       = useState<Wallet[]>([]);
+    const [sortBy, setSortBy]         = useState<SortKey>('winRate');
+    const [loading, setLoading]       = useState(true);
     const [lastUpdate, setLastUpdate] = useState('');
     const [detailAddr, setDetailAddr] = useState<{ address: string; name: string } | null>(null);
 
@@ -70,7 +70,6 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
 
     const sorted = [...wallets].sort((a, b) => {
         if (sortBy === 'winRate') {
-            // wallets with no trades go to bottom
             if (a.copiedTrades === 0 && b.copiedTrades === 0) return 0;
             if (a.copiedTrades === 0) return 1;
             if (b.copiedTrades === 0) return -1;
@@ -105,20 +104,16 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
                         </svg>
                     )}
                 </div>
-
-                {/* Sort toggle */}
                 <div className="flex bg-gray-800 rounded-lg p-0.5 gap-0.5">
                     {(['winRate', 'pnl'] as SortKey[]).map(key => (
                         <button
                             key={key}
                             onClick={() => setSortBy(key)}
-                            className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${
-                                sortBy === key
-                                    ? 'bg-gray-600 text-white'
-                                    : 'text-gray-500 hover:text-gray-300'
+                            className={`text-xs px-3 py-1.5 rounded-md font-medium transition-all ${
+                                sortBy === key ? 'bg-gray-600 text-white' : 'text-gray-500 hover:text-gray-300'
                             }`}
                         >
-                            {key === 'winRate' ? 'Win Rate' : 'P&L'}
+                            {key === 'winRate' ? 'WR' : 'P&L'}
                         </button>
                     ))}
                 </div>
@@ -149,7 +144,7 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
                 {loading ? (
                     <div className="py-8 text-center text-gray-600 text-xs">Memuat...</div>
                 ) : sorted.length === 0 ? (
-                    <div className="py-8 text-center text-gray-600 text-xs">
+                    <div className="py-8 text-center text-gray-600 text-xs px-4">
                         Belum ada whale wallet.<br />Tambahkan via tombol Whale di atas.
                     </div>
                 ) : sorted.map((w, i) => {
@@ -159,17 +154,16 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
                         <div
                             key={w.address}
                             onClick={() => setDetailAddr({ address: w.address, name: w.name })}
-                            className={`flex items-center gap-3 px-4 py-3 transition-colors cursor-pointer ${
+                            className={`flex items-center gap-3 px-4 py-3.5 transition-colors cursor-pointer active:bg-gray-800/60 ${
                                 i === 0 && hasTrades ? 'bg-yellow-900/5 hover:bg-yellow-900/10' : 'hover:bg-gray-800/40'
                             }`}
                         >
                             {/* Rank */}
                             <div className="w-7 text-center flex-shrink-0">
-                                {hasTrades ? (
-                                    <span className="text-sm">{rankMedal(i)}</span>
-                                ) : (
-                                    <span className="text-xs text-gray-600">#{i + 1}</span>
-                                )}
+                                {hasTrades
+                                    ? <span className="text-sm">{rankMedal(i)}</span>
+                                    : <span className="text-xs text-gray-600">#{i + 1}</span>
+                                }
                             </div>
 
                             {/* Status dot */}
@@ -180,32 +174,29 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
                             {/* Name + address */}
                             <div className="flex-1 min-w-0">
                                 <p className="text-sm font-semibold text-white truncate leading-tight">{w.name}</p>
-                                <p className="text-xs text-gray-600 font-mono truncate">
-                                    {w.address.slice(0, 6)}...{w.address.slice(-4)}
+                                <p className="text-xs text-gray-600 font-mono">
+                                    {w.address.slice(0, 6)}…{w.address.slice(-4)}
                                 </p>
                             </div>
 
                             {/* Stats */}
                             {hasTrades ? (
                                 <div className="flex items-center gap-2 flex-shrink-0">
-                                    {/* Win rate badge */}
                                     <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${winRateBadge(w.winRate, w.copiedTrades)}`}>
                                         {w.winRate.toFixed(0)}%
                                     </span>
-
-                                    {/* W/L */}
-                                    <span className="text-xs text-gray-500 hidden sm:inline">
+                                    <span className="text-xs text-gray-500">
                                         {w.wins}W/{w.losses}L
                                     </span>
-
-                                    {/* P&L */}
-                                    <span className={`text-xs font-bold w-16 text-right ${pnlColor(w.totalPnL, w.copiedTrades)}`}>
+                                    <span className={`text-xs font-bold ${pnlColor(w.totalPnL, w.copiedTrades)}`}>
                                         {w.totalPnL >= 0 ? '+' : ''}{w.totalPnL.toFixed(1)}%
                                     </span>
                                 </div>
                             ) : (
                                 <span className="text-xs text-gray-600 italic flex-shrink-0">Belum ada trade</span>
                             )}
+
+                            <span className="text-gray-700 text-xs flex-shrink-0">›</span>
                         </div>
                     );
                 })}
@@ -214,13 +205,12 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
             {/* Footer */}
             {lastUpdate && (
                 <div className="px-4 py-2 border-t border-gray-800/60 flex items-center justify-between">
-                    <span className="text-xs text-gray-700">Klik baris untuk analisis detail</span>
-                    <span className="text-xs text-gray-700">Live · {lastUpdate}</span>
+                    <span className="text-xs text-gray-700">Ketuk untuk detail</span>
+                    <span className="text-xs text-gray-700">{lastUpdate}</span>
                 </div>
             )}
         </div>
 
-        {/* Whale Detail Modal */}
         {detailAddr && (
             <WhaleDetailModal
                 apiUrl={apiUrl}
@@ -229,7 +219,7 @@ const WhaleLeaderboard: React.FC<WhaleLeaderboardProps> = ({ apiUrl }) => {
                 onClose={() => setDetailAddr(null)}
             />
         )}
-    </>
+        </>
     );
 };
 
