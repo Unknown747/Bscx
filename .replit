@@ -59,7 +59,7 @@ localPort = 9999
 externalPort = 3000
 
 [deployment]
-deploymentTarget = "vm"
+deploymentTarget = "cloudrun"
 run = ["npm", "run", "start"]
 build = ["npm", "run", "build"]
 
