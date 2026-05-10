@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { setAuthToken } from '../lib/authFetch';
+import { setAuthToken, getAuthToken } from '../lib/authFetch';
 
 interface LoginGateProps {
     apiUrl: string;
@@ -7,13 +7,36 @@ interface LoginGateProps {
 }
 
 const LoginGate: React.FC<LoginGateProps> = ({ apiUrl, children }) => {
+    // If a token is already stored in sessionStorage, start unlocked and verify it
     const [unlocked, setUnlocked] = useState(false);
+    const [verifying, setVerifying] = useState(true); // true while checking stored token
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [attempts, setAttempts] = useState(0);
     const [blocked, setBlocked] = useState(false);
     const [blockTimer, setBlockTimer] = useState(0);
+
+    // On mount: verify stored session token against server
+    useEffect(() => {
+        const storedToken = getAuthToken();
+        if (!storedToken) { setVerifying(false); return; }
+        // Quick verify — if the token is still valid the server will return 200
+        fetch(`${apiUrl}/api/status`, {
+            headers: { 'X-Session-Token': storedToken }
+        }).then((res) => {
+            if (res.ok) {
+                setUnlocked(true);
+            } else {
+                // Token expired — clear it and show login
+                setAuthToken('');
+            }
+        }).catch(() => {
+            // Server unreachable — clear token, show login
+            setAuthToken('');
+        }).finally(() => setVerifying(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Block after 5 wrong attempts for 30 seconds
     useEffect(() => {
@@ -67,6 +90,22 @@ const LoginGate: React.FC<LoginGateProps> = ({ apiUrl, children }) => {
 
     if (unlocked) {
         return <>{children}</>;
+    }
+
+    // While verifying stored token, show a minimal spinner
+    if (verifying) {
+        return (
+            <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-3">
+                    <div className="text-4xl">🔥</div>
+                    <svg className="animate-spin h-6 w-6 text-green-500" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                    </svg>
+                    <p className="text-gray-500 text-sm">Menghubungkan...</p>
+                </div>
+            </div>
+        );
     }
 
     return (

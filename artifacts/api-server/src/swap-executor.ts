@@ -432,9 +432,21 @@ export class SwapExecutor extends EventEmitter {
             const _sellPos = this.openPositions.get(tokenAddress);
             const tokenSymbol = _sellPos?.tokenSymbol || '???';
             const _sellSw = _sellPos?.sourceWallet;
+            const entryEthFull = _sellPos ? parseFloat(formatEther(_sellPos.amountIn)) : 0;
+            const holdMs = _sellPos ? Date.now() - _sellPos.openedAt : 0;
+            const entryEth = entryEthFull * (percentToSell / 100);
+            let profitPct: number | null = null;
+            if (entryEthFull > 0) {
+                try {
+                    const currentValueEth = await this.estimateTokenValueEth(tokenAddress, amountIn);
+                    if (currentValueEth !== null) {
+                        profitPct = ((currentValueEth - entryEth) / entryEth) * 100;
+                    }
+                } catch { /* silent — sell already succeeded */ }
+            }
             console.log(`   ✅ SELL SUCCESS: ${formatEther(amountIn)} ${tokenSymbol} (${percentToSell}%)`);
 
-            this.emit('sell-success', { tokenAddress, tokenSymbol, amountIn, percentSold: percentToSell, txHash, sourceWallet: _sellSw });
+            this.emit('sell-success', { tokenAddress, tokenSymbol, amountIn, percentSold: percentToSell, txHash, sourceWallet: _sellSw, profitPct, holdMs, entryEth });
 
             // Remove position if fully sold
             if (percentToSell >= 100) {
@@ -570,7 +582,7 @@ export class SwapExecutor extends EventEmitter {
         if (!position.takeProfit1Hit && multiplier >= this.CONFIG.TAKE_PROFIT_1_X) {
             const sellPct = this.CONFIG.TAKE_PROFIT_1_PCT;
             console.log(`🎯 TP1 at ${multiplier.toFixed(2)}x (+${((multiplier-1)*100).toFixed(0)}%) — jual ${sellPct}%`);
-            this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 1, multiplier, sourceWallet: position.sourceWallet });
+            this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 1, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
             await this.sell(tokenAddress, sellPct);
             position.takeProfit1Hit = true;
             position.tp1SoldPct = sellPct;
@@ -774,11 +786,14 @@ export class SwapExecutor extends EventEmitter {
             const pairs = await getDexUniV3Pairs(tokenAddress);
             let bestLiq = 0;
             let bestFee: 500 | 3000 | 10000 = 3000;
+            const VALID_FEES = new Set([500, 3000, 10000]);
             for (const pair of pairs) {
                 const liq = pair.liquidity?.usd || 0;
                 if (liq > bestLiq) {
                     bestLiq = liq;
-                    bestFee = 3000;
+                    // Use the pair's actual fee tier, falling back to 3000 if not a valid UniV3 tier
+                    const rawFee = pair.feeTier ?? pair.fee ?? 3000;
+                    bestFee = VALID_FEES.has(rawFee) ? rawFee as 500 | 3000 | 10000 : 3000;
                 }
             }
             return bestFee;

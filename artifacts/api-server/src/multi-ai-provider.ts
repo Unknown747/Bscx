@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { getEthPriceUsd } from './price-oracle';
+import { getEthPriceSync } from './performance-optimizer';
 
 // ============ TYPES ============
 export type AIProvider = 'groq' | 'gemini' | 'huggingface';
@@ -489,8 +490,8 @@ Respond HANYA JSON (tidak ada teks lain):
         let score = 0;
         const reasons: string[] = [];
 
-        // Use a reasonable ETH price estimate for rule-based (cached or fallback)
-        const ethEst = 3000;
+        // Use cached live ETH price for rule-based (falls back to 3000 before first refresh)
+        const ethEst = getEthPriceSync() || 3000;
         const liquidityUSD = tokenData.liquidity * ethEst;
 
         // Liquidity gates

@@ -92,8 +92,8 @@ export class WhaleMonitorService {
                 if (seenTxKeys.has(txKey)) continue;
                 seenTxKeys.add(txKey);
                 if (seenTxKeys.size > 20_000) {
-                    const iter = seenTxKeys.values();
-                    for (let i = 0; i < 5000; i++) seenTxKeys.delete(iter.next().value);
+                    const oldest = Array.from(seenTxKeys).slice(0, 5_000);
+                    for (const key of oldest) seenTxKeys.delete(key);
                 }
 
                 if (!walletHistory.has(wallet)) walletHistory.set(wallet, { buys: [], sells: [] });

@@ -92,7 +92,7 @@ export async function getCachedTokenPrice(tokenAddress: string): Promise<PriceEn
             { headers: GECKO_HEADERS, timeout: 6000 }
         );
         const attrs     = res.data?.data?.attributes ?? {};
-        const priceUsd  = parseFloat(attrs.token_price_usd ?? '0');
+        const priceUsd  = parseFloat(attrs.base_token_price_usd ?? attrs.token_price_usd ?? '0');
         const priceEth  = ethPriceUsd > 0 ? priceUsd / ethPriceUsd : 0;
         const entry: PriceEntry = { priceUsd, priceEth, timestamp: Date.now() };
         priceCache.set(key, entry);
