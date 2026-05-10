@@ -250,6 +250,15 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
     const [saveMsg, setSaveMsg] = useState('');
     const upd = (patch: Partial<BotSettings>) => setS(prev => ({ ...prev, ...patch }));
 
+    // Inisialisasi form SEKALI saja dari config (tidak di-reset saat config berubah dari polling)
+    const initializedRef = React.useRef(false);
+    useEffect(() => {
+        if (!initializedRef.current && currentConfig) {
+            setS(fromConfig(currentConfig));
+            initializedRef.current = true;
+        }
+    }, [currentConfig]);
+
     // Live ETH price
     const [ethPrice, setEthPrice] = useState<number>(3500);
     useEffect(() => {
@@ -279,10 +288,6 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
     const maxSnipes = s.totalCapital > 0
         ? Math.min(Math.floor((s.totalCapital * 0.7) / (s.maxTradeAmount + gasCost)), 20)
         : 0;
-
-    useEffect(() => {
-        if (currentConfig) setS(fromConfig(currentConfig));
-    }, [currentConfig]);
 
     useEffect(() => {
         authFetch(`${apiUrl}/api/keys`).then(r => r.json()).then(setKeyStatus).catch(() => {});
