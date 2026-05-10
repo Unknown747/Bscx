@@ -3,6 +3,7 @@ import { AISniperBot } from './ai-sniper-integration';
 import { getVapidPublicKey, savePushSubscription, removePushSubscription, getSubscriptionCount } from './push-manager';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import path from 'path';
 
 dotenv.config();
 
@@ -811,6 +812,13 @@ app.get('/api/report', requireAuth, async (_req: Request, res: Response) => {
     } catch (err: any) {
         res.status(500).json({ error: err.message });
     }
+});
+
+// ============ SERVE FRONTEND (production) ============
+const frontendDist = path.join(__dirname, '../../base-sniper/dist');
+app.use(express.static(frontendDist));
+app.get('*', (_req: Request, res: Response) => {
+    res.sendFile(path.join(frontendDist, 'index.html'));
 });
 
 // ============ START SERVER ============
