@@ -13,6 +13,8 @@
 
 import axios from 'axios';
 
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const BLOCKSCOUT_BASE = 'https://base.blockscout.com/api/v2';
 
 const WETH_ADDRESS = '0x4200000000000000000000000000000000000006';

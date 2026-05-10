@@ -29,6 +29,8 @@ interface Status {
     };
     openPositions: any[];
     pendingWhales: number;
+    emergencyStop: boolean;
+    lastTradeAt: number | null;
     timestamp: number;
 }
 
