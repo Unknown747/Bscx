@@ -9,6 +9,7 @@ import WalletMonitorPage from './WalletMonitorPage';
 import BlacklistModal from './BlacklistModal';
 import TradeHistory from './TradeHistory';
 import WhaleLeaderboard from './WhaleLeaderboard';
+import Backtest from './Backtest';
 import { authFetch } from '../lib/authFetch';
 
 interface Status {
@@ -51,18 +52,19 @@ interface Config {
     whaleAutoScanEnabled: boolean;
 }
 
-type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history';
+type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest';
 
 interface DashboardProps {
     apiUrl: string;
 }
 
 const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
-    { id: 'overview',   label: 'Overview',  icon: '📊' },
-    { id: 'portfolio',  label: 'Portfolio', icon: '👜' },
-    { id: 'positions',  label: 'Posisi',    icon: '💼' },
-    { id: 'log',        label: 'Log',       icon: '📋' },
-    { id: 'history',   label: 'Histori',   icon: '📈' }
+    { id: 'overview',  label: 'Overview',  icon: '📊' },
+    { id: 'portfolio', label: 'Portfolio', icon: '👜' },
+    { id: 'positions', label: 'Posisi',    icon: '💼' },
+    { id: 'log',       label: 'Log',       icon: '📋' },
+    { id: 'history',   label: 'Histori',   icon: '📈' },
+    { id: 'backtest',  label: 'Backtest',  icon: '🔬' },
 ];
 
 const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
@@ -401,6 +403,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
 
                 {/* ─── HISTORY ─── */}
                 {activeTab === 'history' && <TradeHistory apiUrl={apiUrl} />}
+
+                {/* ─── BACKTEST ─── */}
+                {activeTab === 'backtest' && <Backtest apiUrl={apiUrl} />}
             </div>
 
             {/* Settings Modal */}
