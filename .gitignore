@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+artifacts/base-sniper/node_modules/
+artifacts/api-server/node_modules/
+
+# Build output
+artifacts/base-sniper/dist/
+artifacts/api-server/dist/
+
+# Database files (local dev DB — don't commit)
+artifacts/base-sniper/base.db
+artifacts/base-sniper/base.db-shm
+artifacts/base-sniper/base.db-wal
+
+# Env & secrets
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
