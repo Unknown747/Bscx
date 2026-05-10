@@ -210,12 +210,29 @@ function StatusBadge({ set }: { set: boolean }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Main Component
 // ─────────────────────────────────────────────────────────────────────────────
+// Format IDR — handles any size without rounding to zero
+function fmtIdr(eth: number, ethUsd: number): string {
+    const idr = eth * ethUsd * 16000;
+    if (idr >= 1_000_000) return `Rp${(idr / 1_000_000).toFixed(2)}jt`;
+    if (idr >= 1_000)     return `Rp${(idr / 1_000).toFixed(1)}rb`;
+    return `Rp${Math.round(idr)}`;
+}
+
 const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
     const [tab, setTab]         = useState<Tab>('trading');
     const [s, setS]             = useState<BotSettings>(currentConfig ? fromConfig(currentConfig) : DEFAULTS);
     const [saveState, setSave]  = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
     const [saveMsg, setSaveMsg] = useState('');
     const upd = (patch: Partial<BotSettings>) => setS(prev => ({ ...prev, ...patch }));
+
+    // Live ETH price
+    const [ethPrice, setEthPrice] = useState<number>(3500);
+    useEffect(() => {
+        authFetch(`${apiUrl}/api/eth-price`)
+            .then(r => r.json())
+            .then(d => { if (d?.usd && d.usd > 0) setEthPrice(d.usd); })
+            .catch(() => {});
+    }, [apiUrl]);
 
     // Keys state
     const [keyStatus, setKeyStatus] = useState<KeyStatus | null>(null);
@@ -343,7 +360,7 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
             {/* Summary strip */}
             <div className="grid grid-cols-3 gap-2 mb-4">
                 {[
-                    { label: 'Modal', value: `${s.totalCapital.toFixed(4)} ETH`, sub: `≈ Rp${(s.totalCapital * 3000 * 16000 / 1000).toFixed(0)}rb` },
+                    { label: 'Modal', value: `${s.totalCapital.toFixed(4)} ETH`, sub: `≈ ${fmtIdr(s.totalCapital, ethPrice)}` },
                     { label: 'Per Trade', value: `${s.maxTradeAmount.toFixed(4)} ETH`, sub: `${s.totalCapital > 0 ? Math.round(s.maxTradeAmount / s.totalCapital * 100) : 0}% modal` },
                     { label: 'Max Snipe', value: `${maxSnipes}x`, sub: 'per hari' },
                 ].map(({ label, value, sub }) => (
@@ -411,7 +428,7 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
                     <NumInput value={s.maxFeePerGas} onChange={v => upd({ maxFeePerGas: v })} step={0.01} min={0} />
                 </Row>
                 <div className="mt-2 px-2 py-2 bg-blue-950/40 rounded-lg">
-                    <p className="text-xs text-blue-400">💡 Estimasi gas: {gasCost.toFixed(5)} ETH ≈ Rp{(gasCost * 3000 * 16000 / 1000).toFixed(0)}rb per tx</p>
+                    <p className="text-xs text-blue-400">💡 Estimasi gas: {gasCost.toFixed(5)} ETH ≈ {fmtIdr(gasCost, ethPrice)} per tx <span className="text-gray-600">(ETH ≈ ${ethPrice.toLocaleString()})</span></p>
                 </div>
             </Section>
 
