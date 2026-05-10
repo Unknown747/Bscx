@@ -70,7 +70,7 @@ function getActiveCorrelations() {
         const windowMin = (lastBuyAt - firstBuyAt) / 60000;
         // Confidence: more whales + tighter window = higher confidence
         const countScore = Math.min(50, (uniqueWallets.size - 1) * 15); // 15pt per extra whale
-        const timeScore = Math.max(0, 50 - (windowMin / WINDOW_MS * 60000) * 5); // tighter window = better
+        const timeScore = Math.max(0, Math.round(50 * (1 - windowMin / 10))); // tighter window = better (0-50 range)
         const confidence = Math.min(100, Math.round(countScore + timeScore));
         signals.push({
             tokenAddress,

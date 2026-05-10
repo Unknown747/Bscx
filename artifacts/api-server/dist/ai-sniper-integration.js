@@ -72,7 +72,7 @@ function fmtHoldTime(ms) {
     const m = Math.floor((totalSec % 3600) / 60);
     const s = totalSec % 60;
     if (h > 0)
-        return `${h}j ${m}m`;
+        return `${h}h ${m}m`;
     if (m > 0)
         return `${m}m ${s}s`;
     return `${s}s`;
@@ -94,6 +94,7 @@ class AISniperBot extends events_1.EventEmitter {
         this.telegramChatId = process.env.TELEGRAM_CHAT_ID || '';
         this.sentimentInterval = null;
         this.whaleAutoScanInterval = null;
+        this.portfolioSummaryInterval = null;
         this.tgBot = null;
         this.emergencyStopActive = false;
         this.dailyReportTimer = null;
@@ -610,7 +611,7 @@ class AISniperBot extends events_1.EventEmitter {
             console.log(`\n📊 Market Sentiment: ${sentiment.sentiment}/100 | Gas: ${sentiment.gasAdvice}`);
         }, 300000);
         // ─── Portfolio summary every 30 min ───
-        setInterval(async () => {
+        this.portfolioSummaryInterval = setInterval(async () => {
             if (!this.telegramToken || !this.telegramChatId)
                 return;
             try {
@@ -770,7 +771,7 @@ class AISniperBot extends events_1.EventEmitter {
                 srcLineSl +
                 `\n📉 P&L: <b>${(d.profitPct ?? 0) >= 0 ? '+' : ''}${d.profitPct?.toFixed(1) ?? '?'}%</b>\n` +
                 `⏱️ Hold: ${holdStrSl}\n` +
-                `💡 Alasan: ${sanitizeTg(d.reason || 'Fixed SL')}\n` +
+                `💡 Reason: ${sanitizeTg(d.reason || 'Fixed SL')}\n` +
                 (d.tokenAddress ? `🚫 <i>Token di-blacklist otomatis</i>` : ''));
         });
         this.executor.on('dca-signal', async (d) => {
@@ -1596,6 +1597,10 @@ class AISniperBot extends events_1.EventEmitter {
         if (this.whaleAutoScanInterval) {
             clearInterval(this.whaleAutoScanInterval);
             this.whaleAutoScanInterval = null;
+        }
+        if (this.portfolioSummaryInterval) {
+            clearInterval(this.portfolioSummaryInterval);
+            this.portfolioSummaryInterval = null;
         }
         this.scanner.disconnect();
         this.copyMonitor.stop();

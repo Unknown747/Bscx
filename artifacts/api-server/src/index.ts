@@ -49,7 +49,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
     const token  = req.headers['x-session-token'] as string | undefined;
     const expiry = token ? sessions.get(token) : undefined;
     if (!token || !expiry || expiry < Date.now()) {
-        res.status(401).json({ error: 'Sesi tidak valid atau telah berakhir. Silakan login ulang.' });
+        res.status(401).json({ error: 'Session invalid or expired. Please log in again.' });
         return;
     }
     next();
@@ -79,13 +79,13 @@ async function startBot() {
 app.post('/api/auth/verify', (req: Request, res: Response) => {
     const ip = getClientIp(req);
     if (isRateLimited(ip)) {
-        res.status(429).json({ ok: false, error: 'Terlalu banyak percobaan. Coba lagi dalam 1 menit.' });
+        res.status(429).json({ ok: false, error: 'Too many attempts. Please try again in 1 minute.' });
         return;
     }
     const { password } = req.body;
     const expected = (process.env.APP_PASSWORD || '').trim();
-    if (!expected) { res.status(500).json({ error: 'APP_PASSWORD belum dikonfigurasi' }); return; }
-    if (!password) { res.status(400).json({ ok: false, error: 'Password diperlukan' }); return; }
+    if (!expected) { res.status(500).json({ error: 'APP_PASSWORD not configured' }); return; }
+    if (!password) { res.status(400).json({ ok: false, error: 'Password required' }); return; }
     const trimmedPassword = String(password).trim();
     const match = trimmedPassword.length === expected.length &&
         crypto.timingSafeEqual(Buffer.from(trimmedPassword), Buffer.from(expected));
@@ -94,7 +94,7 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
         sessions.set(token, Date.now() + SESSION_TTL);
         res.json({ ok: true, token });
     } else {
-        res.status(401).json({ ok: false, error: 'Password salah' });
+        res.status(401).json({ ok: false, error: 'Incorrect password' });
     }
 });
 
@@ -189,7 +189,7 @@ app.post('/api/settings', (req: Request, res: Response) => {
             enableFlashblocks:        s.enableFlashblocks,
             gasMode:                  s.gasMode,
         });
-        res.json({ ok: true, message: 'Pengaturan berhasil diterapkan' });
+        res.json({ ok: true, message: 'Settings applied successfully' });
     } catch (err: any) {
         res.status(500).json({ error: err.message });
     }
@@ -242,7 +242,7 @@ const CHART_TTL_MS = 10_000; // 10-second cache
 app.get('/api/chart/:tokenAddress', async (req: Request, res: Response) => {
     const { tokenAddress } = req.params;
     if (!tokenAddress.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat token tidak valid' }); return;
+        res.status(400).json({ error: 'Invalid token address' }); return;
     }
     const cacheKey = tokenAddress.toLowerCase();
     const cached   = chartCache.get(cacheKey);
@@ -261,7 +261,7 @@ app.get('/api/chart/:tokenAddress', async (req: Request, res: Response) => {
         );
         const pools: any[] = poolsRes.data?.data ?? [];
         if (!pools.length) {
-            res.status(404).json({ error: 'Pool tidak ditemukan untuk token ini' }); return;
+            res.status(404).json({ error: 'No pool found for this token' }); return;
         }
         // Pick the pool with the highest liquidity
         const bestPool = pools.reduce((best: any, p: any) => {
@@ -270,7 +270,7 @@ app.get('/api/chart/:tokenAddress', async (req: Request, res: Response) => {
         }, pools[0]);
         const poolAddress = bestPool.attributes?.address;
         if (!poolAddress) {
-            res.status(404).json({ error: 'Alamat pool tidak tersedia' }); return;
+            res.status(404).json({ error: 'Pool address unavailable' }); return;
         }
 
         // Step 2: fetch 5-minute OHLCV candles (last 40)
@@ -344,7 +344,7 @@ app.post('/api/send', async (req: Request, res: Response) => {
 app.post('/api/sell', async (req: Request, res: Response) => {
     const { tokenAddress, percent } = req.body;
     if (!tokenAddress || typeof tokenAddress !== 'string' || !tokenAddress.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'tokenAddress tidak valid' }); return;
+        res.status(400).json({ error: 'Invalid tokenAddress' }); return;
     }
     const pct = typeof percent === 'number' ? percent : 100;
     try { res.json(await bot.manualSell(tokenAddress, pct)); }
@@ -359,11 +359,11 @@ app.get('/api/wallets', (_req: Request, res: Response) => {
 app.post('/api/wallets', (req: Request, res: Response) => {
     const { address, name } = req.body;
     if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat wallet tidak valid' }); return;
+        res.status(400).json({ error: 'Invalid wallet address' }); return;
     }
     const label    = (name || '').trim() || `Whale ${address.slice(0, 8)}`;
     const existing = bot.getCopyWallets().find(w => w.address.toLowerCase() === address.toLowerCase());
-    if (existing) { res.status(409).json({ error: 'Wallet sudah ada dalam daftar' }); return; }
+    if (existing) { res.status(409).json({ error: 'Wallet already exists in the list' }); return; }
     bot.addCopyWallet(address, label);
     res.json({ ok: true, wallets: bot.getCopyWallets() });
 });
@@ -391,7 +391,7 @@ app.post('/api/keys', (req: Request, res: Response) => {
             baseWssUrl, baseHttpUrl, backupWssUrl, backupHttpUrl, basescanApiKey } = req.body;
     if (!privateKey && !groqKey && !geminiKey && !huggingfaceKey && !appPassword && !telegramToken && !telegramChatId
         && !baseWssUrl && !baseHttpUrl && !backupWssUrl && !backupHttpUrl && !basescanApiKey) {
-        res.status(400).json({ error: 'Tidak ada kunci yang diberikan' }); return;
+        res.status(400).json({ error: 'No keys provided' }); return;
     }
     if (privateKey)      process.env.PRIVATE_KEY         = privateKey;
     if (groqKey)         process.env.GROQ_API_KEY         = groqKey;
@@ -442,7 +442,7 @@ app.patch('/api/config', (req: Request, res: Response) => {
             maxTaxPercent: s.maxTaxPercent, minAiConfidence: s.minAiConfidence,
             enableFlashblocks: s.enableFlashblocks, gasMode: s.gasMode,
         });
-        res.json({ ok: true, message: 'Pengaturan berhasil diterapkan' });
+        res.json({ ok: true, message: 'Settings applied successfully' });
     } catch (err: any) {
         res.status(500).json({ error: err.message });
     }
@@ -547,20 +547,20 @@ app.post('/api/whale/scan', async (_req: Request, res: Response) => {
 app.post('/api/whale/approve', (req: Request, res: Response) => {
     const { address, name } = req.body;
     if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+        res.status(400).json({ error: 'Invalid address' }); return;
     }
     const ok = bot.addToMonitoring(address, name);
     if (!ok) {
-        res.status(404).json({ error: 'Kandidat tidak ditemukan atau sudah diproses' }); return;
+        res.status(404).json({ error: 'Candidate not found or already processed' }); return;
     }
-    res.json({ ok: true, message: 'Wallet masuk monitoring — bot akan mengamati trade-nya sebelum copy' });
+    res.json({ ok: true, message: 'Wallet added to monitoring — bot will observe trades before copying' });
 });
 
 // POST /api/whale/reject — reject a candidate
 app.post('/api/whale/reject', (req: Request, res: Response) => {
     const { address } = req.body;
     if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+        res.status(400).json({ error: 'Invalid address' }); return;
     }
     bot.rejectWhale(address);
     res.json({ ok: true });
@@ -572,10 +572,10 @@ app.post('/api/whale/reject', (req: Request, res: Response) => {
 app.post('/api/simulate', async (req: Request, res: Response) => {
     const { walletAddress, tokenAddress } = req.body;
     if (!walletAddress || !tokenAddress) {
-        res.status(400).json({ error: 'walletAddress dan tokenAddress diperlukan' }); return;
+        res.status(400).json({ error: 'walletAddress and tokenAddress required' }); return;
     }
     if (!walletAddress.match(/^0x[0-9a-fA-F]{40}$/) || !tokenAddress.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+        res.status(400).json({ error: 'Invalid address' }); return;
     }
     try {
         const result = await bot.simulateCopyTrade(walletAddress, tokenAddress);
@@ -598,7 +598,7 @@ app.get('/api/risk', (_req: Request, res: Response) => {
 app.get('/api/whale/detail/:address', async (req: Request, res: Response) => {
     const { address } = req.params;
     if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+        res.status(400).json({ error: 'Invalid address' }); return;
     }
     try {
         const [analysis, waitlistEvents] = await Promise.all([

@@ -107,7 +107,7 @@ function fmtHoldTime(ms: number): string {
     const h = Math.floor(totalSec / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
     const s = totalSec % 60;
-    if (h > 0) return `${h}j ${m}m`;
+    if (h > 0) return `${h}h ${m}m`;
     if (m > 0) return `${m}m ${s}s`;
     return `${s}s`;
 }
@@ -134,6 +134,7 @@ export class AISniperBot extends EventEmitter {
     private telegramChatId = process.env.TELEGRAM_CHAT_ID   || '';
     private sentimentInterval: NodeJS.Timeout | null = null;
     private whaleAutoScanInterval: NodeJS.Timeout | null = null;
+    private portfolioSummaryInterval: NodeJS.Timeout | null = null;
     private tgBot: TelegramBot | null = null;
 
     private emergencyStopActive   = false;
@@ -714,7 +715,7 @@ export class AISniperBot extends EventEmitter {
         }, 300_000);
 
         // ─── Portfolio summary every 30 min ───
-        setInterval(async () => {
+        this.portfolioSummaryInterval = setInterval(async () => {
             if (!this.telegramToken || !this.telegramChatId) return;
             try {
                 const positions  = this.executor?.getOpenPositions() ?? [];
@@ -892,7 +893,7 @@ export class AISniperBot extends EventEmitter {
                 srcLineSl +
                 `\n📉 P&L: <b>${(d.profitPct ?? 0) >= 0 ? '+' : ''}${d.profitPct?.toFixed(1) ?? '?'}%</b>\n` +
                 `⏱️ Hold: ${holdStrSl}\n` +
-                `💡 Alasan: ${sanitizeTg(d.reason || 'Fixed SL')}\n` +
+                `💡 Reason: ${sanitizeTg(d.reason || 'Fixed SL')}\n` +
                 (d.tokenAddress ? `🚫 <i>Token di-blacklist otomatis</i>` : '')
             );
         });
@@ -1719,8 +1720,9 @@ export class AISniperBot extends EventEmitter {
         console.log('\n🚨🚨🚨 EMERGENCY STOP TRIGGERED 🚨🚨🚨');
         this.emergencyStopActive = true;
 
-        if (this.sentimentInterval)     { clearInterval(this.sentimentInterval);     this.sentimentInterval = null; }
-        if (this.whaleAutoScanInterval) { clearInterval(this.whaleAutoScanInterval); this.whaleAutoScanInterval = null; }
+        if (this.sentimentInterval)          { clearInterval(this.sentimentInterval);          this.sentimentInterval          = null; }
+        if (this.whaleAutoScanInterval)      { clearInterval(this.whaleAutoScanInterval);      this.whaleAutoScanInterval      = null; }
+        if (this.portfolioSummaryInterval)   { clearInterval(this.portfolioSummaryInterval);   this.portfolioSummaryInterval   = null; }
         this.scanner.disconnect();
         this.copyMonitor.stop();
         this.geckoScanner.stop();
