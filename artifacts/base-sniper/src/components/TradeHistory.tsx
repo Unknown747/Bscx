@@ -2,6 +2,21 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { authFetch } from '../lib/authFetch';
 import PnLChart from './PnLChart';
 
+async function downloadCsv(apiUrl: string) {
+    const res = await authFetch(`${apiUrl}/api/history/export.csv`);
+    if (!res.ok) throw new Error('Export gagal');
+    const text = await res.text();
+    const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `trades_${Date.now()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
 interface ClosedTrade {
     id: string;
     tokenAddress: string;
@@ -56,8 +71,10 @@ interface Props { apiUrl: string; }
 
 const TradeHistory: React.FC<Props> = ({ apiUrl }) => {
 
-    const [data, setData]   = useState<HistoryData | null>(null);
-    const [error, setError] = useState('');
+    const [data,        setData]        = useState<HistoryData | null>(null);
+    const [error,       setError]       = useState('');
+    const [exporting,   setExporting]   = useState(false);
+    const [exportError, setExportError] = useState('');
 
     const load = useCallback(async () => {
         try {
@@ -79,12 +96,42 @@ const TradeHistory: React.FC<Props> = ({ apiUrl }) => {
     const stats  = data?.stats;
     const trades = data?.trades ?? [];
 
+    const handleExport = async () => {
+        setExporting(true);
+        setExportError('');
+        try {
+            await downloadCsv(apiUrl);
+        } catch (e: any) {
+            setExportError(e.message || 'Export gagal');
+        } finally {
+            setExporting(false);
+        }
+    };
+
     return (
         <div className="space-y-4 pb-6">
             <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-300">Histori Trade</h2>
-                <span className="text-xs text-gray-600">{trades.length} closed</span>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-600">{trades.length} closed</span>
+                    {trades.length > 0 && (
+                        <button
+                            onClick={handleExport}
+                            disabled={exporting}
+                            title="Download CSV untuk analisis atau pelaporan pajak"
+                            className="flex items-center gap-1 text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-40 border border-gray-700 text-gray-300 px-2.5 py-1.5 rounded-lg transition-colors"
+                        >
+                            {exporting ? (
+                                <span className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                                <span>⬇</span>
+                            )}
+                            CSV
+                        </button>
+                    )}
+                </div>
             </div>
+            {exportError && <p className="text-xs text-red-400">{exportError}</p>}
 
             {error && (
                 <div className="bg-red-900/30 border border-red-800 rounded-xl p-3 text-xs text-red-400">{error}</div>

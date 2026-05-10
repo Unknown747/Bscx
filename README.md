@@ -10,11 +10,13 @@ Automated crypto trading bot for the **Base network** (ETH L2), built for small 
 |---|---|
 | **Flashblocks Scanner** | Listens to Uniswap V3 `PoolCreated` events via WebSocket. Catches new tokens within seconds of launch |
 | **GeckoTerminal Token Scanner** | Independent scanner polling GeckoTerminal new/trending pools every 30 s — works even without mempool access |
-| **Smart Screener** | Parallel independent screener: scores every token 0–100 using momentum, activity, safety, and freshness signals. Configurable threshold and scan interval |
+| **Smart Screener** | Parallel independent screener: scores every token 0–100 using momentum, activity, safety, and freshness signals. Configurable threshold and scan interval. Signal history persisted to SQLite (last 500 entries) and browsable in the Histori tab |
 | **Whale Copy Trading** | Monitors approved whale wallets via Blockscout; copies their buys with P&L simulation gate and AI wallet-score check |
 | **Whale Auto-Finder** | Scans trending pools, evaluates top traders (win rate, profit, trade count, recency), sends Telegram notification for manual approval |
+| **Whale Correlation Map** | Dashboard tab showing live multi-whale correlation signals: when 2+ approved whales buy the same token within 10 minutes, a confidence-scored card appears with per-whale buy details. Auto-refreshes every 10 s |
 | **Whale Correlator** | Detects when multiple approved whales buy the same token within a short window — boosts copy trade size proportionally |
 | **Whale Monitor** | Background on-chain service polling whale wallet activity every 10 min via Blockscout API |
+| **Deployer Reputation Checker** | Dashboard tab with address input: enter any token or deployer address to see a reputation score (0–100), survival rate of previous tokens, and per-token alive/dead status with liquidity |
 | **P&L Simulation Gate** | Estimates expected profit/risk before every copy trade; blocks HIGH-risk low-reward trades automatically |
 | **AI Token Analysis** | Three-provider fallback chain: Groq (primary, ~88 ms) → Gemini → HuggingFace. Scores confidence 0–100 before any buy |
 | **Dynamic Position Sizing** | Trade size auto-scales with wallet balance × AI confidence multiplier (0.6×–1.5×) |
@@ -22,9 +24,11 @@ Automated crypto trading bot for the **Base network** (ETH L2), built for small 
 | **Copy Trade Cooldown Bypass** | Copy trade ignores screener cooldowns — whale signals are independent. Only Emergency Stop halts copy trades |
 | **Dynamic Exit (Trailing SL)** | Activates after 50% profit; sells if price drops 12% from peak. Laddered TP1/TP2 with configurable multipliers and percentages |
 | **Backtest Engine** | Replay historical GeckoTerminal data against current filter settings to estimate win rate and expected PnL |
-| **Deployer Reputation Check** | Scores token deployers by survival rate of previous contracts — flags serial ruggers |
+| **Trade History CSV Export** | Download button on the Histori tab exports all closed trades to a well-formatted CSV file (symbol, entry ETH, profit %, hold time, TX hash, etc.) for spreadsheet analysis or tax reporting |
+| **Deployer Reputation Check** | Scores token deployers by survival rate of previous contracts — flags serial ruggers. Also accessible via `GET /api/reputation/:address` |
 | **Honeypot Detection** | GoPlus Security API check before every buy — blocks honeypots, high sell tax, suspicious ownership |
 | **Real-time OHLCV Chart** | Per-position inline price chart (SVG, 5-min candles, 30 s refresh) with entry-price reference line |
+| **Live Mempool Gauge** | Overview widget showing current Base Network mempool pressure (pending tx count), status (Quiet / Normal / Congested), a colour-coded progress bar, and a 30-point sparkline. Refreshes every 8 s |
 | **Telegram Bot Interface** | Full command interface: trade alerts, whale approvals (approve/reject buttons), P&L simulation results, daily report, emergency stop |
 | **Web Push Notifications** | Browser push for trade events — works on mobile even when dashboard is closed |
 | **Daily P&L Report** | Auto-generated report at midnight UTC: win rate, total PnL, fees, best/worst trade |
@@ -44,6 +48,10 @@ Automated crypto trading bot for the **Base network** (ETH L2), built for small 
 │  ┌───────────┐ ┌────────────┐ ┌─────────────┐ ┌──────────────────┐ │
 │  │ Backtest  │ │ Portfolio  │ │PnLChart     │ │SmartScreener UI  │ │
 │  └───────────┘ └────────────┘ └─────────────┘ └──────────────────┘ │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────────┐ │
+│  │WhaleCorrelation  │ │DeployerRepCheck  │ │MempoolGauge          │ │
+│  │(Korelasi tab)    │ │(Deployer tab)    │ │(Overview widget)     │ │
+│  └──────────────────┘ └──────────────────┘ └──────────────────────┘ │
 └───────────────────────────┬─────────────────────────────────────────┘
                             │ REST API (axios proxy → :8080)
 ┌───────────────────────────▼─────────────────────────────────────────┐

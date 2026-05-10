@@ -1,6 +1,22 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { authFetch } from '../lib/authFetch';
 
+interface SignalHistoryItem {
+    id:           number;
+    tokenAddr:    string;
+    symbol:       string;
+    signal:       string;
+    scoreTotal:   number;
+    liqUsd:       number;
+    volH24:       number;
+    priceChgH1:   number;
+    buyTxH1:      number;
+    ageMinutes:   number;
+    dexUrl:       string;
+    source:       string;
+    discoveredAt: number;
+}
+
 interface ScoreBreakdown {
     momentum:  number;
     activity:  number;
@@ -90,14 +106,18 @@ function ScoreBar({ label, value, max, color }: { label: string; value: number; 
 }
 
 const SmartScreener: React.FC<SmartScreenerProps> = ({ apiUrl }) => {
-    const [signals, setSignals]   = useState<ScreenerSignal[]>([]);
-    const [stats, setStats]       = useState<ScreenerStats | null>(null);
-    const [enabled, setEnabled]   = useState(false);
-    const [loading, setLoading]   = useState(false);
-    const [toggling, setToggling] = useState(false);
-    const [filter, setFilter]     = useState<'ALL' | 'STRONG_BUY' | 'BUY' | 'WATCH'>('ALL');
-    const [expanded, setExpanded] = useState<string | null>(null);
+    const [signals,     setSignals]     = useState<ScreenerSignal[]>([]);
+    const [stats,       setStats]       = useState<ScreenerStats | null>(null);
+    const [enabled,     setEnabled]     = useState(false);
+    const [loading,     setLoading]     = useState(false);
+    const [toggling,    setToggling]    = useState(false);
+    const [filter,      setFilter]      = useState<'ALL' | 'STRONG_BUY' | 'BUY' | 'WATCH'>('ALL');
+    const [expanded,    setExpanded]    = useState<string | null>(null);
     const [lastRefresh, setLastRefresh] = useState('');
+    const [view,        setView]        = useState<'live' | 'history'>('live');
+    const [history,     setHistory]     = useState<SignalHistoryItem[]>([]);
+    const [histFilter,  setHistFilter]  = useState<'ALL' | 'STRONG_BUY' | 'BUY' | 'WATCH'>('ALL');
+    const [histLoading, setHistLoading] = useState(false);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const fetch = useCallback(async () => {
@@ -125,6 +145,22 @@ const SmartScreener: React.FC<SmartScreenerProps> = ({ apiUrl }) => {
         return () => { if (timerRef.current) clearInterval(timerRef.current); };
     }, [fetch]);
 
+    const loadHistory = useCallback(async () => {
+        setHistLoading(true);
+        try {
+            const sig = histFilter === 'ALL' ? '' : `?signal=${histFilter}`;
+            const res  = await authFetch(`${apiUrl}/api/screener/history${sig}`);
+            const data = await res.json();
+            setHistory(data.signals ?? []);
+        } catch { /* silent */ } finally {
+            setHistLoading(false);
+        }
+    }, [apiUrl, histFilter]);
+
+    useEffect(() => {
+        if (view === 'history') loadHistory();
+    }, [view, loadHistory]);
+
     const toggleScreener = async () => {
         setToggling(true);
         try {
@@ -140,6 +176,18 @@ const SmartScreener: React.FC<SmartScreenerProps> = ({ apiUrl }) => {
 
     const displayed = filter === 'ALL' ? signals : signals.filter(s => s.signal === filter);
 
+    const HIST_SIGNAL_CFG: Record<string, { badge: string; icon: string }> = {
+        STRONG_BUY: { badge: 'bg-emerald-900 text-emerald-300 border border-emerald-700', icon: '🔥' },
+        BUY:        { badge: 'bg-blue-900 text-blue-300 border border-blue-700',           icon: '📡' },
+        WATCH:      { badge: 'bg-yellow-900 text-yellow-300 border border-yellow-700',     icon: '👀' },
+    };
+
+    function fmtUsd2(n: number): string {
+        if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+        if (n >= 1_000)     return `$${(n / 1_000).toFixed(0)}K`;
+        return `$${n.toFixed(0)}`;
+    }
+
     return (
         <div className="space-y-3">
             {/* ── Header ── */}
@@ -152,17 +200,31 @@ const SmartScreener: React.FC<SmartScreenerProps> = ({ apiUrl }) => {
                             <p className="text-xs text-gray-500">Multi-signal token scanner for Base Network</p>
                         </div>
                     </div>
-                    <button
-                        onClick={toggleScreener}
-                        disabled={toggling}
-                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-semibold border transition-all
-                            ${enabled
-                                ? 'bg-emerald-900/60 border-emerald-700 text-emerald-300 hover:bg-emerald-900'
-                                : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
-                    >
-                        <span className={`w-1.5 h-1.5 rounded-full ${enabled ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}`} />
-                        {toggling ? '...' : enabled ? 'AKTIF' : 'NONAKTIF'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {/* Live / History toggle */}
+                        <div className="flex bg-gray-800 rounded-lg p-0.5">
+                            {(['live', 'history'] as const).map(v => (
+                                <button
+                                    key={v}
+                                    onClick={() => setView(v)}
+                                    className={`text-xs px-2.5 py-1 rounded-md font-medium transition-all ${view === v ? 'bg-gray-700 text-white' : 'text-gray-500'}`}
+                                >
+                                    {v === 'live' ? '⚡ Live' : '🕐 Histori'}
+                                </button>
+                            ))}
+                        </div>
+                        <button
+                            onClick={toggleScreener}
+                            disabled={toggling}
+                            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-semibold border transition-all
+                                ${enabled
+                                    ? 'bg-emerald-900/60 border-emerald-700 text-emerald-300 hover:bg-emerald-900'
+                                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'}`}
+                        >
+                            <span className={`w-1.5 h-1.5 rounded-full ${enabled ? 'bg-emerald-400 animate-pulse' : 'bg-gray-500'}`} />
+                            {toggling ? '...' : enabled ? 'AKTIF' : 'NONAKTIF'}
+                        </button>
+                    </div>
                 </div>
 
                 {/* Stats row */}
@@ -366,6 +428,95 @@ const SmartScreener: React.FC<SmartScreenerProps> = ({ apiUrl }) => {
 
             {lastRefresh && (
                 <p className="text-center text-xs text-gray-700">Auto-refresh: {lastRefresh}</p>
+            )}
+
+            {/* ── History panel ── */}
+            {view === 'history' && (
+                <div className="space-y-3 mt-1">
+                    {/* History filter bar */}
+                    <div className="flex gap-1.5 overflow-x-auto scrollbar-hide">
+                        {(['ALL', 'STRONG_BUY', 'BUY', 'WATCH'] as const).map(f => (
+                            <button
+                                key={f}
+                                onClick={() => setHistFilter(f)}
+                                className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-lg font-medium border transition-all
+                                    ${histFilter === f
+                                        ? f === 'ALL'        ? 'bg-gray-700 border-gray-600 text-white'
+                                        : f === 'STRONG_BUY' ? 'bg-emerald-800 border-emerald-600 text-emerald-200'
+                                        : f === 'BUY'        ? 'bg-blue-800 border-blue-600 text-blue-200'
+                                        :                      'bg-yellow-900 border-yellow-700 text-yellow-200'
+                                        : 'bg-gray-900 border-gray-800 text-gray-500 hover:text-gray-300'}`}
+                            >
+                                {f === 'ALL' ? 'Semua' : f === 'STRONG_BUY' ? '🔥 Strong' : f === 'BUY' ? '📡 Buy' : '👀 Watch'}
+                            </button>
+                        ))}
+                    </div>
+
+                    {histLoading && (
+                        <div className="text-center py-8">
+                            <div className="inline-block w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-2" />
+                            <p className="text-xs text-gray-500">Memuat histori…</p>
+                        </div>
+                    )}
+
+                    {!histLoading && history.length === 0 && (
+                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
+                            <p className="text-2xl mb-2">🕐</p>
+                            <p className="text-sm text-gray-400">Belum ada histori sinyal</p>
+                            <p className="text-xs text-gray-600 mt-1">Histori diisi otomatis saat screener menemukan sinyal BUY/WATCH</p>
+                        </div>
+                    )}
+
+                    {!histLoading && history.length > 0 && (
+                        <div className="space-y-2">
+                            {history.map(h => {
+                                const cfg = HIST_SIGNAL_CFG[h.signal] ?? { badge: 'bg-gray-800 text-gray-300 border border-gray-700', icon: '❓' };
+                                return (
+                                    <div key={h.id} className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap mb-1">
+                                                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${cfg.badge}`}>
+                                                        {cfg.icon} {h.signal.replace('_', ' ')}
+                                                    </span>
+                                                    <span className="text-white font-bold text-sm">{h.symbol}</span>
+                                                </div>
+                                                <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
+                                                    <span>💧 {fmtUsd2(h.liqUsd)}</span>
+                                                    <span>📊 {fmtUsd2(h.volH24)}/24h</span>
+                                                    <span className={h.priceChgH1 >= 0 ? 'text-emerald-500' : 'text-red-500'}>
+                                                        {h.priceChgH1 >= 0 ? '+' : ''}{h.priceChgH1.toFixed(1)}% 1h
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="text-right shrink-0">
+                                                <p className="text-sm font-bold text-white">{h.scoreTotal}<span className="text-gray-600 text-xs font-normal">/100</span></p>
+                                                <p className="text-xs text-gray-600">{new Date(h.discoveredAt).toLocaleTimeString('id-ID')}</p>
+                                                <p className="text-xs text-gray-700">{new Date(h.discoveredAt).toLocaleDateString('id-ID')}</p>
+                                            </div>
+                                        </div>
+                                        {h.dexUrl && (
+                                            <a
+                                                href={h.dexUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="mt-2 inline-block text-xs text-blue-500 hover:text-blue-400"
+                                            >
+                                                GeckoTerminal ↗
+                                            </a>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {!histLoading && history.length > 0 && (
+                        <p className="text-center text-xs text-gray-700">
+                            {history.length} sinyal tersimpan · max 500 · disimpan otomatis
+                        </p>
+                    )}
+                </div>
             )}
         </div>
     );

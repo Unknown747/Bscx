@@ -347,6 +347,9 @@ class FlashblocksScanner extends events_1.EventEmitter {
     isConnectedToBase() {
         return this.isConnected;
     }
+    getMempoolSize() {
+        return this.pendingTransactions.size;
+    }
     disconnect() {
         // FIX: clear keepAlive interval on disconnect
         if (this.keepAliveInterval) {

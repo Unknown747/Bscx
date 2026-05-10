@@ -23,6 +23,7 @@ import {
     dbAddMonitoredWallet, dbRemoveMonitoredWallet, dbGetMonitoredWallets,
     dbGetMonitoredWallet, dbSetMonitoredVerdict, dbApproveWhale,
     dbSaveRuntimeConfig, dbLoadRuntimeConfig, dbSaveScreenerConfig, dbLoadScreenerConfig,
+    dbSaveScreenerSignal,
     type TradeRow, type MonitoredWalletRow,
 } from './db';
 import SmartScreener, { type ScreenerSignal, type ScreenerConfig } from './smart-screener';
@@ -827,6 +828,23 @@ export class AISniperBot extends EventEmitter {
 
         // ─── Feature: Smart Screener STRONG_BUY Telegram notifications ───
         this.smartScreener.on('signal', (sig: any) => {
+            // Persist all BUY-grade signals to DB for history tab
+            if (sig.signal === 'STRONG_BUY' || sig.signal === 'BUY' || sig.signal === 'WATCH') {
+                dbSaveScreenerSignal({
+                    tokenAddr:    sig.tokenAddress ?? '',
+                    symbol:       sig.tokenSymbol  ?? sig.tokenAddress?.slice(0, 8) ?? '',
+                    signal:       sig.signal,
+                    scoreTotal:   sig.score?.total ?? 0,
+                    liqUsd:       sig.liquidityUsd ?? 0,
+                    volH24:       sig.volumeH24    ?? 0,
+                    priceChgH1:   sig.priceChangeH1 ?? 0,
+                    buyTxH1:      sig.buyTxH1      ?? 0,
+                    ageMinutes:   sig.ageMinutes    ?? 0,
+                    dexUrl:       sig.dexUrl        ?? '',
+                    source:       sig.source        ?? '',
+                    discoveredAt: sig.discoveredAt  ?? Date.now(),
+                });
+            }
             if (sig.signal !== 'STRONG_BUY') return;
             this.addLog('info', `📡 STRONG BUY: ${sig.tokenSymbol || sig.tokenAddress?.slice(0,8)}`, `Score: ${sig.score?.total ?? '?'}/100`);
             const sym        = sanitizeTg(sig.tokenSymbol || 'UNKNOWN');
@@ -1982,6 +2000,7 @@ export class AISniperBot extends EventEmitter {
 
     // ============ FEATURE 8: WHALE CORRELATION MAP ============
     getWhaleCorrelations() { return getActiveCorrelations(); }
+    getMempoolSize(): number { return this.scanner.getMempoolSize(); }
 
     // ============ FEATURE 6: BACKTEST ============
     async runBacktest(tokenAddress: string, timeframe: '1h' | '15m' = '1h', config: Partial<BacktestConfig> = {}) {

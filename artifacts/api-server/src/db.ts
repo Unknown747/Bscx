@@ -130,6 +130,24 @@ export async function initDb(): Promise<void> {
                 ai_score         INTEGER,
                 promoted_at      INTEGER
             );
+
+            CREATE TABLE IF NOT EXISTS screener_signal_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_addr    TEXT    NOT NULL,
+                symbol        TEXT    NOT NULL,
+                signal        TEXT    NOT NULL,
+                score_total   INTEGER NOT NULL,
+                liq_usd       REAL    NOT NULL DEFAULT 0,
+                vol_h24       REAL    NOT NULL DEFAULT 0,
+                price_chg_h1  REAL    NOT NULL DEFAULT 0,
+                buy_tx_h1     INTEGER NOT NULL DEFAULT 0,
+                age_minutes   REAL    NOT NULL DEFAULT 0,
+                dex_url       TEXT    NOT NULL DEFAULT '',
+                source        TEXT    NOT NULL DEFAULT '',
+                discovered_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ssh_time   ON screener_signal_history(discovered_at);
+            CREATE INDEX IF NOT EXISTS idx_ssh_signal ON screener_signal_history(signal);
         `);
 
         // Migration: add data_source column if it doesn't exist yet
@@ -570,6 +588,56 @@ export function dbSaveScreenerConfig(config: object): void {
 
 export function dbLoadScreenerConfig(): any | null {
     return dbLoadSettings('screener_config');
+}
+
+// ── Screener Signal History ────────────────────────────────────────────────────
+
+export interface ScreenerSignalHistoryRow {
+    id:           number;
+    tokenAddr:    string;
+    symbol:       string;
+    signal:       string;
+    scoreTotal:   number;
+    liqUsd:       number;
+    volH24:       number;
+    priceChgH1:   number;
+    buyTxH1:      number;
+    ageMinutes:   number;
+    dexUrl:       string;
+    source:       string;
+    discoveredAt: number;
+}
+
+export function dbSaveScreenerSignal(s: Omit<ScreenerSignalHistoryRow, 'id'>): void {
+    try {
+        runExec(`
+            INSERT INTO screener_signal_history
+                (token_addr, symbol, signal, score_total, liq_usd, vol_h24, price_chg_h1, buy_tx_h1, age_minutes, dex_url, source, discovered_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [s.tokenAddr, s.symbol, s.signal, s.scoreTotal, s.liqUsd, s.volH24, s.priceChgH1, s.buyTxH1, s.ageMinutes, s.dexUrl, s.source, s.discoveredAt]);
+        // Cap at 500 most recent rows
+        runExec(`DELETE FROM screener_signal_history WHERE id NOT IN (SELECT id FROM screener_signal_history ORDER BY discovered_at DESC LIMIT 500)`);
+    } catch { /* non-critical — DB may not be ready yet */ }
+}
+
+export function dbGetScreenerHistory(limit = 100, signal?: string): ScreenerSignalHistoryRow[] {
+    const where  = signal ? 'WHERE signal = ?' : '';
+    const params = signal ? [signal, limit] : [limit];
+    return runQuery(`SELECT * FROM screener_signal_history ${where} ORDER BY discovered_at DESC LIMIT ?`, params).map(r => ({
+        id:           r.id,
+        tokenAddr:    r.token_addr,
+        symbol:       r.symbol,
+        signal:       r.signal,
+        scoreTotal:   r.score_total,
+        liqUsd:       r.liq_usd,
+        volH24:       r.vol_h24,
+        priceChgH1:   r.price_chg_h1,
+        buyTxH1:      r.buy_tx_h1,
+        ageMinutes:   r.age_minutes,
+        dexUrl:       r.dex_url,
+        source:       r.source,
+        discoveredAt: r.discovered_at,
+    }));
 }
 
 export default { initDb };

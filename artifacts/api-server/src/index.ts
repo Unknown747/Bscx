@@ -827,6 +827,55 @@ app.get('/api/whale/correlation', requireAuth, (_req: Request, res: Response) =>
     }
 });
 
+// GET /api/mempool — live mempool pressure from WebSocket subscriber
+app.get('/api/mempool', requireAuth, (_req: Request, res: Response) => {
+    try {
+        const size   = bot.getMempoolSize();
+        const status = size < 100 ? 'quiet' : size < 500 ? 'normal' : 'congested';
+        res.json({ size, status, timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/history/export.csv — download all closed trades as CSV
+app.get('/api/history/export.csv', requireAuth, (_req: Request, res: Response) => {
+    try {
+        const { trades } = bot.getTradeHistory();
+        const header = 'ID,Symbol,Token Address,Entry ETH,Profit %,% Sold,Closed At,Hold Seconds,Reason,TP Level,TX Hash\n';
+        const rows   = (trades as any[]).map(t => [
+            t.id,
+            `"${(t.tokenSymbol || '').replace(/"/g, '""')}"`,
+            t.tokenAddress || '',
+            t.entryEth ?? '',
+            t.profitPct ?? '',
+            t.percentSold ?? '',
+            t.closedAt ? new Date(t.closedAt).toISOString() : '',
+            t.holdMs != null ? Math.round(t.holdMs / 1000) : '',
+            t.reason || '',
+            t.tpLevel ?? '',
+            t.txHash || '',
+        ].join(',')).join('\n');
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="trades_${Date.now()}.csv"`);
+        res.send(header + rows);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/screener/history — persisted screener signal history (last 100)
+app.get('/api/screener/history', requireAuth, (req: Request, res: Response) => {
+    try {
+        const { dbGetScreenerHistory } = require('./db');
+        const sig   = typeof req.query.signal === 'string' ? req.query.signal : undefined;
+        const limit = Math.min(200, parseInt(req.query.limit as string) || 100);
+        res.json({ signals: dbGetScreenerHistory(limit, sig), timestamp: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // POST /api/narrative/check — Feature 7: token narrative detector
 app.post('/api/narrative/check', requireAuth, async (req: Request, res: Response) => {
     const { tokenAddress, symbol = 'UNKNOWN', name = 'Unknown' } = req.body ?? {};
