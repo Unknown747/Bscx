@@ -928,6 +928,41 @@ app.get('*', (req: Request, res: Response) => {
     }
 });
 
+// ============ DEPLOYMENT STATUS ============
+const SERVER_START_TIME = Date.now();
+const BOT_VERSION = '1.0.0';
+
+app.get('/api/deployment-status', (_req: Request, res: Response) => {
+    const uptimeMs      = Date.now() - SERVER_START_TIME;
+    const uptimeSecs    = Math.floor(uptimeMs / 1000);
+    const days          = Math.floor(uptimeSecs / 86400);
+    const hours         = Math.floor((uptimeSecs % 86400) / 3600);
+    const minutes       = Math.floor((uptimeSecs % 3600) / 60);
+    const seconds       = uptimeSecs % 60;
+    const uptimeStr     = days > 0
+        ? `${days}h ${hours}j ${minutes}m`
+        : hours > 0
+        ? `${hours}j ${minutes}m ${seconds}d`
+        : minutes > 0
+        ? `${minutes}m ${seconds}d`
+        : `${seconds}d`;
+
+    const replDomain    = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS || null;
+    const productionUrl = replDomain ? `https://${replDomain.split(',')[0].trim()}` : null;
+
+    res.json({
+        version:       BOT_VERSION,
+        startedAt:     SERVER_START_TIME,
+        uptimeMs,
+        uptimeStr,
+        productionUrl,
+        nodeVersion:   process.version,
+        environment:   process.env.NODE_ENV || 'development',
+        network:       process.env.BASE_HTTP_URL || 'https://mainnet.base.org',
+        port:          PORT,
+    });
+});
+
 // ============ START SERVER ============
 app.listen(PORT, () => {
     console.log(`🌐 API Server running on port ${PORT}`);
