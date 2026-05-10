@@ -933,6 +933,7 @@ export class SwapExecutor extends EventEmitter {
         maxPriorityFee?: number;
         maxFeePerGas?:   number;
         dcaEnabled?:     boolean;
+        gasMode?:        string;
     }): void {
         const c = this.CONFIG as any;
         if (updates.maxSlippage    != null) c.DEFAULT_SLIPPAGE      = updates.maxSlippage;
@@ -944,6 +945,7 @@ export class SwapExecutor extends EventEmitter {
         if (updates.maxPriorityFee != null) c.MAX_PRIORITY_FEE_GWEI = updates.maxPriorityFee;
         if (updates.maxFeePerGas   != null) c.MAX_FEE_GWEI           = updates.maxFeePerGas;
         if (updates.dcaEnabled     != null) c.DCA_ENABLED            = updates.dcaEnabled;
+        if (updates.gasMode        != null) c.GAS_MODE               = updates.gasMode;
         console.log('⚙️  SwapExecutor config updated');
     }
 

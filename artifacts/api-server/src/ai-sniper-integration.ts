@@ -81,6 +81,15 @@ interface RuntimeConfig {
     // Whale validation gate
     whaleValidationEnabled:   boolean;
     whaleAutoScanEnabled:     boolean;
+    // Token safety gates
+    blockHoneypot:            boolean;
+    blockHighTax:             boolean;
+    maxTaxPercent:            number;
+    // AI confidence threshold
+    minAiConfidence:          number;
+    // Scanner
+    enableFlashblocks:        boolean;
+    gasMode:                  string;
 }
 
 function sanitizeTg(s: string): string {
@@ -155,6 +164,12 @@ export class AISniperBot extends EventEmitter {
         geckoScannerEnabled:     process.env.GECKO_SCANNER_ENABLED === 'true',
         whaleValidationEnabled:  process.env.WHALE_VALIDATION_ENABLED !== 'false',
         whaleAutoScanEnabled:    process.env.WHALE_AUTO_SCAN_ENABLED === 'true',
+        blockHoneypot:           process.env.BLOCK_HONEYPOT  !== 'false',
+        blockHighTax:            process.env.BLOCK_HIGH_TAX  !== 'false',
+        maxTaxPercent:           parseFloat(process.env.MAX_TAX_PERCENT      || '15'),
+        minAiConfidence:         parseInt  (process.env.MIN_AI_CONFIDENCE    || '75'),
+        enableFlashblocks:       process.env.ENABLE_FLASHBLOCKS === 'true',
+        gasMode:                 process.env.GAS_MODE || 'auto',
     };
 
     private readonly CONFIG = {
@@ -315,10 +330,11 @@ export class AISniperBot extends EventEmitter {
             const creatorPct = parseFloat(data.creator_percent || '0') * 100;
             const holderCount = parseInt(data.holder_count || '0');
 
-            if (data.is_honeypot    === '1') return { safe: false, reason: '🍯 Honeypot detected' };
+            if (this.runtimeConfig.blockHoneypot && data.is_honeypot === '1') return { safe: false, reason: '🍯 Honeypot detected' };
             if (data.cannot_sell_all === '1') return { safe: false, reason: 'Cannot sell all — rug risk' };
-            if (sellTax > 15)                 return { safe: false, reason: `Sell tax too high: ${sellTax}%`, sellTax };
-            if (buyTax  > 15)                 return { safe: false, reason: `Buy tax too high: ${buyTax}%`,  buyTax  };
+            const taxLimit = this.runtimeConfig.maxTaxPercent;
+            if (this.runtimeConfig.blockHighTax && sellTax > taxLimit) return { safe: false, reason: `Sell tax too high: ${sellTax}%`, sellTax };
+            if (this.runtimeConfig.blockHighTax && buyTax  > taxLimit) return { safe: false, reason: `Buy tax too high: ${buyTax}%`,  buyTax  };
             if (creatorPct > 30)              return { safe: false, reason: `Creator holds too much: ${creatorPct.toFixed(0)}%` };
             if (holderCount < 10 && holderCount > 0) return { safe: false, reason: `Too few holders: ${holderCount}` };
 
@@ -742,7 +758,7 @@ export class AISniperBot extends EventEmitter {
     private shouldBuy(analysis: any): boolean {
         if (!this.runtimeConfig.aiEnabled)                            return true;  // AI disabled = always try
         if (analysis.recommendation !== 'BUY')                        return false;
-        if (analysis.confidence     < this.CONFIG.MIN_AI_CONFIDENCE)  return false;
+        if (analysis.confidence     < this.runtimeConfig.minAiConfidence)  return false;
         if (analysis.riskLevel      === 'CRITICAL')                    return false;
         // Dynamic profit threshold: semakin tinggi confidence, semakin longgar batas profit
         const minProfit = analysis.confidence >= 85 ? 10 : analysis.confidence >= 75 ? 15 : 20;
@@ -1276,6 +1292,12 @@ export class AISniperBot extends EventEmitter {
                 this.whaleAutoScanInterval = null;
             }
         }
+        if (s.blockHoneypot    != null) r.blockHoneypot    = s.blockHoneypot;
+        if (s.blockHighTax     != null) r.blockHighTax     = s.blockHighTax;
+        if (s.maxTaxPercent    != null) r.maxTaxPercent    = s.maxTaxPercent;
+        if (s.minAiConfidence  != null) r.minAiConfidence  = s.minAiConfidence;
+        if (s.enableFlashblocks!= null) r.enableFlashblocks= s.enableFlashblocks;
+        if (s.gasMode          != null) r.gasMode          = s.gasMode;
 
         if (this.executor) {
             this.executor.updateConfig({
@@ -1287,7 +1309,8 @@ export class AISniperBot extends EventEmitter {
                 stopLoss:       r.stopLoss,
                 maxPriorityFee: r.maxPriorityFee,
                 maxFeePerGas:   r.maxFeePerGas,
-                dcaEnabled:     r.dcaEnabled
+                dcaEnabled:     r.dcaEnabled,
+                gasMode:        r.gasMode,
             });
         }
 

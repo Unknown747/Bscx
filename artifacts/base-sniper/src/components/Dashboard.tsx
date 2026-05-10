@@ -35,6 +35,8 @@ interface Status {
 interface Config {
     capital: string;
     maxTrade: string;
+    minLiquidity: string;
+    maxSlippage: string;
     copyEnabled: boolean;
     copyAmount: string;
     copyDelaySeconds: string;
@@ -42,6 +44,13 @@ interface Config {
     minSafetyScore: string;
     maxPoolAgeSeconds: string;
     aiEnabled: boolean;
+    tp1Multiplier: number;
+    tp1Percentage: number;
+    tp2Multiplier: number;
+    tp2Percentage: number;
+    stopLoss: number;
+    maxPriorityFee: string;
+    maxFeePerGas: string;
     serialRuggerEnabled:    boolean;
     serialRuggerMaxDeploys: string;
     serialRuggerWindowHours: string;
@@ -52,6 +61,13 @@ interface Config {
     geckoScannerEnabled: boolean;
     whaleValidationEnabled: boolean;
     whaleAutoScanEnabled: boolean;
+    blockHoneypot: boolean;
+    blockHighTax: boolean;
+    maxTaxPercent: string;
+    minAiConfidence: string;
+    enableFlashblocks: boolean;
+    gasMode: string;
+    dcaEnabled: boolean;
 }
 
 type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report';
@@ -423,6 +439,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     currentBalance={currentCapital}
                     onClose={() => setShowSettings(false)}
                     onSave={handleSaveSettings}
+                    currentConfig={config ?? undefined}
                 />
             )}
 

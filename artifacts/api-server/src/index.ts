@@ -108,6 +108,8 @@ app.get('/api/config', (_req: Request, res: Response) => {
     res.json({
         capital:                  String(rc.totalCapital),
         maxTrade:                 String(rc.maxTradeAmount),
+        minLiquidity:             String(rc.minLiquidity),
+        maxSlippage:              String(rc.maxSlippage),
         copyEnabled:              rc.copyEnabled,
         copyAmount:               String(rc.copyAmount),
         copyDelaySeconds:         String(rc.copyDelay),
@@ -120,6 +122,8 @@ app.get('/api/config', (_req: Request, res: Response) => {
         tp2Multiplier:            rc.tp2Multiplier,
         tp2Percentage:            rc.tp2Percentage,
         stopLoss:                 rc.stopLoss,
+        maxPriorityFee:           String(rc.maxPriorityFee),
+        maxFeePerGas:             String(rc.maxFeePerGas),
         serialRuggerEnabled:      rc.serialRuggerEnabled,
         serialRuggerMaxDeploys:   String(rc.serialRuggerMaxDeploys),
         serialRuggerWindowHours:  String(rc.serialRuggerWindowHours),
@@ -130,6 +134,13 @@ app.get('/api/config', (_req: Request, res: Response) => {
         geckoScannerEnabled:      rc.geckoScannerEnabled,
         whaleValidationEnabled:   rc.whaleValidationEnabled,
         whaleAutoScanEnabled:     rc.whaleAutoScanEnabled,
+        blockHoneypot:            rc.blockHoneypot,
+        blockHighTax:             rc.blockHighTax,
+        maxTaxPercent:            String(rc.maxTaxPercent),
+        minAiConfidence:          String(rc.minAiConfidence),
+        enableFlashblocks:        rc.enableFlashblocks,
+        gasMode:                  rc.gasMode,
+        dcaEnabled:               rc.dcaEnabled,
     });
 });
 
@@ -166,6 +177,12 @@ app.post('/api/settings', (req: Request, res: Response) => {
             tradeBalancePct:          s.tradeBalancePct,
             geckoScannerEnabled:      s.geckoScannerEnabled,
             whaleAutoScanEnabled:     s.whaleAutoScanEnabled,
+            blockHoneypot:            s.blockHoneypot,
+            blockHighTax:             s.blockHighTax,
+            maxTaxPercent:            s.maxTaxPercent,
+            minAiConfidence:          s.minAiConfidence,
+            enableFlashblocks:        s.enableFlashblocks,
+            gasMode:                  s.gasMode,
         });
         res.json({ ok: true, message: 'Pengaturan berhasil diterapkan' });
     } catch (err: any) {
@@ -327,8 +344,10 @@ app.get('/api/keys', (_req: Request, res: Response) => {
 });
 
 app.post('/api/keys', (req: Request, res: Response) => {
-    const { privateKey, groqKey, geminiKey, huggingfaceKey, appPassword, telegramToken, telegramChatId } = req.body;
-    if (!privateKey && !groqKey && !geminiKey && !huggingfaceKey && !appPassword && !telegramToken && !telegramChatId) {
+    const { privateKey, groqKey, geminiKey, huggingfaceKey, appPassword, telegramToken, telegramChatId,
+            baseWssUrl, baseHttpUrl, backupWssUrl, backupHttpUrl } = req.body;
+    if (!privateKey && !groqKey && !geminiKey && !huggingfaceKey && !appPassword && !telegramToken && !telegramChatId
+        && !baseWssUrl && !baseHttpUrl && !backupWssUrl && !backupHttpUrl) {
         res.status(400).json({ error: 'Tidak ada kunci yang diberikan' }); return;
     }
     if (privateKey)     process.env.PRIVATE_KEY         = privateKey;
@@ -338,6 +357,10 @@ app.post('/api/keys', (req: Request, res: Response) => {
     if (appPassword)    process.env.APP_PASSWORD         = appPassword;
     if (telegramToken)  process.env.TELEGRAM_BOT_TOKEN  = telegramToken;
     if (telegramChatId) process.env.TELEGRAM_CHAT_ID    = telegramChatId;
+    if (baseWssUrl)     process.env.BASE_WSS_URL         = baseWssUrl;
+    if (baseHttpUrl)    process.env.BASE_HTTP_URL        = baseHttpUrl;
+    if (backupWssUrl)   process.env.BACKUP_WSS_URL       = backupWssUrl;
+    if (backupHttpUrl)  process.env.BACKUP_HTTP_URL      = backupHttpUrl;
     bot.updateKeys({ privateKey, groqKey, geminiKey, huggingfaceKey, telegramToken, telegramChatId });
     res.json({ ok: true, status: bot.getKeyStatus() });
 });
@@ -371,6 +394,9 @@ app.patch('/api/config', (req: Request, res: Response) => {
             reputationMinScore: s.reputationMinScore, dynamicSizingEnabled: s.dynamicSizingEnabled,
             tradeBalancePct: s.tradeBalancePct, geckoScannerEnabled: s.geckoScannerEnabled,
             whaleAutoScanEnabled: s.whaleAutoScanEnabled,
+            blockHoneypot: s.blockHoneypot, blockHighTax: s.blockHighTax,
+            maxTaxPercent: s.maxTaxPercent, minAiConfidence: s.minAiConfidence,
+            enableFlashblocks: s.enableFlashblocks, gasMode: s.gasMode,
         });
         res.json({ ok: true, message: 'Pengaturan berhasil diterapkan' });
     } catch (err: any) {

@@ -37,6 +37,10 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
     const [appPassword,     setAppPassword]     = useState<FieldState>(EMPTY);
     const [telegramToken,   setTelegramToken]   = useState<FieldState>(EMPTY);
     const [telegramChatId,  setTelegramChatId]  = useState<FieldState>(EMPTY);
+    const [baseWssUrl,      setBaseWssUrl]      = useState<FieldState>(EMPTY);
+    const [baseHttpUrl,     setBaseHttpUrl]     = useState<FieldState>(EMPTY);
+    const [backupWssUrl,    setBackupWssUrl]    = useState<FieldState>(EMPTY);
+    const [backupHttpUrl,   setBackupHttpUrl]   = useState<FieldState>(EMPTY);
 
     useEffect(() => {
         authFetch(`${apiUrl}/api/keys`)
@@ -60,6 +64,10 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
         if (appPassword.value.trim())    payload.appPassword    = appPassword.value.trim();
         if (telegramToken.value.trim())  payload.telegramToken  = telegramToken.value.trim();
         if (telegramChatId.value.trim()) payload.telegramChatId = telegramChatId.value.trim();
+        if (baseWssUrl.value.trim())     payload.baseWssUrl     = baseWssUrl.value.trim();
+        if (baseHttpUrl.value.trim())    payload.baseHttpUrl    = baseHttpUrl.value.trim();
+        if (backupWssUrl.value.trim())   payload.backupWssUrl   = backupWssUrl.value.trim();
+        if (backupHttpUrl.value.trim())  payload.backupHttpUrl  = backupHttpUrl.value.trim();
 
         if (Object.keys(payload).length === 0) {
             setSaveStatus('idle');
@@ -83,6 +91,10 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
             setAppPassword(EMPTY);
             setTelegramToken(EMPTY);
             setTelegramChatId(EMPTY);
+            setBaseWssUrl(EMPTY);
+            setBaseHttpUrl(EMPTY);
+            setBackupWssUrl(EMPTY);
+            setBackupHttpUrl(EMPTY);
 
             const updated = await authFetch(`${apiUrl}/api/keys`).then(r => r.json());
             setKeyStatus(updated);
@@ -288,6 +300,51 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
                             setState={setAppPassword}
                             isSet={keyStatus?.appPassword}
                             mono={false}
+                        />
+                    </div>
+
+                    {/* RPC URLs */}
+                    <div className="bg-gray-800/40 border border-gray-700 rounded-xl p-5 space-y-4">
+                        <div>
+                            <h3 className="text-sm font-semibold text-gray-200">🌐 RPC URLs (Base Network)</h3>
+                            <p className="text-xs text-gray-500 mt-0.5">Kosongkan untuk pakai URL default. Perubahan aktif saat koneksi ulang.</p>
+                        </div>
+                        <div className="bg-gray-900/60 rounded-lg p-3 text-xs text-gray-400 space-y-0.5">
+                            <p className="text-gray-300 font-medium mb-1">Default (Alchemy public):</p>
+                            <p>WSS: <code className="text-blue-400">wss://base-mainnet.g.alchemy.com/v2/demo</code></p>
+                            <p>HTTP: <code className="text-blue-400">https://mainnet.base.org</code></p>
+                        </div>
+                        <KeyField
+                            label="Base WSS URL (BASE_WSS_URL)"
+                            hint="WebSocket RPC untuk real-time event. Contoh: wss://base-mainnet.g.alchemy.com/v2/your-key"
+                            placeholder="wss://..."
+                            state={baseWssUrl}
+                            setState={setBaseWssUrl}
+                            mono={true}
+                        />
+                        <KeyField
+                            label="Base HTTP URL (BASE_HTTP_URL)"
+                            hint="HTTP RPC untuk query. Contoh: https://base-mainnet.g.alchemy.com/v2/your-key"
+                            placeholder="https://..."
+                            state={baseHttpUrl}
+                            setState={setBaseHttpUrl}
+                            mono={true}
+                        />
+                        <KeyField
+                            label="Backup WSS URL (BACKUP_WSS_URL)"
+                            hint="Fallback WebSocket jika koneksi utama gagal"
+                            placeholder="wss://..."
+                            state={backupWssUrl}
+                            setState={setBackupWssUrl}
+                            mono={true}
+                        />
+                        <KeyField
+                            label="Backup HTTP URL (BACKUP_HTTP_URL)"
+                            hint="Fallback HTTP jika RPC utama gagal"
+                            placeholder="https://..."
+                            state={backupHttpUrl}
+                            setState={setBackupHttpUrl}
+                            mono={true}
                         />
                     </div>
 
