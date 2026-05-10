@@ -560,6 +560,22 @@ app.get('/api/whale/monitor-status', (_req: Request, res: Response) => {
     });
 });
 
+// GET /api/whale/blockscout/:address/trades — live feed 10 tx terbaru dari Blockscout
+app.get('/api/whale/blockscout/:address/trades', async (req: Request, res: Response) => {
+    const { address } = req.params;
+    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
+        res.status(400).json({ error: 'Alamat tidak valid' }); return;
+    }
+    try {
+        const { fetchRecentTrades } = await import('./basescan-monitor');
+        const limit  = Math.min(20, parseInt(String(req.query.limit ?? '10')) || 10);
+        const trades = await fetchRecentTrades(address, limit);
+        res.json({ ok: true, address, trades, fetchedAt: Date.now() });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // POST /api/whale/rescan/:address — force re-scan a wallet from scratch via Blockscout
 app.post('/api/whale/rescan/:address', async (req: Request, res: Response) => {
     const { address } = req.params;

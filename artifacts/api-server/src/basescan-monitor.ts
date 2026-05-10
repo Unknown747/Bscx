@@ -266,6 +266,81 @@ export async function analyzeWalletOnChain(
 }
 
 /**
+ * Fetch 10 transaksi terbaru untuk live feed (selalu fresh, tanpa cursor cache)
+ */
+export interface RecentTrade {
+    txHash:       string;
+    direction:    'buy' | 'sell';
+    tokenAddress: string;
+    tokenSymbol:  string;
+    tokenIcon:    string;
+    amount:       number;
+    amountFmt:    string;
+    timestampMs:  number;
+    blockNumber:  number;
+    explorerUrl:  string;
+}
+
+export async function fetchRecentTrades(walletAddress: string, limit = 10): Promise<RecentTrade[]> {
+    const wallet = walletAddress.toLowerCase();
+    try {
+        const url = `${BLOCKSCOUT_BASE}/addresses/${wallet}/token-transfers?type=ERC-20`;
+        const res  = await axios.get(url, { timeout: 12000, headers: { Accept: 'application/json' } });
+        const items: any[] = res.data?.items ?? [];
+
+        const trades: RecentTrade[] = [];
+        for (const item of items) {
+            const token    = item.token ?? {};
+            const tAddr    = (token.address_hash ?? '').toLowerCase();
+            const tSym     = token.symbol  ?? '?';
+            const tDec     = parseInt(token.decimals ?? '18') || 18;
+            const tIcon    = token.icon_url ?? '';
+            const rawVal   = item.total?.value ?? '0';
+
+            // Skip stablecoins & WETH from feed (noise)
+            if (STABLECOINS.has(tAddr) || tAddr === WETH_ADDRESS.toLowerCase()) continue;
+            if (!tAddr || tAddr === '0x') continue;
+
+            const from     = (item.from?.hash ?? '').toLowerCase();
+            const to       = (item.to?.hash   ?? '').toLowerCase();
+            const direction: 'buy' | 'sell' = to === wallet ? 'buy' : 'sell';
+            // Skip transfers not involving our wallet
+            if (from !== wallet && to !== wallet) continue;
+
+            const tsMs      = item.timestamp ? new Date(item.timestamp).getTime() : 0;
+            const blk       = item.block_number ?? 0;
+            const txHash    = item.transaction_hash ?? '';
+            const amount    = parseFloat(rawVal) / Math.pow(10, tDec);
+
+            // Format amount: if > 1M use M, if > 1K use K, else 4 decimals
+            let amountFmt: string;
+            if (amount >= 1_000_000)      amountFmt = `${(amount / 1_000_000).toFixed(2)}M`;
+            else if (amount >= 1_000)     amountFmt = `${(amount / 1_000).toFixed(2)}K`;
+            else if (amount >= 1)         amountFmt = amount.toFixed(2);
+            else                          amountFmt = amount.toExponential(2);
+
+            trades.push({
+                txHash,
+                direction,
+                tokenAddress: tAddr,
+                tokenSymbol:  tSym,
+                tokenIcon:    tIcon,
+                amount,
+                amountFmt,
+                timestampMs:  tsMs,
+                blockNumber:  blk,
+                explorerUrl:  `https://basescan.org/tx/${txHash}`,
+            });
+
+            if (trades.length >= limit) break;
+        }
+        return trades;
+    } catch {
+        return [];
+    }
+}
+
+/**
  * Reset cursor cache untuk wallet — re-scan dari awal
  */
 export function resetWalletCache(walletAddress: string): void {
