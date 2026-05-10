@@ -37,6 +37,17 @@ interface Status {
     timestamp: number;
 }
 
+interface RiskState {
+    todayLossEth: number;
+    dailyLossLimit: number;
+    consecutiveLosses: number;
+    cooldownUntil: number;
+    tradesBlockedToday: number;
+    circuitBreakerTripped: boolean;
+    circuitBreakerReason: string;
+    dailyResetAt: number;
+}
+
 interface Config {
     capital: string;
     maxTrade: string;
@@ -110,6 +121,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const [vettedCount, setVettedCount]             = useState(0);
     const [emergencyLoading, setEmergencyLoading] = useState(false);
     const [emergencyDone, setEmergencyDone]       = useState(false);
+    const [riskState, setRiskState]               = useState<RiskState | null>(null);
 
     const fetchData = useCallback(async () => {
         try {
@@ -158,6 +170,14 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         } catch { }
     }, [apiUrl]);
 
+    const fetchRiskState = useCallback(async () => {
+        try {
+            const res  = await authFetch(`${apiUrl}/api/risk`);
+            const data = await res.json();
+            if (data?.riskState) setRiskState(data.riskState);
+        } catch { }
+    }, [apiUrl]);
+
     useEffect(() => {
         fetchData();
         const interval = setInterval(fetchData, 3000);
@@ -181,6 +201,12 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         const interval = setInterval(fetchTodayPnl, 30000);
         return () => clearInterval(interval);
     }, [fetchTodayPnl]);
+
+    useEffect(() => {
+        fetchRiskState();
+        const interval = setInterval(fetchRiskState, 10000);
+        return () => clearInterval(interval);
+    }, [fetchRiskState]);
 
 
     const openCount = status?.openPositions?.length ?? 0;
@@ -434,6 +460,69 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                                 ))}
                             </div>
                         </div>
+
+                        {/* Circuit Breaker Status */}
+                        {riskState && (
+                            <div className={`rounded-xl border p-4 ${
+                                riskState.circuitBreakerTripped
+                                    ? 'bg-red-950/50 border-red-700'
+                                    : riskState.todayLossEth > 0
+                                    ? 'bg-gray-900 border-gray-800'
+                                    : 'bg-gray-900 border-gray-800'
+                            }`}>
+                                <div className="flex items-center justify-between mb-3">
+                                    <h2 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
+                                        <span>{riskState.circuitBreakerTripped ? '🔴' : '🟢'}</span>
+                                        Circuit Breaker
+                                    </h2>
+                                    {riskState.circuitBreakerTripped && (
+                                        <span className="text-xs bg-red-900 text-red-300 border border-red-700 px-2 py-0.5 rounded-full font-semibold animate-pulse">
+                                            TRIP — Trading Dihentikan
+                                        </span>
+                                    )}
+                                    {!riskState.circuitBreakerTripped && riskState.cooldownUntil > Date.now() && (
+                                        <span className="text-xs bg-yellow-900/50 text-yellow-400 border border-yellow-800 px-2 py-0.5 rounded-full">
+                                            ⏳ Cooldown aktif
+                                        </span>
+                                    )}
+                                </div>
+                                {riskState.circuitBreakerTripped && riskState.circuitBreakerReason && (
+                                    <p className="text-xs text-red-400 mb-3 bg-red-900/30 rounded-lg px-3 py-2">{riskState.circuitBreakerReason}</p>
+                                )}
+                                <div className="grid grid-cols-2 gap-2">
+                                    {[
+                                        {
+                                            label: 'Rugi Hari Ini',
+                                            value: `${riskState.todayLossEth.toFixed(5)} ETH`,
+                                            sub: `limit: ${riskState.dailyLossLimit.toFixed(5)} ETH`,
+                                            pct: riskState.dailyLossLimit > 0 ? Math.min(100, (riskState.todayLossEth / riskState.dailyLossLimit) * 100) : 0,
+                                            warn: riskState.todayLossEth / riskState.dailyLossLimit > 0.7,
+                                        },
+                                        {
+                                            label: 'Kalah Berturut',
+                                            value: `${riskState.consecutiveLosses}×`,
+                                            sub: 'cooldown di 3×',
+                                            pct: null,
+                                            warn: riskState.consecutiveLosses >= 2,
+                                        },
+                                    ].map(({ label, value, sub, pct, warn }) => (
+                                        <div key={label} className={`rounded-lg p-3 ${warn ? 'bg-red-900/30 border border-red-800/60' : 'bg-gray-950 border border-gray-800'}`}>
+                                            <p className="text-xs text-gray-500 mb-1">{label}</p>
+                                            <p className={`text-sm font-bold ${warn ? 'text-red-400' : 'text-white'}`}>{value}</p>
+                                            {pct !== null && (
+                                                <div className="mt-1.5 h-1 bg-gray-800 rounded-full overflow-hidden">
+                                                    <div className={`h-full rounded-full transition-all ${pct > 70 ? 'bg-red-500' : pct > 40 ? 'bg-yellow-500' : 'bg-green-500'}`} style={{ width: `${pct}%` }} />
+                                                </div>
+                                            )}
+                                            <p className="text-xs text-gray-600 mt-1">{sub}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="text-xs text-gray-700 mt-2 text-right">
+                                    Reset: {new Date(riskState.dailyResetAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
+                                </p>
+                            </div>
+                        )}
 
                         {/* Realtime P&L Chart */}
                         <PnLChart apiUrl={apiUrl} compact={true} />

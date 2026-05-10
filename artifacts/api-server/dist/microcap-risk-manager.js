@@ -8,9 +8,6 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MicroCapRiskManager = void 0;
-const MAX_DAILY_LOSS_ETH = parseFloat(process.env.MAX_DAILY_LOSS_ETH || '0.0015');
-const MAX_CONSECUTIVE_LOSSES = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
-const COOLDOWN_AFTER_PROFIT_MS = parseInt(process.env.COOLDOWN_AFTER_BIG_PROFIT_MINUTES || '15') * 60000;
 const REINVEST_PERCENT = parseFloat(process.env.REINVEST_PERCENT || '50') / 100;
 const MIN_LIQUIDITY_USD = parseFloat(process.env.MIN_LIQUIDITY_USD || '5000');
 const MAX_TOKEN_AGE_SECONDS = parseInt(process.env.MAX_TOKEN_AGE_SECONDS || '300');
@@ -21,12 +18,23 @@ class MicroCapRiskManager {
         this.cooldownUntil = 0;
         this.tradesBlockedToday = 0;
         this.lastTradeResult = null;
+        // ── Configurable limits (can be updated at runtime) ───────────────────────
+        this.maxDailyLossEth = parseFloat(process.env.MAX_DAILY_LOSS_ETH || '0.0015');
+        this.maxConsecutiveLosses = parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3');
+        this.cooldownAfterProfitMs = parseInt(process.env.COOLDOWN_AFTER_BIG_PROFIT_MINUTES || '15') * 60000;
         // ── Hard circuit breaker state ────────────────────────────────────────────
         this.circuitBreakerTripped = false;
         this.circuitBreakerReason = '';
         this.totalCapital = initialCapital;
         this.dailyResetAt = this.nextMidnightUtc();
         this.scheduleDailyReset();
+    }
+    /** Update circuit breaker limits at runtime (called from settings save). */
+    updateLimits(maxDailyLossEth, maxConsecutiveLosses, cooldownAfterProfitMinutes) {
+        this.maxDailyLossEth = maxDailyLossEth;
+        this.maxConsecutiveLosses = maxConsecutiveLosses;
+        this.cooldownAfterProfitMs = cooldownAfterProfitMinutes * 60000;
+        console.log(`[RiskManager] Limits updated — dailyLoss: ${maxDailyLossEth} ETH | maxConsec: ${maxConsecutiveLosses} | cooldown: ${cooldownAfterProfitMinutes}min`);
     }
     nextMidnightUtc() {
         const now = new Date();
@@ -68,7 +76,7 @@ class MicroCapRiskManager {
     }
     /** True when daily loss limit has been reached (used for pre-signal checks). */
     isDailyLimitHit() {
-        return this.todayLossEth >= MAX_DAILY_LOSS_ETH;
+        return this.todayLossEth >= this.maxDailyLossEth;
     }
     // ── Gate: called BEFORE each trade ────────────────────────────────────────
     beforeTrade(token = {}) {
@@ -84,17 +92,17 @@ class MicroCapRiskManager {
             return { allowed: false, reason: `⏳ Cooldown: ${remaining} menit tersisa` };
         }
         // Daily loss limit — trips the hard circuit breaker
-        if (this.todayLossEth >= MAX_DAILY_LOSS_ETH) {
+        if (this.todayLossEth >= this.maxDailyLossEth) {
             this.tradesBlockedToday++;
-            const reason = `🔴 Daily loss limit: ${this.todayLossEth.toFixed(5)} ETH (maks ${MAX_DAILY_LOSS_ETH} ETH)`;
+            const reason = `🔴 Daily loss limit: ${this.todayLossEth.toFixed(5)} ETH (maks ${this.maxDailyLossEth} ETH)`;
             this.tripCircuitBreaker(reason);
             return { allowed: false, reason };
         }
         // Consecutive losses → force cooldown
-        if (this.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
+        if (this.consecutiveLosses >= this.maxConsecutiveLosses) {
             this.cooldownUntil = Date.now() + 30 * 60000;
             this.tradesBlockedToday++;
-            return { allowed: false, reason: `⚠️ ${MAX_CONSECUTIVE_LOSSES} consecutive losses → cooldown 30 menit` };
+            return { allowed: false, reason: `⚠️ ${this.maxConsecutiveLosses} consecutive losses → cooldown 30 menit` };
         }
         // Minimum liquidity
         if (token.liquidityUSD !== undefined && token.liquidityUSD < MIN_LIQUIDITY_USD) {
@@ -117,8 +125,8 @@ class MicroCapRiskManager {
             this.lastTradeResult = 'loss';
             console.log(`[RiskManager] Loss: ${profitETH.toFixed(5)} ETH | Today: ${this.todayLossEth.toFixed(5)} | Streak: ${this.consecutiveLosses}`);
             // Trip the hard circuit breaker immediately if daily limit is now exceeded
-            if (this.todayLossEth >= MAX_DAILY_LOSS_ETH && !this.circuitBreakerTripped) {
-                this.tripCircuitBreaker(`Daily loss limit reached: ${this.todayLossEth.toFixed(5)} ETH / ${MAX_DAILY_LOSS_ETH} ETH`);
+            if (this.todayLossEth >= this.maxDailyLossEth && !this.circuitBreakerTripped) {
+                this.tripCircuitBreaker(`Daily loss limit reached: ${this.todayLossEth.toFixed(5)} ETH / ${this.maxDailyLossEth} ETH`);
             }
         }
         else {
@@ -126,11 +134,11 @@ class MicroCapRiskManager {
             this.lastTradeResult = 'profit';
             // Big profit → reinvest partially + cooldown
             if (profitETH > this.totalCapital * 0.5) {
-                this.cooldownUntil = Date.now() + COOLDOWN_AFTER_PROFIT_MS;
+                this.cooldownUntil = Date.now() + this.cooldownAfterProfitMs;
                 const reinvest = profitETH * REINVEST_PERCENT;
                 const withdraw = profitETH * (1 - REINVEST_PERCENT);
                 this.totalCapital += reinvest;
-                console.log(`[RiskManager] Big profit! Reinvest: ${reinvest.toFixed(5)} ETH | Set aside: ${withdraw.toFixed(5)} ETH | Cooldown: ${COOLDOWN_AFTER_PROFIT_MS / 60000}min`);
+                console.log(`[RiskManager] Big profit! Reinvest: ${reinvest.toFixed(5)} ETH | Set aside: ${withdraw.toFixed(5)} ETH | Cooldown: ${this.cooldownAfterProfitMs / 60000}min`);
             }
             else {
                 this.totalCapital += profitETH;
@@ -153,7 +161,7 @@ class MicroCapRiskManager {
     getState() {
         return {
             todayLossEth: this.todayLossEth,
-            dailyLossLimit: MAX_DAILY_LOSS_ETH,
+            dailyLossLimit: this.maxDailyLossEth,
             consecutiveLosses: this.consecutiveLosses,
             cooldownUntil: this.cooldownUntil,
             totalCapital: this.totalCapital,

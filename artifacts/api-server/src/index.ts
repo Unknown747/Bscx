@@ -185,9 +185,12 @@ app.post('/api/settings', (req: Request, res: Response) => {
             blockHoneypot:            s.blockHoneypot,
             blockHighTax:             s.blockHighTax,
             maxTaxPercent:            s.maxTaxPercent,
-            minAiConfidence:          s.minAiConfidence,
-            enableFlashblocks:        s.enableFlashblocks,
-            gasMode:                  s.gasMode,
+            minAiConfidence:             s.minAiConfidence,
+            enableFlashblocks:           s.enableFlashblocks,
+            gasMode:                     s.gasMode,
+            maxDailyLossEth:             s.maxDailyLossEth,
+            maxConsecutiveLosses:        s.maxConsecutiveLosses,
+            cooldownAfterProfitMinutes:  s.cooldownAfterProfitMinutes,
         });
         res.json({ ok: true, message: 'Settings applied successfully' });
     } catch (err: any) {

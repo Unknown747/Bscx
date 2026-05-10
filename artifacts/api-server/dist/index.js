@@ -232,6 +232,9 @@ app.post('/api/settings', (req, res) => {
             minAiConfidence: s.minAiConfidence,
             enableFlashblocks: s.enableFlashblocks,
             gasMode: s.gasMode,
+            maxDailyLossEth: s.maxDailyLossEth,
+            maxConsecutiveLosses: s.maxConsecutiveLosses,
+            cooldownAfterProfitMinutes: s.cooldownAfterProfitMinutes,
         });
         res.json({ ok: true, message: 'Settings applied successfully' });
     }

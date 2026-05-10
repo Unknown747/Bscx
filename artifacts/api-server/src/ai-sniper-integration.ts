@@ -96,6 +96,10 @@ interface RuntimeConfig {
     // Scanner
     enableFlashblocks:        boolean;
     gasMode:                  string;
+    // Circuit breaker
+    maxDailyLossEth:          number;
+    maxConsecutiveLosses:     number;
+    cooldownAfterProfitMinutes: number;
 }
 
 function sanitizeTg(s: string): string {
@@ -179,6 +183,9 @@ export class AISniperBot extends EventEmitter {
         minAiConfidence:         parseInt  (process.env.MIN_AI_CONFIDENCE    || '75'),
         enableFlashblocks:       process.env.ENABLE_FLASHBLOCKS === 'true',
         gasMode:                 process.env.GAS_MODE || 'auto',
+        maxDailyLossEth:         parseFloat(process.env.MAX_DAILY_LOSS_ETH || '0.0015'),
+        maxConsecutiveLosses:    parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '3'),
+        cooldownAfterProfitMinutes: parseInt(process.env.COOLDOWN_AFTER_BIG_PROFIT_MINUTES || '15'),
     };
 
     private readonly CONFIG = {
@@ -1510,8 +1517,18 @@ export class AISniperBot extends EventEmitter {
         if (s.blockHighTax     != null) r.blockHighTax     = s.blockHighTax;
         if (s.maxTaxPercent    != null) r.maxTaxPercent    = s.maxTaxPercent;
         if (s.minAiConfidence  != null) r.minAiConfidence  = s.minAiConfidence;
-        if (s.enableFlashblocks!= null) r.enableFlashblocks= s.enableFlashblocks;
-        if (s.gasMode          != null) r.gasMode          = s.gasMode;
+        if (s.enableFlashblocks        != null) r.enableFlashblocks        = s.enableFlashblocks;
+        if (s.gasMode                  != null) r.gasMode                  = s.gasMode;
+        if (s.maxDailyLossEth          != null) r.maxDailyLossEth          = s.maxDailyLossEth;
+        if (s.maxConsecutiveLosses     != null) r.maxConsecutiveLosses     = s.maxConsecutiveLosses;
+        if (s.cooldownAfterProfitMinutes != null) r.cooldownAfterProfitMinutes = s.cooldownAfterProfitMinutes;
+
+        // Propagate circuit breaker limits to risk manager
+        this.riskManager.updateLimits(
+            r.maxDailyLossEth,
+            r.maxConsecutiveLosses,
+            r.cooldownAfterProfitMinutes
+        );
 
         if (this.executor) {
             this.executor.updateConfig({
