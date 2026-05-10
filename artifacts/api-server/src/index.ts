@@ -4,6 +4,7 @@ import { getVapidPublicKey, savePushSubscription, removePushSubscription, getSub
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import path from 'path';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -843,10 +844,25 @@ app.get('/api/report', requireAuth, async (_req: Request, res: Response) => {
 });
 
 // ============ SERVE FRONTEND (production) ============
-const frontendDist = path.join(__dirname, '../../base-sniper/dist');
-app.use(express.static(frontendDist));
-app.get('*', (_req: Request, res: Response) => {
-    res.sendFile(path.join(frontendDist, 'index.html'));
+const frontendDist = (() => {
+    const candidates = [
+        path.join(__dirname, '../../base-sniper/dist'),
+        path.join(process.cwd(), 'artifacts/base-sniper/dist'),
+        path.join(process.cwd(), 'base-sniper/dist'),
+    ];
+    return candidates.find(p => fs.existsSync(p)) ?? candidates[0];
+})();
+app.use(express.static(frontendDist, { maxAge: '1d', etag: true }));
+app.get('*', (req: Request, res: Response) => {
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'API endpoint not found' });
+    }
+    const indexFile = path.join(frontendDist, 'index.html');
+    if (fs.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+    } else {
+        res.status(503).send('Frontend not built. Run: cd artifacts/base-sniper && npm run build');
+    }
 });
 
 // ============ START SERVER ============

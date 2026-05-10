@@ -13,6 +13,7 @@ import Backtest from './Backtest';
 import DailyReport from './DailyReport';
 import PushNotification from './PushNotification';
 import { authFetch } from '../lib/authFetch';
+import { usePwaInstall } from '../hooks/usePwaInstall';
 
 interface Status {
     connected: boolean;
@@ -95,7 +96,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const [lastUpdate, setLastUpdate]           = useState('');
     const [error, setError]                     = useState('');
     const [ethBalance, setEthBalance]           = useState<string | null>(null);
+    const [todayPnl, setTodayPnl]               = useState<{ eth: number; pct: number } | null>(null);
     const [showSettings, setShowSettings]       = useState(false);
+    const { canInstall, install }               = usePwaInstall();
     const [showWalletConfig, setShowWalletConfig]   = useState(false);
     const [showCopyWallets, setShowCopyWallets]     = useState(false);
     const [showMonitor, setShowMonitor]             = useState(false);
@@ -136,6 +139,20 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         } catch { }
     }, [apiUrl]);
 
+    const fetchTodayPnl = useCallback(async () => {
+        try {
+            const res  = await authFetch(`${apiUrl}/api/report`);
+            const data = await res.json();
+            const today = data?.today;
+            if (today) {
+                setTodayPnl({
+                    eth: parseFloat(today.profitEth ?? today.profit ?? 0),
+                    pct: parseFloat(today.profitPct ?? today.winRate ?? 0),
+                });
+            }
+        } catch { }
+    }, [apiUrl]);
+
     useEffect(() => {
         fetchData();
         const interval = setInterval(fetchData, 3000);
@@ -153,6 +170,12 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         const interval = setInterval(fetchMonitorCount, 15000);
         return () => clearInterval(interval);
     }, [fetchMonitorCount]);
+
+    useEffect(() => {
+        fetchTodayPnl();
+        const interval = setInterval(fetchTodayPnl, 30000);
+        return () => clearInterval(interval);
+    }, [fetchTodayPnl]);
 
     const handleSaveSettings = useCallback(async (settings: ModalSettings) => {
         setSaveStatus('saving');
@@ -202,9 +225,20 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         <span className="text-2xl">🔥</span>
                         <div>
                             <h1 className="text-base font-bold text-white leading-tight">Base Sniper</h1>
-                            {ethBalance !== null && (
-                                <p className="text-xs text-green-400 font-medium">Ξ {ethBalance}</p>
-                            )}
+                            <div className="flex items-center gap-2">
+                                {ethBalance !== null && (
+                                    <p className="text-xs text-green-400 font-medium">Ξ {ethBalance}</p>
+                                )}
+                                {todayPnl !== null && todayPnl.eth !== 0 && (
+                                    <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
+                                        todayPnl.eth >= 0
+                                            ? 'bg-green-900/50 text-green-400'
+                                            : 'bg-red-900/50 text-red-400'
+                                    }`}>
+                                        {todayPnl.eth >= 0 ? '+' : ''}{todayPnl.eth.toFixed(4)} ETH hari ini
+                                    </span>
+                                )}
+                            </div>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -284,6 +318,23 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     </button>
                 </div>
             </div>
+
+            {/* PWA Install Banner */}
+            {canInstall && (
+                <div className="mx-4 mt-2 flex items-center gap-3 bg-indigo-900/40 border border-indigo-700/60 rounded-xl px-4 py-2.5">
+                    <span className="text-xl">📲</span>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-indigo-300">Install ke Android</p>
+                        <p className="text-xs text-indigo-400/70">Tambahkan ke layar utama untuk akses cepat</p>
+                    </div>
+                    <button
+                        onClick={install}
+                        className="flex-shrink-0 text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg font-medium transition-colors"
+                    >
+                        Install
+                    </button>
+                </div>
+            )}
 
             {/* Banners */}
             {(emergencyDone || status?.emergencyStop) && (

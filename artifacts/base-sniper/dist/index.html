@@ -2,11 +2,26 @@
 <html lang="id">
     <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
         <title>Base Sniper Ultimate</title>
+
+        <!-- PWA / Android installable -->
+        <link rel="manifest" href="/manifest.json" />
         <meta name="theme-color" content="#030712" />
-      <script type="module" crossorigin src="/assets/index-D998KZqC.js"></script>
-      <link rel="stylesheet" crossorigin href="/assets/index-xD2ZKa8L.css">
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="Base Sniper" />
+        <link rel="apple-touch-icon" href="/icon.svg" />
+        <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+
+        <!-- Prevent flash of unstyled content -->
+        <style>
+            html, body { background: #030712; margin: 0; padding: 0; }
+            #root { min-height: 100dvh; }
+        </style>
+      <script type="module" crossorigin src="/assets/index-BL69HYwD.js"></script>
+      <link rel="stylesheet" crossorigin href="/assets/index-CrTbqHH1.css">
     </head>
     <body>
         <div id="root"></div>

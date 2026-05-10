@@ -42,6 +42,7 @@ const push_manager_1 = require("./push-manager");
 const dotenv_1 = __importDefault(require("dotenv"));
 const crypto_1 = __importDefault(require("crypto"));
 const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 8080;
@@ -915,10 +916,26 @@ app.get('/api/report', requireAuth, async (_req, res) => {
     }
 });
 // ============ SERVE FRONTEND (production) ============
-const frontendDist = path_1.default.join(__dirname, '../../base-sniper/dist');
-app.use(express_1.default.static(frontendDist));
-app.get('*', (_req, res) => {
-    res.sendFile(path_1.default.join(frontendDist, 'index.html'));
+const frontendDist = (() => {
+    const candidates = [
+        path_1.default.join(__dirname, '../../base-sniper/dist'),
+        path_1.default.join(process.cwd(), 'artifacts/base-sniper/dist'),
+        path_1.default.join(process.cwd(), 'base-sniper/dist'),
+    ];
+    return candidates.find(p => fs_1.default.existsSync(p)) ?? candidates[0];
+})();
+app.use(express_1.default.static(frontendDist, { maxAge: '1d', etag: true }));
+app.get('*', (req, res) => {
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'API endpoint not found' });
+    }
+    const indexFile = path_1.default.join(frontendDist, 'index.html');
+    if (fs_1.default.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+    }
+    else {
+        res.status(503).send('Frontend not built. Run: cd artifacts/base-sniper && npm run build');
+    }
 });
 // ============ START SERVER ============
 app.listen(PORT, () => {
