@@ -39,8 +39,7 @@ const SKIP_ADDRESSES = new Set([
     '0x0000000000000000000000000000000000000000', // Zero
     '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad', // Universal Router
 ]);
-// ─── Init DB ──────────────────────────────────────────────────────────────────
-(0, db_1.initDb)();
+// ─── Init DB (called from main entry point) ───────────────────────────────────
 // ─── Auto-scan cooldown (manual scans always bypass this) ────────────────────
 let lastAutoScanMs = 0;
 const AUTO_SCAN_COOLDOWN_MS = 15 * 60 * 1000;

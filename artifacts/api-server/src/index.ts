@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { AISniperBot } from './ai-sniper-integration';
 import { getVapidPublicKey, savePushSubscription, removePushSubscription, getSubscriptionCount } from './push-manager';
+import { initDb } from './db';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import path from 'path';
@@ -64,6 +65,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const bot = new AISniperBot();
 
 async function startBot() {
+    await initDb();
     console.log('\n🚀 STARTING BASE SNIPER ULTIMATE (GeckoTerminal Edition)...');
     console.log(`💰 Capital: ${process.env.TOTAL_CAPITAL_ETH || 0.006} ETH`);
     console.log(`🐋 Copy Trading: ${process.env.COPY_TRADING_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);

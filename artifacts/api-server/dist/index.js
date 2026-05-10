@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const ai_sniper_integration_1 = require("./ai-sniper-integration");
 const push_manager_1 = require("./push-manager");
+const db_1 = require("./db");
 const dotenv_1 = __importDefault(require("dotenv"));
 const crypto_1 = __importDefault(require("crypto"));
 const path_1 = __importDefault(require("path"));
@@ -103,6 +104,7 @@ app.use((req, res, next) => {
 // ── Initialize bot ────────────────────────────────────────────────────────────
 const bot = new ai_sniper_integration_1.AISniperBot();
 async function startBot() {
+    await (0, db_1.initDb)();
     console.log('\n🚀 STARTING BASE SNIPER ULTIMATE (GeckoTerminal Edition)...');
     console.log(`💰 Capital: ${process.env.TOTAL_CAPITAL_ETH || 0.006} ETH`);
     console.log(`🐋 Copy Trading: ${process.env.COPY_TRADING_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
@@ -404,9 +406,9 @@ app.get('/api/keys', (_req, res) => {
     res.json(bot.getKeyStatus());
 });
 app.post('/api/keys', (req, res) => {
-    const { privateKey, groqKey, geminiKey, huggingfaceKey, appPassword, telegramToken, telegramChatId, baseWssUrl, baseHttpUrl, backupWssUrl, backupHttpUrl } = req.body;
+    const { privateKey, groqKey, geminiKey, huggingfaceKey, appPassword, telegramToken, telegramChatId, baseWssUrl, baseHttpUrl, backupWssUrl, backupHttpUrl, basescanApiKey } = req.body;
     if (!privateKey && !groqKey && !geminiKey && !huggingfaceKey && !appPassword && !telegramToken && !telegramChatId
-        && !baseWssUrl && !baseHttpUrl && !backupWssUrl && !backupHttpUrl) {
+        && !baseWssUrl && !baseHttpUrl && !backupWssUrl && !backupHttpUrl && !basescanApiKey) {
         res.status(400).json({ error: 'Tidak ada kunci yang diberikan' });
         return;
     }
@@ -432,6 +434,8 @@ app.post('/api/keys', (req, res) => {
         process.env.BACKUP_WSS_URL = backupWssUrl;
     if (backupHttpUrl)
         process.env.BACKUP_HTTP_URL = backupHttpUrl;
+    if (basescanApiKey)
+        process.env.BASESCAN_API_KEY = basescanApiKey;
     bot.updateKeys({ privateKey, groqKey, geminiKey, huggingfaceKey, telegramToken, telegramChatId });
     res.json({ ok: true, status: bot.getKeyStatus() });
 });

@@ -1348,7 +1348,10 @@ class AISniperBot extends events_1.EventEmitter {
             huggingfaceKey: ai.huggingface,
             appPassword: !!(process.env.APP_PASSWORD),
             telegramToken: !!(this.telegramToken),
-            telegramChatId: !!(this.telegramChatId)
+            telegramChatId: !!(this.telegramChatId),
+            backupHttpUrl: !!(process.env.BACKUP_HTTP_URL),
+            backupWssUrl: !!(process.env.BACKUP_WSS_URL),
+            basescanApiKey: !!(process.env.BASESCAN_API_KEY),
         };
     }
     // ============ RISK MANAGER PUBLIC API ============

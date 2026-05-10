@@ -75,8 +75,7 @@ interface TradeRecord {
     timestampMs:   number;
 }
 
-// ─── Init DB ──────────────────────────────────────────────────────────────────
-initDb();
+// ─── Init DB (called from main entry point) ───────────────────────────────────
 
 // ─── Auto-scan cooldown (manual scans always bypass this) ────────────────────
 let lastAutoScanMs = 0;
