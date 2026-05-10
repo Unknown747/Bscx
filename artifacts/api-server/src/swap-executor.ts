@@ -23,6 +23,7 @@ import {
     getDexUniV3Pairs,
     getTokenPriceEth,
 } from './price-oracle';
+import { calculateExit } from './dynamic-exit';
 
 dotenv.config();
 
@@ -99,6 +100,8 @@ interface OpenPosition {
     initialLiquidityUsd: number;
     tp1SoldPct: number;
     tp2SoldPct: number;
+    dynamicSell50Done?: boolean;
+    dynamicSell25Done?: boolean;
 }
 
 // ============ SWAP EXECUTOR ============
@@ -607,6 +610,70 @@ export class SwapExecutor extends EventEmitter {
             console.log(`📉 DCA: ${position.tokenSymbol} at ${multiplier.toFixed(3)}x — signal to buy ${dcaAmount} ETH more`);
             this.emit('dca-signal', { tokenAddress, tokenSymbol: position.tokenSymbol, dcaAmount });
             position.dcaDone = true;
+        }
+
+        // ─── DYNAMIC EXIT: momentum-based OHLCV exit (aktif setelah TP1) ───
+        // Gunakan sinyal momentum & volume dari GeckoTerminal untuk exit lebih presisi
+        if (position.takeProfit1Hit && !position.takeProfit3Hit) {
+            try {
+                const exitSignal = await calculateExit({
+                    tokenAddress,
+                    entryPriceEth:       entryEth,
+                    currentValueEth,
+                    peakValueEth:        position.peakValueEth || entryEth,
+                    openedAt:            position.openedAt,
+                    maxHoldMinutes:      this.CONFIG.MAX_HOLD_MINUTES,
+                    trailingActivatePct: (this.CONFIG.TRAILING_SL_ACTIVATE_MULT - 1) * 100,
+                    trailingFromPeakPct: this.CONFIG.TRAILING_SL_FROM_PEAK_PCT,
+                    stopLossPct:         this.CONFIG.STOP_LOSS_PCT,
+                });
+
+                if (exitSignal === 'SELL_ALL_PANIC') {
+                    console.log(`📉 [DynamicExit] PANIC — reversal momentum terdeteksi, jual 100% ${position.tokenSymbol}`);
+                    this.emit('stop-loss', {
+                        tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
+                        reason: `📉 Reversal momentum (dynamic exit)`,
+                        peakMult, sourceWallet: position.sourceWallet,
+                        holdMs: Date.now() - position.openedAt,
+                        tokenAddress: tokenAddress,
+                    });
+                    await this.sell(tokenAddress, 100);
+                    return;
+                }
+
+                if (exitSignal === 'SELL_50_PERCENT' && !position.dynamicSell50Done) {
+                    console.log(`📉 [DynamicExit] Momentum melemah — jual 50% ${position.tokenSymbol}`);
+                    this.emit('take-profit', {
+                        tokenAddress, tokenSymbol: position.tokenSymbol,
+                        level: 2, multiplier, profitPct,
+                        holdMs: Date.now() - position.openedAt,
+                        sourceWallet: position.sourceWallet,
+                    });
+                    await this.sell(tokenAddress, 50);
+                    position.dynamicSell50Done = true;
+                    return;
+                }
+
+                if (exitSignal === 'SELL_25_PERCENT' && !position.dynamicSell25Done) {
+                    console.log(`📉 [DynamicExit] Scale out — jual 25% ${position.tokenSymbol}`);
+                    await this.sell(tokenAddress, 25);
+                    position.dynamicSell25Done = true;
+                    return;
+                }
+
+                if (exitSignal === 'SELL_ALL_TRAILING' || exitSignal === 'SELL_ALL_TIMEOUT') {
+                    console.log(`📉 [DynamicExit] ${exitSignal} — jual sisa ${position.tokenSymbol}`);
+                    this.emit('take-profit', {
+                        tokenAddress, tokenSymbol: position.tokenSymbol,
+                        level: 3, multiplier, profitPct,
+                        holdMs: Date.now() - position.openedAt,
+                        sourceWallet: position.sourceWallet,
+                    });
+                    await this.sell(tokenAddress, 100);
+                    position.takeProfit3Hit = true;
+                    return;
+                }
+            } catch { /* silent — jangan blokir position monitor */ }
         }
     }
 

@@ -6,7 +6,7 @@ import { GeckoTokenScanner, type TokenOpportunity } from './gecko-token-scanner'
 import { checkSerialDeployer, getTokenDeployer } from './deployer-checker';
 import { getDeployerReputation } from './deployer-reputation';
 import { checkTokenSafety } from './token-safety';
-import { getActiveCorrelations } from './whale-correlator';
+import { getActiveCorrelations, checkTokenCorrelation, getCorrelationBonus } from './whale-correlator';
 import { runBacktest, type BacktestConfig } from './backtest-engine';
 import {
     runWhaleScan, approveCandidate, rejectCandidate, monitorCandidate,
@@ -365,9 +365,13 @@ export class AISniperBot extends EventEmitter {
             console.log(`\n🦎 GeckoScanner opportunity: ${opportunity.tokenSymbol}`);
 
             const analysis = await this.ai.analyzeToken(tokenAddress, {
-                liquidity:  opportunity.liquidityEth,
-                volume24h:  opportunity.volumeH24,
-                ageSeconds: opportunity.ageMinutes * 60,
+                liquidity:          opportunity.liquidityEth,
+                volume24h:          opportunity.volumeH24,
+                ageSeconds:         opportunity.ageMinutes * 60,
+                priceChangeH1:      opportunity.priceChangeH1,
+                buyTxH1:            opportunity.buyTxH1,
+                sellTxH1:           opportunity.sellTxH1,
+                fdvUsd:             opportunity.fdvUsd,
             });
 
             console.log(`   🤖 AI: ${analysis.recommendation} (${analysis.confidence}%)`);
@@ -457,11 +461,19 @@ export class AISniperBot extends EventEmitter {
             );
 
             if (walletAnalysis.shouldCopy && walletAnalysis.score > this.CONFIG.AUTO_COPY_SCORE_THRESHOLD) {
-                const copyAmt  = await this.calculateDynamicCopyAmount();
+                const baseAmt  = await this.calculateDynamicCopyAmount();
                 const ethPrice = await getEthPriceUsd().catch(() => 3000);
 
-                console.log(`   ✅ COPY APPROVED: ${walletAnalysis.reason} | Amount: ${copyAmt.toFixed(5)} ETH`);
-                this.addLog('copy-trade', `Copy dari ${opportunity.walletName}`, `${opportunity.tokenSymbol} · score ${walletAnalysis.score}/100`);
+                // ── Whale correlation boost: multiple whales on same token ──
+                const correlation   = checkTokenCorrelation(opportunity.tokenAddress);
+                const corrBonus     = getCorrelationBonus(opportunity.tokenAddress);
+                const copyAmt       = corrBonus > 0 ? baseAmt * (1 + corrBonus / 100) : baseAmt;
+                const corrLine      = correlation
+                    ? `🔥 <b>${correlation.whaleCount} whale</b> beli token ini dalam ${correlation.windowMinutes.toFixed(1)} mnt → +${corrBonus}% ukuran!\n`
+                    : '';
+
+                console.log(`   ✅ COPY APPROVED: ${walletAnalysis.reason} | Amount: ${copyAmt.toFixed(5)} ETH${corrBonus > 0 ? ` (+${corrBonus}% correlation boost)` : ''}`);
+                this.addLog('copy-trade', `Copy dari ${opportunity.walletName}`, `${opportunity.tokenSymbol} · score ${walletAnalysis.score}/100${corrBonus > 0 ? ` · +${corrBonus}% boost` : ''}`);
 
                 await this.sendTelegram(
                     `✅ <b>AI APPROVE — Eksekusi Sekarang!</b>\n\n` +
@@ -469,6 +481,7 @@ export class AISniperBot extends EventEmitter {
                     `💡 <i>${sanitizeTg(walletAnalysis.reason)}</i>\n\n` +
                     `🪙 Token: <b>${sanitizeTg(opportunity.tokenSymbol)}</b>\n` +
                     `<code>${opportunity.tokenAddress}</code>\n\n` +
+                    corrLine +
                     `💰 Copy Amount: <b>${copyAmt.toFixed(5)} ETH</b> (~${fmtUsd(copyAmt, ethPrice)})\n` +
                     `⚡ Eksekusi dalam beberapa detik...`
                 );

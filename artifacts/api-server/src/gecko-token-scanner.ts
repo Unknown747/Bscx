@@ -255,7 +255,7 @@ export class GeckoTokenScanner extends EventEmitter {
 
             return { safe: score >= 50, score };
         } catch {
-            return { safe: true, score: 60 }; // fail open if GoPlus is down
+            return { safe: false, reason: 'GoPlus tidak tersedia — skip demi keamanan', score: 0 };
         }
     }
 

@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import { getEthPriceUsd } from './price-oracle';
 
 // ============ TYPES ============
 export type AIProvider = 'groq' | 'gemini' | 'huggingface';
@@ -261,6 +262,9 @@ export class MultiAIProvider {
         };
     }
 
+    // ── Token analysis cache (30s TTL) ────────────────────────────────────────
+    private tokenAnalysisCache = new Map<string, { result: TokenAnalysis; expiresAt: number }>();
+
     // ============ SPECIALIZED METHODS ============
     async analyzeToken(tokenAddress: string, tokenData: {
         liquidity: number;
@@ -270,7 +274,18 @@ export class MultiAIProvider {
         volume1m?: number;
         holderCount?: number;
         top10Concentration?: number;
+        priceChangeH1?: number;
+        buyTxH1?: number;
+        sellTxH1?: number;
+        fdvUsd?: number;
     }): Promise<TokenAnalysis> {
+        // ── Cache check: avoid redundant AI calls for same token ──
+        const cacheKey = tokenAddress.toLowerCase();
+        const cached = this.tokenAnalysisCache.get(cacheKey);
+        if (cached && cached.expiresAt > Date.now()) {
+            return cached.result;
+        }
+
         // Rule-based fast path (no AI key needed)
         const ruleResult = this.getRuleBasedRecommendation(tokenData);
 
@@ -286,41 +301,56 @@ export class MultiAIProvider {
             };
         }
 
-        const liquidityUSD = tokenData.liquidity * 3000;
+        const ethPrice    = await getEthPriceUsd().catch(() => 3000);
+        const liquidityUSD = tokenData.liquidity * ethPrice;
+        const volOverLiq   = liquidityUSD > 0 ? (tokenData.volume1m ?? 0) / liquidityUSD : 0;
+        const bsr          = tokenData.buySellRatio1m ?? 1;
+        const buyTx        = tokenData.buyTxH1 ?? 0;
+        const sellTx       = tokenData.sellTxH1 ?? 0;
+        const txRatio      = sellTx > 0 ? (buyTx / sellTx).toFixed(2) : buyTx > 0 ? '∞' : 'N/A';
+        const fdvRatio     = tokenData.fdvUsd && liquidityUSD > 0
+            ? (tokenData.fdvUsd / liquidityUSD).toFixed(1) : 'N/A';
+
         const prompt = `
-Anda adalah sniper token microcap profesional dengan modal kecil di Base Network.
-Analisis token ini untuk POTENSI PUMP CEPAT (10-20 menit):
+Anda adalah sniper token microcap profesional di Base Network. Harga ETH saat ini: $${ethPrice.toFixed(0)}.
+Analisis token berikut untuk POTENSI PUMP dalam 5-20 menit:
 
 Token: ${tokenAddress}
-Usia: ${Math.round(tokenData.ageSeconds)} detik (${(tokenData.ageSeconds / 60).toFixed(1)} menit)
+Usia: ${(tokenData.ageSeconds / 60).toFixed(1)} menit
 Likuiditas: $${liquidityUSD.toFixed(0)} (${tokenData.liquidity.toFixed(4)} ETH)
 Volume 24h: $${tokenData.volume24h.toFixed(0)}
-${tokenData.volume1m !== undefined ? `Volume 1m: $${tokenData.volume1m.toFixed(0)}` : ''}
-${tokenData.buySellRatio1m !== undefined ? `Buy/Sell ratio 1m: ${tokenData.buySellRatio1m.toFixed(2)}` : ''}
+${tokenData.volume1m !== undefined ? `Volume 1m: $${tokenData.volume1m.toFixed(0)} | Vol/Liq: ${(volOverLiq * 100).toFixed(0)}%` : ''}
+${tokenData.buySellRatio1m !== undefined ? `Buy/Sell ratio 1m: ${bsr.toFixed(2)}` : ''}
+${buyTx > 0 || sellTx > 0 ? `Tx 1h: ${buyTx} buy / ${sellTx} sell (ratio ${txRatio})` : ''}
+${tokenData.priceChangeH1 !== undefined ? `Perubahan harga 1h: ${tokenData.priceChangeH1 >= 0 ? '+' : ''}${tokenData.priceChangeH1.toFixed(1)}%` : ''}
+${tokenData.fdvUsd ? `FDV: $${tokenData.fdvUsd.toFixed(0)} | FDV/Liq: ${fdvRatio}x` : ''}
 ${tokenData.holderCount !== undefined ? `Holder: ${tokenData.holderCount}` : ''}
 ${tokenData.top10Concentration !== undefined ? `Top 10 konsentrasi: ${tokenData.top10Concentration}%` : ''}
 
-KRITERIA BUY (cek 3 dari 4):
-1. Ada buy pressure? (buy/sell ratio > 1.5 di 1 menit)
-2. Market making aktif? (volume/liquidity > 0.3)
-3. Tidak ada sell wall? (sell orders < 2x buy orders)
-4. Tidak terpusat? (top 10 concentration < 40%)
+SINYAL KUAT BUY:
+✅ Buy pressure nyata: BSR 1m > 2.0 DAN buy Tx 1h > sell Tx
+✅ Volume explosion: Vol 1m / Likuiditas > 30%
+✅ Momentum positif: price change 1h > +5%
+✅ Distribusi sehat: top10 < 40%, FDV/Liq < 20x
+✅ Token sangat baru: < 5 menit
 
-Jika 3+ terpenuhi → BUY confidence 70-100
-Jika 2 terpenuhi → BUY confidence 50-70
-Jika 1 atau kurang → HOLD
+SINYAL BAHAYA (langsung SKIP):
+🚫 BSR < 0.8 (lebih banyak seller dari buyer)
+🚫 Price change 1h < -10% (dump sedang terjadi)
+🚫 FDV/Liq > 50x (terlalu overvalued)
+🚫 Top10 > 70% (kemungkinan rug)
+🚫 Likuiditas < $3000
 
-Respond JSON (WAJIB HANYA JSON):
-{"recommendation":"BUY|HOLD|SKIP","confidence":0-100,"riskLevel":"LOW|MEDIUM|HIGH|CRITICAL","predictedProfit":0-200,"reasoning":"singkat"}
-
-Gunakan SKIP jika token terlalu berisiko atau tidak memenuhi kriteria minimum.
+Berikan skor confidence 0-100 berdasarkan jumlah sinyal kuat yang terpenuhi.
+Respond HANYA JSON (tidak ada teks lain):
+{"recommendation":"BUY|HOLD|SKIP","confidence":0-100,"riskLevel":"LOW|MEDIUM|HIGH|CRITICAL","predictedProfit":0-200,"reasoning":"max 20 kata"}
 `;
 
         const response = await this.query(prompt, 'groq');
 
         try {
             const parsed = JSON.parse(response.content);
-            return {
+            const result: TokenAnalysis = {
                 tokenAddress,
                 confidence:      parsed.confidence      || 50,
                 recommendation:  parsed.recommendation  || 'HOLD',
@@ -328,8 +358,11 @@ Gunakan SKIP jika token terlalu berisiko atau tidak memenuhi kriteria minimum.
                 predictedProfit: parsed.predictedProfit  || 0,
                 reasoning:       parsed.reasoning        || 'No reasoning provided'
             };
+            // Cache result for 30 seconds
+            this.tokenAnalysisCache.set(cacheKey, { result, expiresAt: Date.now() + 30_000 });
+            return result;
         } catch {
-            return {
+            const fallback: TokenAnalysis = {
                 tokenAddress,
                 confidence: 50,
                 recommendation: 'HOLD',
@@ -337,6 +370,8 @@ Gunakan SKIP jika token terlalu berisiko atau tidak memenuhi kriteria minimum.
                 predictedProfit: 0,
                 reasoning: 'Failed to parse AI response'
             };
+            this.tokenAnalysisCache.set(cacheKey, { result: fallback, expiresAt: Date.now() + 10_000 });
+            return fallback;
         }
     }
 
@@ -448,37 +483,72 @@ Gunakan SKIP jika token terlalu berisiko atau tidak memenuhi kriteria minimum.
         volume1m?: number;
         holderCount?: number;
         top10Concentration?: number;
+        priceChangeH1?: number;
+        buyTxH1?: number;
+        sellTxH1?: number;
+        fdvUsd?: number;
     }): { action: 'BUY' | 'HOLD'; confidence: number; reasoning: string } {
         let score = 0;
         const reasons: string[] = [];
 
-        const liquidityUSD = tokenData.liquidity * 3000;
+        // Use a reasonable ETH price estimate for rule-based (cached or fallback)
+        const ethEst = 3000;
+        const liquidityUSD = tokenData.liquidity * ethEst;
+
+        // Liquidity gates
+        if (liquidityUSD < 3000) return { action: 'HOLD', confidence: 0, reasoning: 'liq terlalu rendah' };
         if (liquidityUSD >= 5000)  { score += 20; reasons.push('liq OK'); }
-        if (liquidityUSD >= 10000) { score += 10; reasons.push('liq good'); }
+        if (liquidityUSD >= 15000) { score += 10; reasons.push('liq bagus'); }
 
+        // Buy/sell pressure
         const bsr = tokenData.buySellRatio1m ?? 1;
-        if (bsr > 1.5) { score += 30; reasons.push(`BSR ${bsr.toFixed(1)}`); }
-        if (bsr > 2.5) { score += 20; }
+        if (bsr < 0.8) { return { action: 'HOLD', confidence: 0, reasoning: 'lebih banyak seller' }; }
+        if (bsr > 1.5) { score += 25; reasons.push(`BSR ${bsr.toFixed(1)}`); }
+        if (bsr > 2.5) { score += 15; reasons.push('buy pressure kuat'); }
 
+        // Tx count signal (absolute buy vs sell)
+        const buyTx  = tokenData.buyTxH1 ?? 0;
+        const sellTx = tokenData.sellTxH1 ?? 0;
+        if (buyTx > 0 && buyTx > sellTx * 1.5) { score += 15; reasons.push(`${buyTx}buy/${sellTx}sell`); }
+
+        // Volume over liquidity
         const volOverLiq = tokenData.volume1m ? tokenData.volume1m / Math.max(liquidityUSD, 1) : 0;
-        if (volOverLiq > 0.3) { score += 25; reasons.push('vol/liq high'); }
+        if (volOverLiq > 0.3) { score += 20; reasons.push('vol/liq tinggi'); }
+        if (volOverLiq > 0.8) { score += 10; reasons.push('vol explosion'); }
 
+        // Price momentum
+        const pch1 = tokenData.priceChangeH1 ?? 0;
+        if (pch1 > 10)  { score += 10; reasons.push(`+${pch1.toFixed(0)}% 1h`); }
+        if (pch1 < -15) { score -= 20; reasons.push('dump 1h'); }
+
+        // FDV / liquidity ratio (lower = better)
+        if (tokenData.fdvUsd && liquidityUSD > 0) {
+            const fdvRatio = tokenData.fdvUsd / liquidityUSD;
+            if (fdvRatio < 10)  { score += 10; reasons.push('FDV OK'); }
+            if (fdvRatio > 50)  { score -= 15; reasons.push('FDV terlalu tinggi'); }
+        }
+
+        // Holder distribution
         const holders = tokenData.holderCount ?? 0;
-        if (holders > 100) { score += 15; reasons.push(`${holders} holders`); }
+        if (holders > 50)  { score += 10; reasons.push(`${holders} holders`); }
+        if (holders > 200) { score += 5; }
 
+        // Concentration
         const conc = tokenData.top10Concentration ?? 100;
-        if (conc < 40) { score += 10; reasons.push('spread OK'); }
-        if (conc > 70) { score -= 20; reasons.push('concentrated!'); }
+        if (conc < 40) { score += 10; reasons.push('spread baik'); }
+        if (conc > 70) { score -= 20; reasons.push('terkonsentrasi!'); }
 
-        if (tokenData.ageSeconds < 60)  { score += 10; reasons.push('very fresh'); }
-        if (tokenData.ageSeconds > 300) { score -= 15; reasons.push('stale'); }
+        // Token freshness
+        if (tokenData.ageSeconds < 60)  { score += 10; reasons.push('sangat baru'); }
+        if (tokenData.ageSeconds < 180) { score += 5; }
+        if (tokenData.ageSeconds > 300) { score -= 15; reasons.push('sudah lama'); }
 
         score = Math.max(0, Math.min(100, score));
 
         return {
             action:     score >= 55 ? 'BUY' : 'HOLD',
             confidence: score,
-            reasoning:  reasons.join(', ') || 'not enough signals',
+            reasoning:  reasons.join(', ') || 'sinyal tidak cukup',
         };
     }
 
