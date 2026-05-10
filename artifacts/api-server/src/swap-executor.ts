@@ -147,7 +147,6 @@ export class SwapExecutor extends EventEmitter {
         DCA_TRIGGER_MULT:           0.98,
         DCA_ENABLED:                process.env.DCA_ENABLED === 'true', // default OFF (was default ON)
         // ── Position Management ───────────────────────────────────────────────
-        MAX_OPEN_POSITIONS:         parseInt(process.env.MAX_OPEN_POSITIONS   || '3'),   // max simultaneous trades
         MAX_HOLD_MINUTES:           parseInt(process.env.MAX_HOLD_MINUTES     || '30'),  // exit stale positions
         EMERGENCY_EXIT_PCT:         parseFloat(process.env.EMERGENCY_EXIT_PCT || '-50'), // rug detection: exit if drops this fast
         EMERGENCY_EXIT_MINUTES:     2,  // window for emergency exit check (first N minutes of trade)
@@ -565,10 +564,10 @@ export class SwapExecutor extends EventEmitter {
                 if (liqCheck.liquidityUsd > 0) {
                     const liqDrop = ((position.initialLiquidityUsd - liqCheck.liquidityUsd) / position.initialLiquidityUsd) * 100;
                     if (liqDrop >= this.CONFIG.LIQUIDITY_DROP_EXIT_PCT) {
-                        console.log(`💧 LIQUIDITY GUARD: ${position.tokenSymbol} likuiditas turun ${liqDrop.toFixed(0)}% — keluar!`);
+                        console.log(`💧 LIQUIDITY GUARD: ${position.tokenSymbol} liquidity dropped ${liqDrop.toFixed(0)}% — exiting!`);
                         this.emit('stop-loss', {
                             tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
-                            reason: `💧 Likuiditas turun ${liqDrop.toFixed(0)}% (rug/dump suspected)`,
+                            reason: `💧 Liquidity dropped ${liqDrop.toFixed(0)}% (rug/dump suspected)`,
                             peakMult, sourceWallet: position.sourceWallet
                         });
                         await this.sell(tokenAddress, 100);
@@ -581,7 +580,7 @@ export class SwapExecutor extends EventEmitter {
         // ─── PROFIT LADDER TP1: sell 30% at 1.5x (+50%) ───
         if (!position.takeProfit1Hit && multiplier >= this.CONFIG.TAKE_PROFIT_1_X) {
             const sellPct = this.CONFIG.TAKE_PROFIT_1_PCT;
-            console.log(`🎯 TP1 at ${multiplier.toFixed(2)}x (+${((multiplier-1)*100).toFixed(0)}%) — jual ${sellPct}%`);
+            console.log(`🎯 TP1 at ${multiplier.toFixed(2)}x (+${((multiplier-1)*100).toFixed(0)}%) — sell ${sellPct}%`);
             this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 1, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
             await this.sell(tokenAddress, sellPct);
             position.takeProfit1Hit = true;
@@ -596,7 +595,7 @@ export class SwapExecutor extends EventEmitter {
             const remaining = 100 - (position.tp1SoldPct || this.CONFIG.TAKE_PROFIT_1_PCT);
             const tp2Pct    = this.CONFIG.TAKE_PROFIT_2_PCT;
             const sellPct   = remaining > 0 ? Math.min(100, Math.round((tp2Pct / remaining) * 100)) : 100;
-            console.log(`🎯 TP2 at ${multiplier.toFixed(2)}x (+${((multiplier-1)*100).toFixed(0)}%) — jual ${sellPct}% dari sisa`);
+            console.log(`🎯 TP2 at ${multiplier.toFixed(2)}x (+${((multiplier-1)*100).toFixed(0)}%) — sell ${sellPct}% of remaining`);
             this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 2, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
             await this.sell(tokenAddress, sellPct);
             position.takeProfit2Hit = true;
@@ -607,7 +606,7 @@ export class SwapExecutor extends EventEmitter {
         // ─── PROFIT LADDER TP3: trailing stop on remaining ~40% ───
         if (position.takeProfit2Hit && !position.takeProfit3Hit && profitPct >= this.CONFIG.TRAILING_TP3_ACTIVATE_PCT) {
             if (dropFromPeak >= this.CONFIG.TRAILING_TP3_FROM_PEAK_PCT) {
-                console.log(`🎯 TP3 Trailing — turun ${dropFromPeak.toFixed(1)}% dari puncak → jual semua sisa`);
+                console.log(`🎯 TP3 Trailing — dropped ${dropFromPeak.toFixed(1)}% from peak — sell all remaining`);
                 this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 3, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
                 await this.sell(tokenAddress, 100);
                 position.takeProfit3Hit = true;
@@ -624,8 +623,8 @@ export class SwapExecutor extends EventEmitter {
             position.dcaDone = true;
         }
 
-        // ─── DYNAMIC EXIT: momentum-based OHLCV exit (aktif setelah TP1) ───
-        // Gunakan sinyal momentum & volume dari GeckoTerminal untuk exit lebih presisi
+        // ─── DYNAMIC EXIT: momentum-based OHLCV exit (active after TP1) ───
+        // Uses momentum & volume signals from GeckoTerminal for more precise exits
         if (position.takeProfit1Hit && !position.takeProfit3Hit) {
             try {
                 const exitSignal = await calculateExit({
@@ -641,7 +640,7 @@ export class SwapExecutor extends EventEmitter {
                 });
 
                 if (exitSignal === 'SELL_ALL_PANIC') {
-                    console.log(`📉 [DynamicExit] PANIC — reversal momentum terdeteksi, jual 100% ${position.tokenSymbol}`);
+                    console.log(`📉 [DynamicExit] PANIC — reversal momentum detected, selling 100% of ${position.tokenSymbol}`);
                     this.emit('stop-loss', {
                         tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
                         reason: `📉 Reversal momentum (dynamic exit)`,
@@ -653,7 +652,7 @@ export class SwapExecutor extends EventEmitter {
                 }
 
                 if (exitSignal === 'SELL_50_PERCENT' && !position.dynamicSell50Done) {
-                    console.log(`📉 [DynamicExit] Momentum melemah — jual 50% ${position.tokenSymbol}`);
+                    console.log(`📉 [DynamicExit] Momentum weakening — selling 50% of ${position.tokenSymbol}`);
                     this.emit('take-profit', {
                         tokenAddress, tokenSymbol: position.tokenSymbol,
                         level: 2, multiplier, profitPct,
@@ -666,14 +665,14 @@ export class SwapExecutor extends EventEmitter {
                 }
 
                 if (exitSignal === 'SELL_25_PERCENT' && !position.dynamicSell25Done) {
-                    console.log(`📉 [DynamicExit] Scale out — jual 25% ${position.tokenSymbol}`);
+                    console.log(`📉 [DynamicExit] Scale out — selling 25% of ${position.tokenSymbol}`);
                     await this.sell(tokenAddress, 25);
                     position.dynamicSell25Done = true;
                     return;
                 }
 
                 if (exitSignal === 'SELL_ALL_TRAILING' || exitSignal === 'SELL_ALL_TIMEOUT') {
-                    console.log(`📉 [DynamicExit] ${exitSignal} — jual sisa ${position.tokenSymbol}`);
+                    console.log(`📉 [DynamicExit] ${exitSignal} — selling all remaining ${position.tokenSymbol}`);
                     this.emit('take-profit', {
                         tokenAddress, tokenSymbol: position.tokenSymbol,
                         level: 3, multiplier, profitPct,
@@ -684,7 +683,7 @@ export class SwapExecutor extends EventEmitter {
                     position.takeProfit3Hit = true;
                     return;
                 }
-            } catch { /* silent — jangan blokir position monitor */ }
+            } catch { /* silent — don't block position monitor */ }
         }
     }
 
@@ -892,12 +891,12 @@ export class SwapExecutor extends EventEmitter {
 
     // ============ SEND ETH ============
     async sendEth(to: Address, amountEth: number): Promise<{ success: boolean; txHash?: string; error?: string }> {
-        if (!this.isReady) return { success: false, error: 'Executor belum siap' };
+        if (!this.isReady) return { success: false, error: 'Executor not ready' };
         try {
             const value = parseEther(amountEth.toString());
             const { wei: balance } = await this.getBalance();
             if (balance < value + parseEther('0.0001')) {
-                return { success: false, error: `Saldo tidak cukup: ${formatEther(balance)} ETH` };
+                return { success: false, error: `Insufficient balance: ${formatEther(balance)} ETH` };
             }
             const gasPrice = await this.getGasPrice();
             const txHash = await (this.walletClient as any).sendTransaction({ to, value, ...gasPrice });
@@ -911,13 +910,13 @@ export class SwapExecutor extends EventEmitter {
 
     // ============ SEND TOKEN ============
     async sendToken(tokenAddress: Address, to: Address, amountHuman: number, decimals: number): Promise<{ success: boolean; txHash?: string; error?: string }> {
-        if (!this.isReady) return { success: false, error: 'Executor belum siap' };
+        if (!this.isReady) return { success: false, error: 'Executor not ready' };
         try {
             const amount = parseUnits(amountHuman.toString(), decimals);
             const balance = await this.publicClient.readContract({
                 address: tokenAddress, abi: ERC20_ABI, functionName: 'balanceOf', args: [this.account.address]
             }) as bigint;
-            if (balance < amount) return { success: false, error: 'Saldo token tidak cukup' };
+            if (balance < amount) return { success: false, error: 'Insufficient token balance' };
             const gasPrice = await this.getGasPrice();
             const txHash = await (this.walletClient as any).writeContract({
                 address: tokenAddress, abi: ERC20_ABI, functionName: 'transfer', args: [to, amount], ...gasPrice

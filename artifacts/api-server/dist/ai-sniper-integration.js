@@ -364,6 +364,15 @@ class AISniperBot extends events_1.EventEmitter {
     setupEventHandlers() {
         // ─── New pool from Flashblocks ───
         this.scanner.on('pool-ready', async (pool) => {
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                console.log(`🚫 [Flashblocks] Circuit breaker active (${this.riskManager.getCircuitBreakerReason()}) — skipping pool-ready`);
+                return;
+            }
+            const openCount = this.executor?.getOpenPositions().length ?? 0;
+            if (openCount >= this.CONFIG.MAX_OPEN_POSITIONS) {
+                console.log(`⚠️  [Flashblocks] Max positions reached (${openCount}/${this.CONFIG.MAX_OPEN_POSITIONS}) — skipping pool-ready`);
+                return;
+            }
             const tokenAddress = pool.token0;
             console.log(`\n🎯 New pool: ${pool.poolAddress}`);
             const analysis = await this.ai.analyzeToken(tokenAddress, {
@@ -765,11 +774,20 @@ class AISniperBot extends events_1.EventEmitter {
                 (d.tokenAddress ? `🚫 <i>Token di-blacklist otomatis</i>` : ''));
         });
         this.executor.on('dca-signal', async (d) => {
+            if (this.riskManager.isCircuitBreakerTripped()) {
+                console.log(`🚫 [DCA] Circuit breaker active (${this.riskManager.getCircuitBreakerReason()}) — skipping DCA`);
+                return;
+            }
+            const openCount = this.executor?.getOpenPositions().length ?? 0;
+            if (openCount >= this.CONFIG.MAX_OPEN_POSITIONS) {
+                console.log(`⚠️  [DCA] Max positions reached (${openCount}/${this.CONFIG.MAX_OPEN_POSITIONS}) — skipping DCA`);
+                return;
+            }
             console.log(`\n📉 DCA signal: ${d.tokenSymbol}`);
             const dcaAmount = await this.calculateDynamicAmount();
-            this.addLog('info', `DCA: beli lagi ${dcaAmount.toFixed(5)} ETH ${d.tokenSymbol}`, 'Auto DCA');
+            this.addLog('info', `DCA: rebuy ${dcaAmount.toFixed(5)} ETH ${d.tokenSymbol}`, 'Auto DCA');
             await this.executeBuy(d.tokenAddress, dcaAmount);
-            this.sendTelegram(`📉 <b>DCA triggered</b>\nToken: <code>${d.tokenSymbol}</code>\nJumlah: ${dcaAmount.toFixed(5)} ETH`);
+            this.sendTelegram(`📉 <b>DCA triggered</b>\nToken: <code>${d.tokenSymbol}</code>\nAmount: ${dcaAmount.toFixed(5)} ETH`);
         });
     }
     // ============ TRADE DECISION ============

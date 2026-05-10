@@ -137,7 +137,7 @@ interface SafetyResult {
 export class SmartScreener extends EventEmitter {
     private config:       ScreenerConfig;
     private signals:      Map<string, ScreenerSignal> = new Map();
-    private seenPairs:    Set<string> = new Set();
+    private seenPairs:    Map<string, number> = new Map(); // pairAddress → expiry timestamp
     private interval:     NodeJS.Timeout | null = null;
     private pruneTimer:   NodeJS.Timeout | null = null;
     private isScanning    = false;
@@ -279,7 +279,7 @@ export class SmartScreener extends EventEmitter {
         const sbRatio = sellTxH1 > 0 ? sellTxH1 / Math.max(buyTxH1, 1) : 0;
         if (sbRatio > this.config.maxSellBuyRatio) return;
 
-        this.seenPairs.add(pairAddress);
+        this.seenPairs.set(pairAddress, Date.now() + this.SIGNAL_TTL_MS);
 
         // ── Safety check (GoPlus) ─────────────────────────────────────────────
         const safety = await this.checkSafety(tokenAddress);
@@ -513,11 +513,17 @@ export class SmartScreener extends EventEmitter {
 
     private prune(): void {
         const now = Date.now();
-        let pruned = 0;
+        let prunedSignals = 0;
+        let prunedPairs   = 0;
         for (const [addr, sig] of this.signals) {
-            if (sig.expiresAt < now) { this.signals.delete(addr); pruned++; }
+            if (sig.expiresAt < now) { this.signals.delete(addr); prunedSignals++; }
         }
-        if (pruned) console.log(`🔍 [SmartScreener] Pruned ${pruned} expired signals`);
+        for (const [addr, expiry] of this.seenPairs) {
+            if (expiry < now) { this.seenPairs.delete(addr); prunedPairs++; }
+        }
+        if (prunedSignals || prunedPairs) {
+            console.log(`🔍 [SmartScreener] Pruned ${prunedSignals} signals, ${prunedPairs} seen-pairs`);
+        }
     }
 
     // ─── Stats ────────────────────────────────────────────────────────────────
