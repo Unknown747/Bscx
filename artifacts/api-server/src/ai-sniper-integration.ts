@@ -14,7 +14,7 @@ import {
     formatWhaleTelegramMsg, type WhaleCandidate, type SimulationResult
 } from './whale-finder';
 import { whaleMonitor } from './whale-monitor';
-import { getEthPriceUsd } from './price-oracle';
+import { getEthPriceUsd, getBestDexPair } from './price-oracle';
 import {
     dbInsertTrade, dbGetTrades,
     dbAddToBlacklist, dbRemoveFromBlacklist, dbGetBlacklist, dbIsBlacklisted,
@@ -84,6 +84,25 @@ interface RuntimeConfig {
 
 function sanitizeTg(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fmtHoldTime(ms: number): string {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) return `${h}j ${m}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+}
+
+function fmtAddr(addr: string): string {
+    if (!addr || addr.length < 10) return addr;
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
+function fmtUsd(eth: number, ethPrice: number): string {
+    return `$${(eth * ethPrice).toFixed(2)}`;
 }
 
 export class AISniperBot extends EventEmitter {
@@ -373,24 +392,54 @@ export class AISniperBot extends EventEmitter {
         this.copyMonitor.on('copy-opportunity', async (opportunity) => {
             console.log(`\n🐋 Copy opportunity from ${opportunity.walletName}`);
 
-            // Show simulation result via Telegram before executing
-            if (opportunity.simulation) {
-                const sim = opportunity.simulation;
-                await this.sendTelegram(
-                    `🔮 <b>Simulasi Copy Trade</b>\n` +
-                    `Whale: <b>${sanitizeTg(opportunity.walletName)}</b>\n` +
-                    `Token: <code>${sanitizeTg(opportunity.tokenSymbol)}</code>\n\n` +
-                    `📊 Estimasi P&L: <b>${sim.estimatedProfit >= 0 ? '+' : ''}${sim.estimatedProfit}%</b>\n` +
-                    `⚠️ Risiko: ${sim.estimatedRisk}\n` +
-                    `📈 Win Rate Whale: ${sim.winRate}%\n` +
-                    `📋 ${sanitizeTg(sim.summary)}\n\n` +
-                    `⚡ Bot akan otomatis execute copy trade...`
-                );
-            }
-
             const walletInfo = this.copyMonitor.getWallets().find(
                 w => w.address.toLowerCase() === opportunity.walletAddress.toLowerCase()
             );
+
+            // ── Fetch live token info from GeckoTerminal ──
+            let tokenMarketLine = '';
+            try {
+                const pair = await getBestDexPair(opportunity.tokenAddress);
+                if (pair) {
+                    const liqUsd   = pair.liquidity.usd;
+                    const priceUsd = parseFloat(pair.priceUsd || '0');
+                    const priceStr = priceUsd < 0.001 ? priceUsd.toExponential(3) : priceUsd.toFixed(6);
+                    tokenMarketLine = `💧 Likuiditas: <b>$${liqUsd.toLocaleString('id-ID')}</b> | Harga: <b>$${priceStr}</b>\n`;
+                }
+            } catch { /* silent */ }
+
+            // ── Whale stats line ──
+            const whaleStatsLine = (walletInfo && walletInfo.copiedTrades > 0)
+                ? `📊 Riwayat copy: <b>${walletInfo.copiedTrades} trades</b> | WR: <b>${walletInfo.winRate.toFixed(0)}%</b> | P&L: ${walletInfo.totalPnL >= 0 ? '+' : ''}${walletInfo.totalPnL.toFixed(1)}%\n`
+                : `📊 Whale baru pertama kali di-copy\n`;
+
+            // ── Simulation line ──
+            const sim = opportunity.simulation;
+            const simLine = sim
+                ? `🔮 Simulasi: <b>${sim.estimatedProfit >= 0 ? '+' : ''}${sim.estimatedProfit}%</b> est. | Risiko: ${sim.estimatedRisk} | WR sim: ${sim.winRate}%\n`
+                : '';
+
+            // ── TX link ──
+            const txLine = opportunity.txHash
+                ? `🔗 TX Whale: <a href="https://basescan.org/tx/${opportunity.txHash}">Lihat di Basescan</a>\n`
+                : '';
+
+            // ── Send detection alert ──
+            await this.sendTelegram(
+                `🐋 <b>Copy Trade Terdeteksi!</b>\n\n` +
+                `👤 Whale: <b>${sanitizeTg(opportunity.walletName)}</b>\n` +
+                `<code>${opportunity.walletAddress}</code> | <a href="https://basescan.org/address/${opportunity.walletAddress}">Profil</a>\n\n` +
+                `🪙 Token: <b>${sanitizeTg(opportunity.tokenSymbol)}</b>\n` +
+                `<code>${opportunity.tokenAddress}</code> | <a href="https://basescan.org/token/${opportunity.tokenAddress}">Info Token</a>\n` +
+                tokenMarketLine +
+                `\n` +
+                whaleStatsLine +
+                simLine +
+                txLine +
+                `\n⏳ <i>Menganalisis wallet dengan AI...</i>`
+            );
+
+            // ── AI wallet analysis ──
             const walletStats = walletInfo
                 ? {
                     totalTrades: walletInfo.copiedTrades,
@@ -401,34 +450,59 @@ export class AISniperBot extends EventEmitter {
                         : 0,
                   }
                 : { totalTrades: 0, winRate: 0, avgHoldTime: 300, avgProfit: 0 };
+
             const walletAnalysis = await this.ai.analyzeWallet(
                 opportunity.walletAddress,
                 walletStats
             );
 
             if (walletAnalysis.shouldCopy && walletAnalysis.score > this.CONFIG.AUTO_COPY_SCORE_THRESHOLD) {
-                const copyAmt = await this.calculateDynamicCopyAmount();
+                const copyAmt  = await this.calculateDynamicCopyAmount();
+                const ethPrice = await getEthPriceUsd().catch(() => 3000);
+
                 console.log(`   ✅ COPY APPROVED: ${walletAnalysis.reason} | Amount: ${copyAmt.toFixed(5)} ETH`);
                 this.addLog('copy-trade', `Copy dari ${opportunity.walletName}`, `${opportunity.tokenSymbol} · score ${walletAnalysis.score}/100`);
+
+                await this.sendTelegram(
+                    `✅ <b>AI APPROVE — Eksekusi Sekarang!</b>\n\n` +
+                    `🤖 Skor AI: <b>${walletAnalysis.score}/100</b> | Pola: <b>${walletAnalysis.tradingPattern}</b>\n` +
+                    `💡 <i>${sanitizeTg(walletAnalysis.reason)}</i>\n\n` +
+                    `🪙 Token: <b>${sanitizeTg(opportunity.tokenSymbol)}</b>\n` +
+                    `<code>${opportunity.tokenAddress}</code>\n\n` +
+                    `💰 Copy Amount: <b>${copyAmt.toFixed(5)} ETH</b> (~${fmtUsd(copyAmt, ethPrice)})\n` +
+                    `⚡ Eksekusi dalam beberapa detik...`
+                );
+
                 await this.executeCopyTrade({ ...opportunity, dynamicAmount: copyAmt });
             } else {
                 console.log(`   ❌ COPY REJECTED: ${walletAnalysis.reason}`);
                 this.addLog('info', `Copy ditolak: ${opportunity.walletName}`, walletAnalysis.reason);
+
+                await this.sendTelegram(
+                    `❌ <b>AI REJECT — Copy Dibatalkan</b>\n\n` +
+                    `🤖 Skor AI: <b>${walletAnalysis.score}/100</b> | Pola: <b>${walletAnalysis.tradingPattern}</b>\n` +
+                    `💡 <i>${sanitizeTg(walletAnalysis.reason)}</i>\n\n` +
+                    `🪙 Token: <b>${sanitizeTg(opportunity.tokenSymbol)}</b>\n` +
+                    `<code>${opportunity.tokenAddress}</code>\n\n` +
+                    `📊 Data whale: ${walletStats.totalTrades} trades | ${walletStats.winRate.toFixed(0)}% WR | rata-rata ${walletStats.avgProfit >= 0 ? '+' : ''}${walletStats.avgProfit.toFixed(1)}% per trade`
+                );
             }
         });
 
         // ─── Simulation blocked ───
         this.copyMonitor.on('simulation-blocked', async (data) => {
-            if (data.simulation) {
-                await this.sendTelegram(
-                    `⛔ <b>Copy Trade Diblokir (Simulasi)</b>\n` +
-                    `Whale: <b>${sanitizeTg(data.walletName)}</b>\n` +
-                    `Token: <code>${sanitizeTg(data.tokenSymbol)}</code>\n` +
-                    `📊 Est. P&L: ${data.simulation.estimatedProfit}%\n` +
-                    `⚠️ Risiko: ${data.simulation.estimatedRisk}\n` +
-                    `📋 ${sanitizeTg(data.simulation.summary)}`
-                );
-            }
+            const sim = data.simulation;
+            await this.sendTelegram(
+                `⛔ <b>Copy Trade Diblokir — Simulasi Gagal</b>\n\n` +
+                `👤 Whale: <b>${sanitizeTg(data.walletName)}</b>\n` +
+                `<code>${data.walletAddress ?? ''}</code>\n\n` +
+                `🪙 Token: <b>${sanitizeTg(data.tokenSymbol)}</b>\n` +
+                `<code>${data.tokenAddress ?? ''}</code>\n\n` +
+                (sim
+                    ? `📊 Est. P&L: ${sim.estimatedProfit >= 0 ? '+' : ''}${sim.estimatedProfit}% | Risiko: <b>${sim.estimatedRisk}</b>\n` +
+                      `📋 <i>${sanitizeTg(sim.summary)}</i>`
+                    : `⚠️ Profit terlalu rendah atau risiko terlalu tinggi`)
+            );
         });
 
         // ─── Feature 1: Auto-exit when whale exits ───
@@ -492,12 +566,30 @@ export class AISniperBot extends EventEmitter {
         this.executor.on('buy-success', (d) => {
             this.emit('buy-success', d);
             this.addLog('buy-success', `BUY ${d.tokenSymbol}`, `TX: ${d.txHash?.slice(0, 18)}...`);
-            this.sendTelegram(
-                `✅ <b>BUY berhasil</b>\n` +
-                `Token: <code>${d.tokenSymbol}</code>\n` +
-                `Modal: ${d.amountIn ? (parseFloat(d.amountIn.toString()) / 1e18).toFixed(5) : '?'} ETH\n` +
-                `TX: <a href="https://basescan.org/tx/${d.txHash}">${d.txHash?.slice(0, 18)}...</a>`
-            );
+            const amtEth = d.amountIn ? parseFloat(d.amountIn.toString()) / 1e18 : 0;
+            const sourceWalletLine = d.sourceWallet ? `🐋 Copy dari: <b>${sanitizeTg(d.sourceWallet)}</b>\n` : '';
+            const tokenAddrLine = d.tokenAddress
+                ? `<code>${d.tokenAddress}</code> | <a href="https://basescan.org/token/${d.tokenAddress}">Info Token</a>\n`
+                : '';
+            getEthPriceUsd().then(ethPrice => {
+                this.sendTelegram(
+                    `✅ <b>BUY Berhasil!</b>\n\n` +
+                    sourceWalletLine +
+                    `🪙 Token: <b>${sanitizeTg(d.tokenSymbol || 'UNKNOWN')}</b>\n` +
+                    tokenAddrLine +
+                    `\n💰 Modal: <b>${amtEth.toFixed(5)} ETH</b> (~${fmtUsd(amtEth, ethPrice)})\n` +
+                    `🔗 <a href="https://basescan.org/tx/${d.txHash}">Lihat TX di Basescan</a>`
+                );
+            }).catch(() => {
+                this.sendTelegram(
+                    `✅ <b>BUY Berhasil!</b>\n\n` +
+                    sourceWalletLine +
+                    `🪙 Token: <b>${sanitizeTg(d.tokenSymbol || 'UNKNOWN')}</b>\n` +
+                    tokenAddrLine +
+                    `\n💰 Modal: <b>${amtEth.toFixed(5)} ETH</b>\n` +
+                    `🔗 <a href="https://basescan.org/tx/${d.txHash}">Lihat TX di Basescan</a>`
+                );
+            });
         });
 
         this.executor.on('buy-failed', (d) => {
@@ -554,11 +646,20 @@ export class AISniperBot extends EventEmitter {
                 reason:       'take-profit',
                 tpLevel:      d.level,
             });
+            const holdStrTp   = d.holdMs ? fmtHoldTime(d.holdMs) : '?';
+            const profitPctTp = d.profitPct ?? (d.multiplier ? (d.multiplier - 1) * 100 : 0);
+            const srcLineTp   = d.sourceWallet ? `🐋 Whale: <b>${sanitizeTg(d.sourceWallet)}</b>\n` : '';
+            const addrLineTp  = d.tokenAddress
+                ? `<code>${d.tokenAddress}</code> | <a href="https://basescan.org/token/${d.tokenAddress}">Info Token</a>\n`
+                : '';
             this.sendTelegram(
-                `🎯 <b>TAKE PROFIT TP${d.level}</b>\n` +
-                `Token: <code>${d.tokenSymbol}</code>\n` +
-                `Multiplier: ${d.multiplier?.toFixed(2)}x\n` +
-                `Profit: +${((d.multiplier ?? 1) - 1) * 100 | 0}%`
+                `🎯 <b>TAKE PROFIT TP${d.level}!</b>\n\n` +
+                `🪙 Token: <b>${sanitizeTg(d.tokenSymbol || 'UNKNOWN')}</b>\n` +
+                addrLineTp +
+                srcLineTp +
+                `\n📈 Profit: <b>+${profitPctTp.toFixed(1)}%</b> (${d.multiplier?.toFixed(2) ?? '?'}x)\n` +
+                `⏱️ Hold: ${holdStrTp}\n` +
+                (d.txHash ? `🔗 <a href="https://basescan.org/tx/${d.txHash}">Lihat TX di Basescan</a>` : '')
             );
         });
 
@@ -592,11 +693,20 @@ export class AISniperBot extends EventEmitter {
             const isTrailing  = d.reason?.includes('Trailing');
             const icon  = isEmergency ? '🚨' : isTimeout ? '⏰' : '🛑';
             const title = isEmergency ? 'EMERGENCY EXIT (Rug!)' : isTimeout ? 'TIMEOUT EXIT' : isTrailing ? 'TRAILING STOP LOSS' : 'STOP LOSS';
+            const holdStrSl  = d.holdMs ? fmtHoldTime(d.holdMs) : '?';
+            const srcLineSl  = d.sourceWallet ? `🐋 Whale: <b>${sanitizeTg(d.sourceWallet)}</b>\n` : '';
+            const addrLineSl = d.tokenAddress
+                ? `<code>${d.tokenAddress}</code> | <a href="https://basescan.org/token/${d.tokenAddress}">Info Token</a>\n`
+                : '';
             this.sendTelegram(
-                `${icon} <b>${title}</b>\n` +
-                `Token: <code>${d.tokenSymbol}</code>\n` +
-                `P&L: ${(d.profitPct ?? 0) >= 0 ? '+' : ''}${d.profitPct?.toFixed(1) ?? '?'}%\n` +
-                `Alasan: ${d.reason || 'Fixed SL'}`
+                `${icon} <b>${title}</b>\n\n` +
+                `🪙 Token: <b>${sanitizeTg(d.tokenSymbol || 'UNKNOWN')}</b>\n` +
+                addrLineSl +
+                srcLineSl +
+                `\n📉 P&L: <b>${(d.profitPct ?? 0) >= 0 ? '+' : ''}${d.profitPct?.toFixed(1) ?? '?'}%</b>\n` +
+                `⏱️ Hold: ${holdStrSl}\n` +
+                `💡 Alasan: ${sanitizeTg(d.reason || 'Fixed SL')}\n` +
+                (d.tokenAddress ? `🚫 <i>Token di-blacklist otomatis</i>` : '')
             );
         });
 
