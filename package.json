@@ -1,0 +1,11 @@
+{
+  "name": "base-sniper-ultimate",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "cd artifacts/api-server && npm install && npm run build && cd ../base-sniper && npm install && npm run build",
+    "start": "node artifacts/api-server/supervisor.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

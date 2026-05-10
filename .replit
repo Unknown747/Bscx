@@ -56,5 +56,5 @@ externalPort = 80
 
 [deployment]
 deploymentTarget = "vm"
-run = ["bash", "start.sh"]
-build = ["bash", "-c", "cd artifacts/api-server && npm install && npm run build && cd ../base-sniper && npm install && npm run build"]
+run = ["npm", "run", "start"]
+build = ["npm", "run", "build"]
