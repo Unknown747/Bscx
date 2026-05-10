@@ -93,6 +93,6 @@ localPort = 8080
 externalPort = 8080
 
 [deployment]
-deploymentTarget = "cloudrun"
+deploymentTarget = "vm"
 run = ["node", "artifacts/api-server/dist/index.js"]
 build = ["bash", "-c", "cd artifacts/base-sniper && npm install && npm run build && cd ../api-server && npm install && npm run build"]
