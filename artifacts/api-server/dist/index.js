@@ -239,6 +239,46 @@ app.post('/api/settings', (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// ============ SMART SCREENER ============
+app.get('/api/screener/signals', (_req, res) => {
+    const minSig = _req.query.minSignal;
+    const valid = ['STRONG_BUY', 'BUY', 'WATCH', 'SKIP'];
+    const min = valid.includes(minSig ?? '') ? minSig : undefined;
+    res.json({
+        signals: bot.getScreenerSignals(min),
+        enabled: bot.isSmartScreenerEnabled(),
+        timestamp: Date.now(),
+    });
+});
+app.get('/api/screener/stats', (_req, res) => {
+    res.json({ ...bot.getScreenerStats(), enabled: bot.isSmartScreenerEnabled() });
+});
+app.get('/api/screener/config', (_req, res) => {
+    res.json(bot.getScreenerConfig());
+});
+app.post('/api/screener/config', (req, res) => {
+    const body = req.body;
+    if (!body || typeof body !== 'object') {
+        res.status(400).json({ error: 'Invalid payload' });
+        return;
+    }
+    try {
+        bot.updateScreenerConfig(body);
+        res.json({ ok: true, config: bot.getScreenerConfig() });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+app.post('/api/screener/toggle', (req, res) => {
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') {
+        res.status(400).json({ error: 'enabled must be boolean' });
+        return;
+    }
+    bot.setSmartScreenerEnabled(enabled);
+    res.json({ ok: true, enabled });
+});
 // ============ CHART (OHLCV via GeckoTerminal) ============
 // Simple in-process cache: tokenAddress → { data, expiresAt }
 const chartCache = new Map();

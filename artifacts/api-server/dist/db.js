@@ -43,6 +43,12 @@ exports.dbGetPushSubscriptions = dbGetPushSubscriptions;
 exports.dbSavePushSubscription = dbSavePushSubscription;
 exports.dbDeletePushSubscription = dbDeletePushSubscription;
 exports.dbGetPushSubscriptionCount = dbGetPushSubscriptionCount;
+exports.dbSaveSettings = dbSaveSettings;
+exports.dbLoadSettings = dbLoadSettings;
+exports.dbSaveRuntimeConfig = dbSaveRuntimeConfig;
+exports.dbLoadRuntimeConfig = dbLoadRuntimeConfig;
+exports.dbSaveScreenerConfig = dbSaveScreenerConfig;
+exports.dbLoadScreenerConfig = dbLoadScreenerConfig;
 const sql_js_1 = __importDefault(require("sql.js"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -136,6 +142,12 @@ async function initDb() {
 
             CREATE INDEX IF NOT EXISTS idx_wwe_address ON whale_waitlist_events(address);
             CREATE INDEX IF NOT EXISTS idx_wwe_time    ON whale_waitlist_events(recorded_at);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
 
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 endpoint   TEXT PRIMARY KEY,
@@ -461,6 +473,34 @@ function dbDeletePushSubscription(endpoint) {
 function dbGetPushSubscriptionCount() {
     const row = runGet('SELECT COUNT(*) as cnt FROM push_subscriptions');
     return row?.cnt ?? 0;
+}
+// ── App Settings (persisted runtime config) ────────────────────────────────────
+function dbSaveSettings(key, value) {
+    runExec(`INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, [key, JSON.stringify(value), Date.now()]);
+}
+function dbLoadSettings(key) {
+    const row = runGet('SELECT value FROM app_settings WHERE key = ?', [key]);
+    if (!row)
+        return null;
+    try {
+        return JSON.parse(row.value);
+    }
+    catch {
+        return null;
+    }
+}
+function dbSaveRuntimeConfig(config) {
+    dbSaveSettings('runtime_config', config);
+}
+function dbLoadRuntimeConfig() {
+    return dbLoadSettings('runtime_config');
+}
+function dbSaveScreenerConfig(config) {
+    dbSaveSettings('screener_config', config);
+}
+function dbLoadScreenerConfig() {
+    return dbLoadSettings('screener_config');
 }
 exports.default = { initDb };
 //# sourceMappingURL=db.js.map

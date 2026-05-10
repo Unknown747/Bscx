@@ -11,6 +11,7 @@ import TradeHistory from './TradeHistory';
 import WhaleLeaderboard from './WhaleLeaderboard';
 import Backtest from './Backtest';
 import DailyReport from './DailyReport';
+import SmartScreener from './SmartScreener';
 import PushNotification from './PushNotification';
 import { authFetch } from '../lib/authFetch';
 import { usePwaInstall } from '../hooks/usePwaInstall';
@@ -73,7 +74,7 @@ interface Config {
     dcaEnabled: boolean;
 }
 
-type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report';
+type Tab = 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report' | 'screener';
 
 interface DashboardProps {
     apiUrl: string;
@@ -81,6 +82,7 @@ interface DashboardProps {
 
 const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
     { id: 'overview',  label: 'Overview',  icon: '📊' },
+    { id: 'screener',  label: 'Screener',  icon: '📡' },
     { id: 'portfolio', label: 'Portfolio', icon: '👜' },
     { id: 'positions', label: 'Posisi',    icon: '💼' },
     { id: 'log',       label: 'Log',       icon: '📋' },
@@ -440,6 +442,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     </div>
                 )}
 
+                {activeTab === 'screener'  && <SmartScreener apiUrl={apiUrl} />}
                 {activeTab === 'portfolio' && <Portfolio apiUrl={apiUrl} />}
                 {activeTab === 'positions' && <PositionCard apiUrl={apiUrl} />}
                 {activeTab === 'log'       && <ActivityLog apiUrl={apiUrl} />}

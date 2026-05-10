@@ -102,6 +102,12 @@ export async function initDb(): Promise<void> {
             CREATE INDEX IF NOT EXISTS idx_wwe_address ON whale_waitlist_events(address);
             CREATE INDEX IF NOT EXISTS idx_wwe_time    ON whale_waitlist_events(recorded_at);
 
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 endpoint   TEXT PRIMARY KEY,
                 data       TEXT NOT NULL,
@@ -531,6 +537,38 @@ export function dbDeletePushSubscription(endpoint: string): void {
 export function dbGetPushSubscriptionCount(): number {
     const row = runGet<{cnt: number}>('SELECT COUNT(*) as cnt FROM push_subscriptions');
     return row?.cnt ?? 0;
+}
+
+// ── App Settings (persisted runtime config) ────────────────────────────────────
+
+export function dbSaveSettings(key: string, value: object | string | number | boolean): void {
+    runExec(
+        `INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        [key, JSON.stringify(value), Date.now()]
+    );
+}
+
+export function dbLoadSettings(key: string): any | null {
+    const row = runGet<{value: string}>('SELECT value FROM app_settings WHERE key = ?', [key]);
+    if (!row) return null;
+    try { return JSON.parse(row.value); } catch { return null; }
+}
+
+export function dbSaveRuntimeConfig(config: object): void {
+    dbSaveSettings('runtime_config', config);
+}
+
+export function dbLoadRuntimeConfig(): any | null {
+    return dbLoadSettings('runtime_config');
+}
+
+export function dbSaveScreenerConfig(config: object): void {
+    dbSaveSettings('screener_config', config);
+}
+
+export function dbLoadScreenerConfig(): any | null {
+    return dbLoadSettings('screener_config');
 }
 
 export default { initDb };

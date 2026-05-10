@@ -22,8 +22,10 @@ import {
     dbGetPendingWhales, dbInsertWaitlistEvent,
     dbAddMonitoredWallet, dbRemoveMonitoredWallet, dbGetMonitoredWallets,
     dbGetMonitoredWallet, dbSetMonitoredVerdict, dbApproveWhale,
+    dbSaveRuntimeConfig, dbLoadRuntimeConfig, dbSaveScreenerConfig, dbLoadScreenerConfig,
     type TradeRow, type MonitoredWalletRow,
 } from './db';
+import SmartScreener, { type ScreenerSignal, type ScreenerConfig } from './smart-screener';
 import { startTelegramBot, type TelegramBot } from './telegram-bot';
 import { pushBuySuccess, pushTakeProfit, pushStopLoss, pushWhaleMonitoring, pushWhalePromoted } from './push-manager';
 import { MicroCapRiskManager } from './microcap-risk-manager';
@@ -116,13 +118,14 @@ function fmtUsd(eth: number, ethPrice: number): string {
 }
 
 export class AISniperBot extends EventEmitter {
-    private scanner:      FlashblocksScanner;
-    private copyMonitor:  CopyTradeMonitor;
-    private ai:           MultiAIProvider;
-    private executor:     SwapExecutor | null = null;
-    private geckoScanner: GeckoTokenScanner;
-    private riskManager:  MicroCapRiskManager;
-    private activityLog:  LogEntry[] = [];
+    private scanner:        FlashblocksScanner;
+    private copyMonitor:    CopyTradeMonitor;
+    private ai:             MultiAIProvider;
+    private executor:       SwapExecutor | null = null;
+    private geckoScanner:   GeckoTokenScanner;
+    private smartScreener:  SmartScreener;
+    private riskManager:    MicroCapRiskManager;
+    private activityLog:    LogEntry[] = [];
     private telegramToken  = process.env.TELEGRAM_BOT_TOKEN || '';
     private telegramChatId = process.env.TELEGRAM_CHAT_ID   || '';
     private sentimentInterval: NodeJS.Timeout | null = null;
@@ -133,6 +136,7 @@ export class AISniperBot extends EventEmitter {
     private dailyReportTimer: NodeJS.Timeout | null = null;
     private dailyReportInterval: NodeJS.Timeout | null = null;
     private narrativeCache = new Map<string, { data: string; expiresAt: number }>();
+    private smartScreenerEnabled = false;
 
     private runtimeConfig: RuntimeConfig = {
         totalCapital:            parseFloat(process.env.TOTAL_CAPITAL_ETH            || '0.006'),
@@ -189,6 +193,9 @@ export class AISniperBot extends EventEmitter {
             minLiquidityUsd: this.runtimeConfig.minLiquidity * getEthPriceSync(),
         });
 
+        // Initialize SmartScreener — config loaded from DB after initDb()
+        this.smartScreener = new SmartScreener();
+
         try {
             this.executor = new SwapExecutor();
         } catch (err: any) {
@@ -197,6 +204,31 @@ export class AISniperBot extends EventEmitter {
         }
 
         this.setupEventHandlers();
+    }
+
+    // ============ SETTINGS PERSISTENCE ============
+    loadPersistedSettings(): void {
+        try {
+            const saved = dbLoadRuntimeConfig();
+            if (saved && typeof saved === 'object') {
+                // Merge saved settings over defaults (env vars already applied above)
+                const merged: RuntimeConfig = { ...this.runtimeConfig, ...saved };
+                this.runtimeConfig = merged;
+                console.log('⚙️  Loaded persisted settings from DB');
+            }
+        } catch (e: any) {
+            console.warn('⚠️  Could not load persisted settings:', e?.message);
+        }
+
+        try {
+            const screenerCfg = dbLoadScreenerConfig();
+            if (screenerCfg && typeof screenerCfg === 'object') {
+                this.smartScreener.updateConfig(screenerCfg);
+                console.log('🔍 Loaded persisted screener config from DB');
+            }
+        } catch { /* non-critical */ }
+
+        this.smartScreenerEnabled = this.runtimeConfig.geckoScannerEnabled;
     }
 
     // ============ ACTIVITY LOG ============
@@ -374,6 +406,51 @@ export class AISniperBot extends EventEmitter {
             } else {
                 console.log(`   ❌ AI REJECTED: ${analysis.reasoning}`);
                 this.addLog('info', `AI rejected pool`, analysis.reasoning);
+            }
+        });
+
+        // ─── SmartScreener buy signal ───
+        this.smartScreener.on('buy-signal', async (signal: ScreenerSignal) => {
+            if (!this.smartScreenerEnabled) return;
+            const tokenAddress = signal.tokenAddress as Address;
+            console.log(`\n📡 [SmartScreener] ${signal.signal} — ${signal.tokenSymbol} (score: ${signal.score.total})`);
+
+            // Run AI analysis on top of screener signal
+            const analysis = await this.ai.analyzeToken(tokenAddress, {
+                liquidity:     signal.liquidityUsd / 3000,
+                volume24h:     signal.volumeH24,
+                ageSeconds:    signal.ageMinutes * 60,
+                priceChangeH1: signal.priceChangeH1,
+                buyTxH1:       signal.buyTxH1,
+                sellTxH1:      signal.sellTxH1,
+                fdvUsd:        signal.fdvUsd,
+            });
+
+            console.log(`   🤖 AI: ${analysis.recommendation} (${analysis.confidence}%)`);
+
+            if (this.shouldBuy(analysis)) {
+                const amount = await this.calculateDynamicAmount(analysis.confidence);
+                const label  = signal.signal === 'STRONG_BUY' ? '🔥 STRONG BUY' : '📡 BUY';
+                console.log(`   ✅ SmartScreener ${label}: ${amount.toFixed(5)} ETH for ${signal.tokenSymbol}`);
+                this.addLog('info',
+                    `📡 SmartScreener ${label}: ${signal.tokenSymbol}`,
+                    `score:${signal.score.total} liq:$${Math.round(signal.liquidityUsd).toLocaleString()} 1h:${signal.priceChangeH1 >= 0 ? '+' : ''}${signal.priceChangeH1.toFixed(1)}% | AI: ${analysis.confidence}%`
+                );
+                await this.sendTelegram(
+                    `📡 <b>SmartScreener ${label}!</b>\n` +
+                    `Token: <code>${signal.tokenSymbol}</code>\n` +
+                    `<code>${signal.tokenAddress}</code>\n\n` +
+                    `📊 Score: <b>${signal.score.total}/100</b>\n` +
+                    `💧 Liq: $${Math.round(signal.liquidityUsd).toLocaleString()} | Vol: $${Math.round(signal.volumeH24).toLocaleString()}\n` +
+                    `📈 1h: ${signal.priceChangeH1 >= 0 ? '+' : ''}${signal.priceChangeH1.toFixed(1)}% | Buys: ${signal.buyTxH1}\n` +
+                    `⏱️ Age: ${signal.ageMinutes}min | 🛡️ Safety: ${signal.score.safety}/25\n` +
+                    `🤖 AI: ${analysis.confidence}% confidence\n` +
+                    `💰 Buy: ${amount.toFixed(5)} ETH`
+                );
+                await this.executeBuy(tokenAddress, amount, undefined, 'smart-screener');
+            } else {
+                console.log(`   ❌ AI rejected screener signal: ${analysis.reasoning}`);
+                this.addLog('info', `📡 Screener rejected by AI: ${signal.tokenSymbol}`, analysis.reasoning);
             }
         });
 
@@ -1151,12 +1228,16 @@ export class AISniperBot extends EventEmitter {
 
     // ============ LIFECYCLE ============
     async start(): Promise<void> {
+        // Load persisted settings from DB before printing config
+        this.loadPersistedSettings();
+
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🤖 AI-POWERED BASE SNIPER ULTIMATE');
         console.log(`💰 Modal: ${this.runtimeConfig.totalCapital} ETH`);
         console.log(`💼 Wallet: ${this.executor?.getWalletAddress() ?? 'NOT CONFIGURED'}`);
         console.log(`📊 Dynamic Sizing: ${this.runtimeConfig.dynamicSizingEnabled ? `✅ (${this.runtimeConfig.tradeBalancePct}% per trade)` : '❌'}`);
         console.log(`🦎 GeckoTerminal Scanner: ${this.runtimeConfig.geckoScannerEnabled ? '✅' : '❌'}`);
+        console.log(`📡 Smart Screener: ${this.smartScreenerEnabled ? '✅' : '❌'}`);
         console.log(`🐋 Whale Auto-Scan: ${this.runtimeConfig.whaleAutoScanEnabled ? '✅' : '❌'}`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
@@ -1211,6 +1292,11 @@ export class AISniperBot extends EventEmitter {
             this.geckoScanner.start();
         }
 
+        // Smart Screener — starts independently alongside (or instead of) GeckoScanner
+        if (this.smartScreenerEnabled) {
+            this.smartScreener.start();
+        }
+
         if (this.runtimeConfig.whaleAutoScanEnabled) {
             this.startWhaleAutoScan();
         }
@@ -1249,6 +1335,7 @@ export class AISniperBot extends EventEmitter {
         this.scanner.disconnect();
         this.copyMonitor.stop();
         this.geckoScanner.stop();
+        this.smartScreener.stop();
         this.executor?.stop();
         whaleMonitor.stop();
         console.log('🛑 AI Sniper stopped');
@@ -1339,10 +1426,47 @@ export class AISniperBot extends EventEmitter {
             minLiquidity: r.minLiquidity
         });
 
+        // Sync smartScreener enable state
+        this.smartScreenerEnabled = r.geckoScannerEnabled;
+
+        // Persist to DB so settings survive restart
+        try { dbSaveRuntimeConfig(r); } catch { /* non-critical */ }
+
         this.addLog('info', 'Pengaturan diperbarui via UI', `Capital: ${r.totalCapital} ETH`);
     }
 
     getRuntimeConfig(): RuntimeConfig { return { ...this.runtimeConfig }; }
+
+    // ============ SMART SCREENER PUBLIC API ============
+    getScreenerSignals(minSignal?: 'STRONG_BUY' | 'BUY' | 'WATCH' | 'SKIP') {
+        return this.smartScreener.getSignals(minSignal);
+    }
+
+    getScreenerStats() { return this.smartScreener.getStats(); }
+
+    getScreenerConfig() { return this.smartScreener.getConfig(); }
+
+    updateScreenerConfig(updates: Partial<ScreenerConfig>): void {
+        this.smartScreener.updateConfig(updates);
+        try { dbSaveScreenerConfig(this.smartScreener.getConfig()); } catch { /* non-critical */ }
+        this.addLog('info', 'Screener config updated', JSON.stringify(updates));
+    }
+
+    setSmartScreenerEnabled(enabled: boolean): void {
+        this.smartScreenerEnabled = enabled;
+        if (enabled) {
+            this.smartScreener.start();
+            this.addLog('info', '📡 Smart Screener AKTIF', 'Scanning new pools & trending...');
+        } else {
+            this.smartScreener.stop();
+            this.addLog('info', '📡 Smart Screener NONAKTIF', '');
+        }
+        // Mirror to runtimeConfig + persist
+        this.runtimeConfig.geckoScannerEnabled = enabled;
+        try { dbSaveRuntimeConfig(this.runtimeConfig); } catch { /* non-critical */ }
+    }
+
+    isSmartScreenerEnabled(): boolean { return this.smartScreenerEnabled; }
 
     // ============ KEY MANAGEMENT ============
     updateKeys(keys: { privateKey?: string; groqKey?: string; geminiKey?: string; huggingfaceKey?: string; telegramToken?: string; telegramChatId?: string }): void {
@@ -1486,6 +1610,8 @@ export class AISniperBot extends EventEmitter {
         this.scanner.disconnect();
         this.copyMonitor.stop();
         this.geckoScanner.stop();
+        this.smartScreener.stop();
+        this.smartScreenerEnabled = false;
 
         const positions = this.executor?.getOpenPositions() ?? [];
         let sold = 0;
