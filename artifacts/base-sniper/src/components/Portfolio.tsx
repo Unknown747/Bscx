@@ -225,15 +225,6 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
         }
     }, [swapState, apiUrl, fetchPortfolio]);
 
-    if (loading) {
-        return (
-            <div className="flex flex-col items-center justify-center py-16 space-y-3">
-                <div className="w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm text-gray-500">Memuat portfolio...</p>
-            </div>
-        );
-    }
-
     const runWalletScan = useCallback(async () => {
         setScanLoading(true);
         setScanError('');
@@ -256,6 +247,15 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
         }
         setScanLoading(false);
     }, [apiUrl, fetchPortfolio, fetchPositions]);
+
+    if (loading) {
+        return (
+            <div className="flex flex-col items-center justify-center py-16 space-y-3">
+                <div className="w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
+                <p className="text-sm text-gray-500">Memuat portfolio...</p>
+            </div>
+        );
+    }
 
     const ethBal   = data ? parseFloat(data.ethBalance) : 0;
     const totalUsd = data?.totalValueUsd ?? 0;
