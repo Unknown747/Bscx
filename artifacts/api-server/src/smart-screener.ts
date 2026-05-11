@@ -268,6 +268,9 @@ export class SmartScreener extends EventEmitter {
         const pairCreatedAt = attr.pool_created_at ? new Date(attr.pool_created_at).getTime() : Date.now();
         const ageMinutes    = (Date.now() - pairCreatedAt) / 60_000;
 
+        // Ekstrak simbol awal untuk keperluan log (sebelum filter)
+        const symQuick = (attr.name ?? '').match(/^([^/\s]+)/)?.[1] ?? pairAddress.slice(0, 8);
+
         // ── Quick pre-filters (before safety API call) ────────────────────────
         if (liquidityUsd  < this.config.minLiquidityUsd)  return;
         if (liquidityUsd  > this.config.maxLiquidityUsd)  return;
@@ -284,11 +287,24 @@ export class SmartScreener extends EventEmitter {
         // tua biasanya sudah mati, manipulasi, atau sedang persiapan rug.
         const absH1 = Math.abs(priceChangeH1);
         if (absH1 < 2 && ageMinutes > 30) {
-            // Harga flat + sudah tua → skip (dead/rug setup)
+            this.emit('skipped', {
+                symbol:       symQuick,
+                pairAddress,
+                reason:       `STAGNAN — harga flat ${priceChangeH1.toFixed(1)}% selama 1j, usia ${Math.round(ageMinutes)}m`,
+                priceChangeH1,
+                ageMinutes,
+            });
             return;
         }
         // Tren turun tajam di koin baru juga berbahaya (dump setelah launch)
         if (priceChangeH1 < -10 && ageMinutes < 60) {
+            this.emit('skipped', {
+                symbol:       symQuick,
+                pairAddress,
+                reason:       `DUMP — harga turun ${priceChangeH1.toFixed(1)}% dalam 1j (usia ${Math.round(ageMinutes)}m)`,
+                priceChangeH1,
+                ageMinutes,
+            });
             return;
         }
 

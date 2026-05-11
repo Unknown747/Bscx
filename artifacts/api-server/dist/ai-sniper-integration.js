@@ -741,6 +741,10 @@ class AISniperBot extends events_1.EventEmitter {
         // ─── Executor events ───
         this.wireExecutorEvents();
         // ─── Feature: Smart Screener STRONG_BUY Telegram notifications ───
+        // ─── Log koin yang dilewati (stagnan / dump / tax naik) ke dashboard ───
+        this.smartScreener.on('skipped', (d) => {
+            this.addLog('info', `🧊 Dilewati: ${d.symbol}`, d.reason);
+        });
         this.smartScreener.on('signal', (sig) => {
             // Persist all BUY-grade signals to DB for history tab
             if (sig.signal === 'STRONG_BUY' || sig.signal === 'BUY' || sig.signal === 'WATCH') {
