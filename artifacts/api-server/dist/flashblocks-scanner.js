@@ -128,6 +128,11 @@ class FlashblocksScanner extends events_1.EventEmitter {
             });
             this.ws.on('close', () => {
                 console.log('WebSocket closed');
+                if (!settled) {
+                    settled = true;
+                    clearTimeout(timeoutId);
+                    reject(new Error('Connection closed before open'));
+                }
                 this.handleDisconnect();
             });
             this.ws.on('message', (data) => {

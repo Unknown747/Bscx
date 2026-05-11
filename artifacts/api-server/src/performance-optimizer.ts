@@ -50,7 +50,7 @@ setInterval(refreshEthPrice, 60_000);
 export async function getBestPool(tokenAddress: string): Promise<PoolEntry | null> {
     const key    = tokenAddress.toLowerCase();
     const cached = poolCache.get(key);
-    if (cached && Date.now() - cached.timestamp < 30_000) return cached;
+    if (cached && Date.now() - cached.timestamp < 10_000) return cached;
 
     try {
         const res = await axios.get(

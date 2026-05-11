@@ -461,7 +461,7 @@ export class SmartScreener extends EventEmitter {
                 { timeout: 7000 }
             );
             const data = res.data?.result?.[tokenAddress.toLowerCase()];
-            if (!data) return { safe: true, score: 50, sellTax: 0, buyTax: 0, holderCount: 0, creatorPct: 0, flags: [] };
+            if (!data) return { safe: false, score: 0, sellTax: 0, buyTax: 0, holderCount: 0, creatorPct: 0, flags: ['GOPLUS_NO_DATA'] };
 
             const sellTax    = parseFloat(data.sell_tax     || '0');
             const buyTax     = parseFloat(data.buy_tax      || '0');
@@ -493,7 +493,7 @@ export class SmartScreener extends EventEmitter {
             return { safe: score >= 40, score, sellTax, buyTax, holderCount, creatorPct, flags };
         } catch {
             // If GoPlus fails, use a neutral score (50) — don't block trade, but don't boost either
-            return { safe: true, score: 50, sellTax: 0, buyTax: 0, holderCount: 0, creatorPct: 0, flags: ['GOPLUS_UNAVAIL'] };
+            return { safe: false, score: 0, sellTax: 0, buyTax: 0, holderCount: 0, creatorPct: 0, flags: ['GOPLUS_UNAVAIL'] };
         }
     }
 

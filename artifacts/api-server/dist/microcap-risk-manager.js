@@ -53,10 +53,10 @@ class MicroCapRiskManager {
             this.consecutiveLosses = 0;
             this.cooldownUntil = 0;
             this.cooldownReason = '';
-            this.circuitBreakerTripped = false;
-            this.circuitBreakerReason = '';
+            // Circuit breaker is intentionally NOT reset here — it requires a manual
+            // call to resetCircuitBreaker() (Emergency Stop must be cleared explicitly).
             this.dailyResetAt = this.nextMidnightUtc();
-            console.log('[RiskManager] ✅ Daily reset — semua counter dikosongkan, trading dilanjutkan');
+            console.log('[RiskManager] ✅ Daily reset — loss counters cleared (circuit breaker unchanged)');
             this.scheduleDailyReset();
         }, Math.max(msUntilReset, 1000));
     }

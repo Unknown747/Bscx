@@ -44,7 +44,7 @@ setInterval(refreshEthPrice, 60000);
 async function getBestPool(tokenAddress) {
     const key = tokenAddress.toLowerCase();
     const cached = poolCache.get(key);
-    if (cached && Date.now() - cached.timestamp < 30000)
+    if (cached && Date.now() - cached.timestamp < 10000)
         return cached;
     try {
         const res = await axios_1.default.get(`${GECKO_BASE}/networks/base/tokens/${tokenAddress}/pools?page=1`, { headers: GECKO_HEADERS, timeout: 6000 });

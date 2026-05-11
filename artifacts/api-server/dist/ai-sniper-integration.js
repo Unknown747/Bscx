@@ -359,15 +359,12 @@ class AISniperBot extends events_1.EventEmitter {
             const balanceEth = parseFloat(balance.eth);
             if (balanceEth <= 0)
                 return this.runtimeConfig.copyAmount;
-            // Copy trade: 7–8% of spendable balance
+            // Copy trade: 7.5% of spendable balance (midpoint of 7–8% range)
             const GAS_RESERVE = 0.0002;
             const spendable = Math.max(0, balanceEth - GAS_RESERVE);
             if (spendable <= 0)
                 return 0;
-            const amount = spendable * 0.07;
-            const minCopy = spendable * 0.07;
-            const maxCopy = spendable * 0.08;
-            return Math.max(minCopy, Math.min(maxCopy, amount));
+            return spendable * 0.075;
         }
         catch {
             return this.runtimeConfig.copyAmount;

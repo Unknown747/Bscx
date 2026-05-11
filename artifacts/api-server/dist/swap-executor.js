@@ -407,7 +407,7 @@ class SwapExecutor extends events_1.EventEmitter {
             const priorityFee = 1000000n; // 0.001 gwei
             // Cap total at configured max to prevent runaway fees
             const maxConfigFee = BigInt(Math.floor(this.CONFIG.MAX_FEE_GWEI * 1e9));
-            const computed = baseFee + priorityFee * 2n;
+            const computed = baseFee * 2n + priorityFee;
             return {
                 maxFeePerGas: computed < maxConfigFee ? computed : maxConfigFee,
                 maxPriorityFeePerGas: priorityFee
