@@ -1733,10 +1733,11 @@ export class AISniperBot extends EventEmitter {
         }
 
         this.copyMonitor.updateConfig({
-            copyEnabled:  r.copyEnabled,
-            copyAmount:   r.copyAmount,
-            copyDelay:    r.copyDelay,
-            minLiquidity: r.minLiquidity
+            copyEnabled:   r.copyEnabled,
+            copyAmount:    r.copyAmount,
+            copyDelay:     r.copyDelay,
+            minLiquidity:  r.minLiquidity,
+            maxTaxPercent: r.maxTaxPercent,
         });
 
         // Sync smartScreener enable state

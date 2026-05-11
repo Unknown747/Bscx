@@ -31,6 +31,7 @@ class CopyTradeMonitor extends events_1.EventEmitter {
             MIN_TRADES_BEFORE_SCORE: 5,
             MIN_SIM_PROFIT_PCT: 10,
             SIMULATION_ENABLED: true,
+            MAX_TAX_PCT: 8, // mirrors runtime maxTaxPercent (updated via updateConfig)
         };
         this.dailyCopyCount = 0;
         this.lastResetDate = new Date().toDateString();
@@ -359,9 +360,10 @@ class CopyTradeMonitor extends events_1.EventEmitter {
                 return false;
             if (data.is_honeypot === '1')
                 return false;
-            if (parseFloat(data.buy_tax || '0') > 15)
+            const maxTax = this.CONFIG.MAX_TAX_PCT;
+            if (parseFloat(data.buy_tax || '0') > maxTax)
                 return false;
-            if (parseFloat(data.sell_tax || '0') > 15)
+            if (parseFloat(data.sell_tax || '0') > maxTax)
                 return false;
             return true;
         }
@@ -376,6 +378,10 @@ class CopyTradeMonitor extends events_1.EventEmitter {
             c.COPY_INVEST_AMOUNT = updates.copyAmount;
         if (updates.copyDelay != null)
             c.COPY_DELAY_SECONDS = updates.copyDelay;
+        if (updates.maxTaxPercent != null) {
+            c.MAX_TAX_PCT = updates.maxTaxPercent;
+            console.log(`⚙️  CopyTradeMonitor: max tax threshold → ${updates.maxTaxPercent}%`);
+        }
         if (updates.copyEnabled === true && !this.scanInterval)
             this.start();
         if (updates.copyEnabled === false && this.scanInterval)

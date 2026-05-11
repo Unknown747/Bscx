@@ -52,6 +52,7 @@ export class CopyTradeMonitor extends EventEmitter {
         MIN_TRADES_BEFORE_SCORE:     5,
         MIN_SIM_PROFIT_PCT:          10,
         SIMULATION_ENABLED:          true,
+        MAX_TAX_PCT:                 8,      // mirrors runtime maxTaxPercent (updated via updateConfig)
     };
 
     private dailyCopyCount   = 0;
@@ -410,9 +411,10 @@ export class CopyTradeMonitor extends EventEmitter {
             );
             const data = response.data?.result?.[tokenAddress.toLowerCase()];
             if (!data) return false;
-            if (data.is_honeypot === '1')             return false;
-            if (parseFloat(data.buy_tax  || '0') > 15) return false;
-            if (parseFloat(data.sell_tax || '0') > 15) return false;
+            if (data.is_honeypot === '1') return false;
+            const maxTax = this.CONFIG.MAX_TAX_PCT;
+            if (parseFloat(data.buy_tax  || '0') > maxTax) return false;
+            if (parseFloat(data.sell_tax || '0') > maxTax) return false;
             return true;
         } catch {
             return false;
@@ -421,14 +423,19 @@ export class CopyTradeMonitor extends EventEmitter {
 
     // ============ RUNTIME CONFIG UPDATE ============
     updateConfig(updates: {
-        copyEnabled?:  boolean;
-        copyAmount?:   number;
-        copyDelay?:    number;
-        minLiquidity?: number;
+        copyEnabled?:   boolean;
+        copyAmount?:    number;
+        copyDelay?:     number;
+        minLiquidity?:  number;
+        maxTaxPercent?: number;
     }): void {
         const c = this.CONFIG as any;
-        if (updates.copyAmount != null) c.COPY_INVEST_AMOUNT = updates.copyAmount;
-        if (updates.copyDelay  != null) c.COPY_DELAY_SECONDS = updates.copyDelay;
+        if (updates.copyAmount    != null) c.COPY_INVEST_AMOUNT = updates.copyAmount;
+        if (updates.copyDelay     != null) c.COPY_DELAY_SECONDS  = updates.copyDelay;
+        if (updates.maxTaxPercent != null) {
+            c.MAX_TAX_PCT = updates.maxTaxPercent;
+            console.log(`⚙️  CopyTradeMonitor: max tax threshold → ${updates.maxTaxPercent}%`);
+        }
 
         if (updates.copyEnabled === true  && !this.scanInterval) this.start();
         if (updates.copyEnabled === false && this.scanInterval)  this.stop();

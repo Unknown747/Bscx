@@ -1588,7 +1588,8 @@ class AISniperBot extends events_1.EventEmitter {
             copyEnabled: r.copyEnabled,
             copyAmount: r.copyAmount,
             copyDelay: r.copyDelay,
-            minLiquidity: r.minLiquidity
+            minLiquidity: r.minLiquidity,
+            maxTaxPercent: r.maxTaxPercent,
         });
         // Sync smartScreener enable state
         this.smartScreenerEnabled = r.geckoScannerEnabled;

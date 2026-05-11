@@ -466,6 +466,41 @@ export class SwapExecutor extends EventEmitter {
     }
 
     /**
+     * Get expected ETH output for a V2-style sell (Token → WETH) using getAmountsOut.
+     * Reversed path vs buy: [tokenAddress, WETH_BASE].
+     * Returns null on failure — caller will fall back to amountOutMinimum=0.
+     */
+    private async getSellV2Quote(
+        tokenAddress: Address,
+        amountIn: bigint,
+        route: { dex: string; v2Router?: Address; stable?: boolean }
+    ): Promise<bigint | null> {
+        try {
+            if (route.dex === 'aerodrome-v2') {
+                const r = [{ from: tokenAddress, to: WETH_BASE, stable: route.stable ?? false, factory: AERODROME_V2_FACTORY }];
+                const amounts = await this.publicClient.readContract({
+                    address: AERODROME_V2_ROUTER, abi: AERODROME_V2_ABI, functionName: 'getAmountsOut',
+                    args: [amountIn, r]
+                }) as bigint[];
+                const out = amounts?.[1] ?? 0n;
+                return out > 0n ? out : null;
+            }
+            if (route.dex === 'uniswap-v2' && route.v2Router) {
+                const path: readonly [Address, Address] = [tokenAddress, WETH_BASE];
+                const amounts = await this.publicClient.readContract({
+                    address: route.v2Router, abi: UNISWAP_V2_ABI, functionName: 'getAmountsOut',
+                    args: [amountIn, path]
+                }) as bigint[];
+                const out = amounts?.[1] ?? 0n;
+                return out > 0n ? out : null;
+            }
+            return null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
      * Apply slippage to a quoted amount to get amountOutMinimum.
      * slippagePct = e.g. 8 means 8%.
      */
@@ -767,12 +802,30 @@ export class SwapExecutor extends EventEmitter {
 
             const gasPrice = await this.getGasPrice();
 
-            // ── DEX-aware routing: approve correct router, then send ──
-            const amountOutMinimum = 0n; // must succeed — accept any ETH output
+            // ── DEX-aware routing: detect best route first ──
             const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
 
             // Detect which DEX/router to use for this token
-            const sellRoute = await this.detectSwapRoute(tokenAddress, amountIn, amountOutMinimum, 'sell');
+            const sellRoute = await this.detectSwapRoute(tokenAddress, amountIn, 0n, 'sell');
+
+            // ── Sell slippage guard: quote expected ETH output then apply slippage ──
+            // Prevents MEV sandwich bots from stealing sell proceeds.
+            // Use wider tolerance (12%) than buys — thin exit liquidity on microcaps.
+            // Falls back to 0 only when quote is completely unavailable.
+            const SELL_SLIPPAGE_PCT = 12;
+            let sellQuotedOut: bigint | null = null;
+            if (sellRoute.dex === 'uniswap-v3' && sellRoute.fee) {
+                sellQuotedOut = await this.getV3QuotedAmountOut(tokenAddress, WETH_BASE, amountIn, sellRoute.fee);
+            } else if (sellRoute.dex === 'aerodrome-v2' || sellRoute.dex === 'uniswap-v2') {
+                sellQuotedOut = await this.getSellV2Quote(tokenAddress, amountIn, sellRoute);
+            }
+            let amountOutMinimum = 0n;
+            if (sellQuotedOut !== null && sellQuotedOut > 0n) {
+                amountOutMinimum = this.applySlippage(sellQuotedOut, SELL_SLIPPAGE_PCT);
+                console.log(`   🛡️ Sell slippage guard: min ETH = ${formatEther(amountOutMinimum)} (quoted ${formatEther(sellQuotedOut)}, slip ${SELL_SLIPPAGE_PCT}%)`);
+            } else {
+                console.log(`   ⚠️  Sell quote unavailable — amountOutMinimum=0 (no sandwich protection this sell)`);
+            }
 
             // Approve the correct router (Uniswap V3, Aerodrome CL, Aerodrome V2, or V2-style)
             const routerToApprove = sellRoute.dex === 'aerodrome-cl' ? AERODROME_CL_ROUTER
