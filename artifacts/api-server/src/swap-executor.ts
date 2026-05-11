@@ -1721,7 +1721,8 @@ export class SwapExecutor extends EventEmitter {
         totalValueEth: number; totalValueUsd: number;
     }> {
         const ethPriceUsd = await getEthPriceUsd();
-        const { eth } = await this.getBalance();
+        let eth = '0';
+        try { eth = (await this.getBalance()).eth; } catch { /* use 0 fallback if RPC blips */ }
         const ethValueUsd = parseFloat(eth) * ethPriceUsd;
         const tokens: any[] = [];
 

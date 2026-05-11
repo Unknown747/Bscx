@@ -450,7 +450,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
             )}
 
             {/* ── ETH Balance Card ── */}
-            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            {data && <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-full bg-blue-900/40 border border-blue-800 flex items-center justify-center text-lg">
@@ -481,7 +481,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
                         ↓ Terima
                     </button>
                 </div>
-            </div>
+            </div>}
 
             {/* ── Token List ── */}
             {data && data.tokens.length > 0 && (

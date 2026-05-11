@@ -1540,7 +1540,11 @@ class SwapExecutor extends events_1.EventEmitter {
     // ============ PORTFOLIO DATA ============
     async getPortfolioData() {
         const ethPriceUsd = await (0, price_oracle_1.getEthPriceUsd)();
-        const { eth } = await this.getBalance();
+        let eth = '0';
+        try {
+            eth = (await this.getBalance()).eth;
+        }
+        catch { /* use 0 fallback if RPC blips */ }
         const ethValueUsd = parseFloat(eth) * ethPriceUsd;
         const tokens = [];
         // Always scan WETH + open positions + knownTokens regardless of session state
