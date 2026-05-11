@@ -189,18 +189,18 @@ class GeckoTokenScanner extends events_1.EventEmitter {
             const res = await axios_1.default.get(`https://api.gopluslabs.io/api/v1/token_security/8453?contract_addresses=${tokenAddress}`, { timeout: 6000 });
             const data = res.data?.result?.[tokenAddress.toLowerCase()];
             if (!data)
-                return { safe: true, score: 50 };
+                return { safe: false, reason: 'Token tidak ditemukan di GoPlus — belum terverifikasi', score: 0 };
             const sellTax = parseFloat(data.sell_tax || '0');
             const buyTax = parseFloat(data.buy_tax || '0');
             const creatorPct = parseFloat(data.creator_percent || '0') * 100;
             const holders = parseInt(data.holder_count || '0');
             if (data.is_honeypot === '1')
                 return { safe: false, reason: 'Honeypot', score: 0 };
-            if (sellTax > 15)
+            if (sellTax > 10)
                 return { safe: false, reason: `Sell tax ${sellTax}%`, score: 0 };
-            if (buyTax > 15)
+            if (buyTax > 10)
                 return { safe: false, reason: `Buy tax ${buyTax}%`, score: 0 };
-            if (creatorPct > 40)
+            if (creatorPct > 20)
                 return { safe: false, reason: `Creator ${creatorPct.toFixed(0)}%`, score: 0 };
             let score = 100;
             if (data.is_mintable === '1')

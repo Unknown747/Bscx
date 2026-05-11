@@ -438,7 +438,7 @@ export class AISniperBot extends EventEmitter {
                 { timeout: 6000 }
             );
             const data = res.data?.result?.[tokenAddress.toLowerCase()];
-            if (!data) return { safe: true };
+            if (!data) return { safe: false, reason: 'Token tidak ditemukan di GoPlus — belum terverifikasi' };
 
             const sellTax    = parseFloat(data.sell_tax  || '0');
             const buyTax     = parseFloat(data.buy_tax   || '0');
@@ -450,7 +450,7 @@ export class AISniperBot extends EventEmitter {
             const taxLimit = this.runtimeConfig.maxTaxPercent;
             if (this.runtimeConfig.blockHighTax && sellTax > taxLimit) return { safe: false, reason: `Sell tax too high: ${sellTax}%`, sellTax };
             if (this.runtimeConfig.blockHighTax && buyTax  > taxLimit) return { safe: false, reason: `Buy tax too high: ${buyTax}%`,  buyTax  };
-            if (creatorPct > 30)              return { safe: false, reason: `Creator holds too much: ${creatorPct.toFixed(0)}%` };
+            if (creatorPct > 20)              return { safe: false, reason: `Creator holds too much: ${creatorPct.toFixed(0)}%` };
             if (holderCount < 10 && holderCount > 0) return { safe: false, reason: `Too few holders: ${holderCount}` };
 
             const warnings: string[] = [];

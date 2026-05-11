@@ -140,7 +140,7 @@ export async function checkTokenSafety(tokenAddress: string): Promise<SafetyRepo
 
     const report: SafetyReport = {
         tokenAddress,
-        safe: !hardFail && score >= 40,
+        safe: !hardFail && score >= 55,
         score,
         flags: flags.length > 0 ? flags : ['✅ Tidak ada tanda bahaya terdeteksi'],
         details,

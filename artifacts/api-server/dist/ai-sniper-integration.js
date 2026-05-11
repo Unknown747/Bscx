@@ -377,7 +377,7 @@ class AISniperBot extends events_1.EventEmitter {
             const res = await axios.get(`https://api.gopluslabs.io/api/v1/token_security/8453?contract_addresses=${tokenAddress}`, { timeout: 6000 });
             const data = res.data?.result?.[tokenAddress.toLowerCase()];
             if (!data)
-                return { safe: true };
+                return { safe: false, reason: 'Token tidak ditemukan di GoPlus — belum terverifikasi' };
             const sellTax = parseFloat(data.sell_tax || '0');
             const buyTax = parseFloat(data.buy_tax || '0');
             const creatorPct = parseFloat(data.creator_percent || '0') * 100;
@@ -391,7 +391,7 @@ class AISniperBot extends events_1.EventEmitter {
                 return { safe: false, reason: `Sell tax too high: ${sellTax}%`, sellTax };
             if (this.runtimeConfig.blockHighTax && buyTax > taxLimit)
                 return { safe: false, reason: `Buy tax too high: ${buyTax}%`, buyTax };
-            if (creatorPct > 30)
+            if (creatorPct > 20)
                 return { safe: false, reason: `Creator holds too much: ${creatorPct.toFixed(0)}%` };
             if (holderCount < 10 && holderCount > 0)
                 return { safe: false, reason: `Too few holders: ${holderCount}` };

@@ -155,7 +155,7 @@ async function checkTokenSafety(tokenAddress) {
     const hardFail = details.isHoneypot || details.cannotSell || details.cannotBuy || score < 20;
     const report = {
         tokenAddress,
-        safe: !hardFail && score >= 40,
+        safe: !hardFail && score >= 55,
         score,
         flags: flags.length > 0 ? flags : ['✅ Tidak ada tanda bahaya terdeteksi'],
         details,

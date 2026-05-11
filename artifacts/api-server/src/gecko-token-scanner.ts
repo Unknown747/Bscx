@@ -233,7 +233,7 @@ export class GeckoTokenScanner extends EventEmitter {
                 { timeout: 6000 }
             );
             const data = res.data?.result?.[tokenAddress.toLowerCase()];
-            if (!data) return { safe: true, score: 50 };
+            if (!data) return { safe: false, reason: 'Token tidak ditemukan di GoPlus — belum terverifikasi', score: 0 };
 
             const sellTax    = parseFloat(data.sell_tax  || '0');
             const buyTax     = parseFloat(data.buy_tax   || '0');
@@ -241,9 +241,9 @@ export class GeckoTokenScanner extends EventEmitter {
             const holders    = parseInt(data.holder_count || '0');
 
             if (data.is_honeypot === '1')   return { safe: false, reason: 'Honeypot', score: 0 };
-            if (sellTax > 15)               return { safe: false, reason: `Sell tax ${sellTax}%`, score: 0 };
-            if (buyTax > 15)                return { safe: false, reason: `Buy tax ${buyTax}%`, score: 0 };
-            if (creatorPct > 40)            return { safe: false, reason: `Creator ${creatorPct.toFixed(0)}%`, score: 0 };
+            if (sellTax > 10)               return { safe: false, reason: `Sell tax ${sellTax}%`, score: 0 };
+            if (buyTax > 10)                return { safe: false, reason: `Buy tax ${buyTax}%`, score: 0 };
+            if (creatorPct > 20)            return { safe: false, reason: `Creator ${creatorPct.toFixed(0)}%`, score: 0 };
 
             let score = 100;
             if (data.is_mintable === '1') score -= 20;
