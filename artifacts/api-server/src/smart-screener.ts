@@ -279,6 +279,19 @@ export class SmartScreener extends EventEmitter {
         const sbRatio = sellTxH1 > 0 ? sellTxH1 / Math.max(buyTxH1, 1) : 0;
         if (sbRatio > this.config.maxSellBuyRatio) return;
 
+        // ── Stagnation filter — koin stagnan = red flag ───────────────────────
+        // Koin yang harganya tidak bergerak (< ±2% dalam 1 jam) dan sudah cukup
+        // tua biasanya sudah mati, manipulasi, atau sedang persiapan rug.
+        const absH1 = Math.abs(priceChangeH1);
+        if (absH1 < 2 && ageMinutes > 30) {
+            // Harga flat + sudah tua → skip (dead/rug setup)
+            return;
+        }
+        // Tren turun tajam di koin baru juga berbahaya (dump setelah launch)
+        if (priceChangeH1 < -10 && ageMinutes < 60) {
+            return;
+        }
+
         this.seenPairs.set(pairAddress, Date.now() + this.SIGNAL_TTL_MS);
 
         // ── Safety check (GoPlus) ─────────────────────────────────────────────
@@ -377,12 +390,19 @@ export class SmartScreener extends EventEmitter {
         let freshness = 0;
 
         // ── MOMENTUM (0-30) ──────────────────────────────────────────────────
-        // Price change 1h
+        // Price change 1h — stagnan diberi penalti besar
         if      (d.priceChangeH1 > 50)  { momentum += 12; reasons.push(`+${d.priceChangeH1.toFixed(0)}% 1h 🔥`); }
         else if (d.priceChangeH1 > 20)  { momentum += 9;  reasons.push(`+${d.priceChangeH1.toFixed(0)}% 1h`); }
         else if (d.priceChangeH1 > 5)   { momentum += 6;  reasons.push(`+${d.priceChangeH1.toFixed(0)}% 1h`); }
-        else if (d.priceChangeH1 > 0)   { momentum += 3; }
-        else if (d.priceChangeH1 < -15) { momentum -= 5;  reasons.push(`${d.priceChangeH1.toFixed(0)}% 1h ⚠️`); }
+        else if (d.priceChangeH1 > 2)   { momentum += 3; }
+        else if (d.priceChangeH1 >= -2) {
+            // Harga nyaris flat — penalti stagnan, makin tua makin besar
+            const stalePenalty = d.ageMinutes > 60 ? -12 : d.ageMinutes > 30 ? -8 : -4;
+            momentum += stalePenalty;
+            reasons.push(`STAGNAN ${d.priceChangeH1.toFixed(1)}% 1h 🧊`);
+        }
+        else if (d.priceChangeH1 < -10) { momentum -= 8;  reasons.push(`${d.priceChangeH1.toFixed(0)}% 1h ⛔`); }
+        else if (d.priceChangeH1 < -5)  { momentum -= 5;  reasons.push(`${d.priceChangeH1.toFixed(0)}% 1h ⚠️`); }
 
         // Buy/sell ratio
         const bsr = d.buyTxH1 / Math.max(d.sellTxH1, 1);

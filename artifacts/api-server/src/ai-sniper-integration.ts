@@ -145,6 +145,7 @@ export class AISniperBot extends EventEmitter {
     private sentimentInterval: NodeJS.Timeout | null = null;
     private whaleAutoScanInterval: NodeJS.Timeout | null = null;
     private portfolioSummaryInterval: NodeJS.Timeout | null = null;
+    private taxGuardInterval: NodeJS.Timeout | null = null;
     private tgBot: TelegramBot | null = null;
 
     private emergencyStopActive   = false;
@@ -930,6 +931,51 @@ export class AISniperBot extends EventEmitter {
                 );
             } catch { /* silent */ }
         }, 30 * 60_000);
+
+        // ─── Tax Guard: cek sell tax setiap 90 detik untuk posisi terbuka ───
+        // Jika sell tax tiba-tiba naik (mis: 0% → 30%), langsung jual panik.
+        // Ini melindungi dari "upgrade rug" — owner naikkan tax setelah bot beli.
+        const TAX_GUARD_LIMIT = 15; // sell tax > 15% = jual langsung
+        this.taxGuardInterval = setInterval(async () => {
+            if (!this.executor) return;
+            const positions = this.executor.getOpenPositions();
+            if (positions.length === 0) return;
+
+            for (const pos of positions) {
+                try {
+                    const { default: axios } = await import('axios');
+                    const res = await axios.get(
+                        `https://api.gopluslabs.io/api/v1/token_security/8453?contract_addresses=${pos.tokenAddress}`,
+                        { timeout: 5000 }
+                    );
+                    const data = res.data?.result?.[pos.tokenAddress.toLowerCase()];
+                    if (!data) continue;
+
+                    const sellTax = parseFloat(data.sell_tax || '0');
+                    const isHoneypot = data.is_honeypot === '1';
+                    const cannotSell = data.cannot_sell_all === '1';
+
+                    if (isHoneypot || cannotSell || sellTax > TAX_GUARD_LIMIT) {
+                        const reason = isHoneypot ? 'HONEYPOT terdeteksi!' :
+                                       cannotSell  ? 'Cannot sell all — rug!' :
+                                       `Sell tax naik ke ${sellTax.toFixed(0)}%!`;
+                        console.log(`\n🚨 [TaxGuard] ${pos.tokenSymbol || pos.tokenAddress.slice(0,8)}: ${reason}`);
+                        console.log(`   ⚡ Auto-exit PANIK — jual semua sekarang!`);
+                        this.addLog('info',
+                            `🚨 TaxGuard EXIT: ${pos.tokenSymbol || pos.tokenAddress.slice(0,8)}`,
+                            reason
+                        );
+                        await this.sendTelegram(
+                            `🚨 <b>TAX GUARD — AUTO EXIT!</b>\n\n` +
+                            `Token: <b>${sanitizeTg(pos.tokenSymbol || pos.tokenAddress.slice(0,8))}</b>\n` +
+                            `⚠️ ${sanitizeTg(reason)}\n` +
+                            `⚡ Menjual semua posisi sekarang...`
+                        );
+                        await this.executor.sell(pos.tokenAddress as `0x${string}`, 100);
+                    }
+                } catch { /* API error — lewati, jangan panic */ }
+            }
+        }, 90_000);
     }
 
     private wireExecutorEvents(): void {
@@ -1959,6 +2005,7 @@ export class AISniperBot extends EventEmitter {
         if (this.sentimentInterval)          { clearInterval(this.sentimentInterval);          this.sentimentInterval          = null; }
         if (this.whaleAutoScanInterval)      { clearInterval(this.whaleAutoScanInterval);      this.whaleAutoScanInterval      = null; }
         if (this.portfolioSummaryInterval)   { clearInterval(this.portfolioSummaryInterval);   this.portfolioSummaryInterval   = null; }
+        if (this.taxGuardInterval)           { clearInterval(this.taxGuardInterval);           this.taxGuardInterval           = null; }
         this.scanner.disconnect();
         this.copyMonitor.stop();
         this.geckoScanner.stop();
