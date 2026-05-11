@@ -1179,6 +1179,13 @@ export class SwapExecutor extends EventEmitter {
         profitPct: number | null;
         multiplier: number | null;
         holdMs: number;
+        openedAt: number;
+        txHash: string;
+        tp1Hit: boolean;
+        tp2Hit: boolean;
+        tp1SoldPct: number;
+        tp2SoldPct: number;
+        peakMultiplier: number;
     }>> {
         const results = [];
         for (const [addr, pos] of this.openPositions) {
@@ -1202,14 +1209,25 @@ export class SwapExecutor extends EventEmitter {
                 }
             } catch { /* silent */ }
 
+            const peakMultiplier = entryEth > 0 && pos.peakValueEth > 0
+                ? pos.peakValueEth / entryEth
+                : 1;
+
             results.push({
-                tokenAddress: addr,
-                tokenSymbol:  pos.tokenSymbol,
+                tokenAddress:  addr,
+                tokenSymbol:   pos.tokenSymbol,
                 entryEth,
                 currentValueEth,
                 profitPct,
                 multiplier,
-                holdMs: Date.now() - pos.openedAt
+                holdMs:        Date.now() - pos.openedAt,
+                openedAt:      pos.openedAt,
+                txHash:        pos.txHash,
+                tp1Hit:        pos.takeProfit1Hit,
+                tp2Hit:        pos.takeProfit2Hit,
+                tp1SoldPct:    pos.tp1SoldPct,
+                tp2SoldPct:    pos.tp2SoldPct,
+                peakMultiplier,
             });
         }
         return results;

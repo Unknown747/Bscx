@@ -374,6 +374,11 @@ app.get('/api/pnl', async (_req: Request, res: Response) => {
     catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/positions', async (_req: Request, res: Response) => {
+    try { res.json({ positions: await bot.getLivePnL(), timestamp: Date.now() }); }
+    catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/portfolio', async (_req: Request, res: Response) => {
     try { res.json({ ...await bot.getPortfolio(), timestamp: Date.now() }); }
     catch (err: any) { res.status(500).json({ error: err.message }); }

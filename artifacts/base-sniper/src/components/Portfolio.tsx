@@ -39,6 +39,23 @@ interface SwapState {
     error?: string;
 }
 
+interface OpenPosition {
+    tokenAddress: string;
+    tokenSymbol: string;
+    entryEth: number;
+    currentValueEth: number | null;
+    profitPct: number | null;
+    multiplier: number | null;
+    holdMs: number;
+    openedAt: number;
+    txHash: string;
+    tp1Hit: boolean;
+    tp2Hit: boolean;
+    tp1SoldPct: number;
+    tp2SoldPct: number;
+    peakMultiplier: number;
+}
+
 interface PortfolioProps {
     apiUrl: string;
 }
@@ -69,6 +86,28 @@ function change24hColor(v: number | null): string {
     return 'text-gray-400';
 }
 
+function pnlColor(pct: number | null): string {
+    if (pct === null) return 'text-gray-400';
+    if (pct >= 0) return 'text-green-400';
+    return 'text-red-400';
+}
+
+function pnlBgColor(pct: number | null): string {
+    if (pct === null) return 'border-gray-700 bg-gray-900';
+    if (pct >= 50) return 'border-green-600/50 bg-green-950/40';
+    if (pct >= 0)  return 'border-green-800/40 bg-gray-900';
+    if (pct >= -15) return 'border-yellow-800/40 bg-gray-900';
+    return 'border-red-800/40 bg-red-950/30';
+}
+
+function fmtHoldTime(ms: number): string {
+    const s = Math.floor(ms / 1000);
+    if (s < 60)    return `${s}d`;
+    if (s < 3600)  return `${Math.floor(s / 60)}m`;
+    if (s < 86400) return `${Math.floor(s / 3600)}j ${Math.floor((s % 3600) / 60)}m`;
+    return `${Math.floor(s / 86400)}h`;
+}
+
 const SWAP_PRESETS = [25, 50, 75, 100];
 
 const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
@@ -81,6 +120,10 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
     const countdownRef            = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [nextRefresh, setNextRefresh] = useState(8);
     const POLL_INTERVAL = 8000;
+
+    // Open positions P&L state
+    const [positions, setPositions] = useState<OpenPosition[]>([]);
+    const [posLoading, setPosLoading] = useState(true);
 
     const fetchPortfolio = useCallback(async () => {
         try {
@@ -96,11 +139,26 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
         setLoading(false);
     }, [apiUrl]);
 
+    const fetchPositions = useCallback(async () => {
+        try {
+            const res  = await authFetch(`${apiUrl}/api/positions`);
+            const json = await res.json();
+            setPositions(json.positions ?? []);
+        } catch { /* silent */ }
+        setPosLoading(false);
+    }, [apiUrl]);
+
     useEffect(() => {
         fetchPortfolio();
         const interval = setInterval(fetchPortfolio, POLL_INTERVAL);
         return () => clearInterval(interval);
     }, [fetchPortfolio]);
+
+    useEffect(() => {
+        fetchPositions();
+        const interval = setInterval(fetchPositions, POLL_INTERVAL);
+        return () => clearInterval(interval);
+    }, [fetchPositions]);
 
     // Countdown timer
     useEffect(() => {
@@ -197,6 +255,92 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
                     <p className="text-3xl font-bold text-white">{fmtUsd(totalUsd)}</p>
                     <p className="text-sm text-gray-400 mt-0.5">{fmtEth(data.totalValueEth)}</p>
                     {lastUpdate && <p className="text-xs text-gray-700 mt-2">Update: {lastUpdate}</p>}
+                </div>
+            )}
+
+            {/* ── Open Positions P&L Tracker ── */}
+            {(!posLoading && positions.length > 0) && (
+                <div className="space-y-2">
+                    <div className="flex items-center gap-2 px-1">
+                        <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                        </span>
+                        <p className="text-xs text-gray-400 font-medium">Posisi Terbuka ({positions.length})</p>
+                    </div>
+
+                    {positions.map(pos => {
+                        const isProfit = (pos.profitPct ?? 0) >= 0;
+                        const pnlStr = pos.profitPct === null
+                            ? '...'
+                            : `${isProfit ? '+' : ''}${pos.profitPct.toFixed(1)}%`;
+                        const multStr = pos.multiplier !== null
+                            ? `${pos.multiplier.toFixed(2)}x`
+                            : null;
+                        const peakStr = pos.peakMultiplier > 1
+                            ? `puncak ${pos.peakMultiplier.toFixed(2)}x`
+                            : null;
+
+                        return (
+                            <div key={pos.tokenAddress}
+                                className={`border rounded-xl p-4 space-y-3 transition-colors ${pnlBgColor(pos.profitPct)}`}>
+
+                                {/* Top row: symbol + P&L */}
+                                <div className="flex items-start justify-between">
+                                    <div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-bold text-white">{pos.tokenSymbol}</span>
+                                            {pos.tp1Hit && (
+                                                <span className="text-xs px-1.5 py-0.5 rounded bg-green-900/60 text-green-400 font-semibold border border-green-800/50">
+                                                    TP1 {pos.tp1SoldPct > 0 ? `${pos.tp1SoldPct}%` : ''}
+                                                </span>
+                                            )}
+                                            {pos.tp2Hit && (
+                                                <span className="text-xs px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-400 font-semibold border border-blue-800/50">
+                                                    TP2 {pos.tp2SoldPct > 0 ? `${pos.tp2SoldPct}%` : ''}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <p className="text-xs text-gray-500 mt-0.5">{shortAddr(pos.tokenAddress)} · {fmtHoldTime(pos.holdMs)}</p>
+                                    </div>
+                                    <div className="text-right">
+                                        <p className={`text-xl font-bold leading-none ${pnlColor(pos.profitPct)}`}>
+                                            {pnlStr}
+                                        </p>
+                                        {multStr && (
+                                            <p className={`text-xs font-semibold mt-0.5 ${pnlColor(pos.profitPct)}`}>
+                                                {multStr}
+                                                {peakStr && <span className="text-gray-600 font-normal ml-1">({peakStr})</span>}
+                                            </p>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Bottom row: entry vs current */}
+                                <div className="grid grid-cols-2 gap-2">
+                                    <div className="bg-black/20 rounded-lg px-3 py-2">
+                                        <p className="text-xs text-gray-500 mb-0.5">Modal masuk</p>
+                                        <p className="text-xs font-semibold text-gray-300">{fmtEth(pos.entryEth)}</p>
+                                    </div>
+                                    <div className="bg-black/20 rounded-lg px-3 py-2">
+                                        <p className="text-xs text-gray-500 mb-0.5">Nilai sekarang</p>
+                                        <p className={`text-xs font-semibold ${pnlColor(pos.profitPct)}`}>
+                                            {pos.currentValueEth !== null ? fmtEth(pos.currentValueEth) : '—'}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* TX link */}
+                                {pos.txHash && (
+                                    <a href={`https://basescan.org/tx/${pos.txHash}`}
+                                        target="_blank" rel="noopener noreferrer"
+                                        className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-400 transition-colors">
+                                        ↗ Lihat TX beli di Basescan
+                                    </a>
+                                )}
+                            </div>
+                        );
+                    })}
                 </div>
             )}
 

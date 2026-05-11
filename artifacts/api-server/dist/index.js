@@ -415,6 +415,14 @@ app.get('/api/pnl', async (_req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+app.get('/api/positions', async (_req, res) => {
+    try {
+        res.json({ positions: await bot.getLivePnL(), timestamp: Date.now() });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 app.get('/api/portfolio', async (_req, res) => {
     try {
         res.json({ ...await bot.getPortfolio(), timestamp: Date.now() });
