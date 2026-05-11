@@ -390,7 +390,7 @@ class AISniperBot extends events_1.EventEmitter {
                 return { safe: false, reason: `Buy tax too high: ${buyTax}%`, buyTax };
             if (creatorPct > 20)
                 return { safe: false, reason: `Creator holds too much: ${creatorPct.toFixed(0)}%` };
-            if (holderCount < 10 && holderCount > 0)
+            if (holderCount < 50 && holderCount > 0)
                 return { safe: false, reason: `Too few holders: ${holderCount}` };
             const warnings = [];
             if (data.is_mintable === '1' && data.owner_address)
@@ -511,7 +511,7 @@ class AISniperBot extends events_1.EventEmitter {
             }
             // Run AI analysis on top of screener signal
             const rawAnalysis = await this.ai.analyzeToken(tokenAddress, {
-                liquidity: signal.liquidityUsd / 3000,
+                liquidity: signal.liquidityUsd / ((0, performance_optimizer_1.getEthPriceSync)() || 3000),
                 volume24h: signal.volumeH24,
                 ageSeconds: signal.ageMinutes * 60,
                 priceChangeH1: signal.priceChangeH1,

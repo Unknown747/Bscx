@@ -59,8 +59,11 @@ exports.dbGetRecentActivityLogs = dbGetRecentActivityLogs;
 const sql_js_1 = __importDefault(require("sql.js"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
-// __dirname is <project>/artifacts/api-server/dist at runtime, so ../../base-sniper = artifacts/base-sniper
-const DB_PATH = path_1.default.resolve(__dirname, '../../base-sniper/base.db');
+// DB_PATH can be overridden via environment variable for VPS deployments.
+// Default: artifacts/base-sniper/base.db (relative to compiled dist/)
+const DB_PATH = process.env.DB_PATH
+    ? path_1.default.resolve(process.env.DB_PATH)
+    : path_1.default.resolve(__dirname, '../../base-sniper/base.db');
 fs_1.default.mkdirSync(path_1.default.dirname(DB_PATH), { recursive: true });
 let _db = null;
 let _initPromise = null;

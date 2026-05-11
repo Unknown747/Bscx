@@ -9,8 +9,11 @@ import initSqlJs, { Database as SqlJsDatabase } from 'sql.js';
 import path from 'path';
 import fs from 'fs';
 
-// __dirname is <project>/artifacts/api-server/dist at runtime, so ../../base-sniper = artifacts/base-sniper
-const DB_PATH = path.resolve(__dirname, '../../base-sniper/base.db');
+// DB_PATH can be overridden via environment variable for VPS deployments.
+// Default: artifacts/base-sniper/base.db (relative to compiled dist/)
+const DB_PATH = process.env.DB_PATH
+    ? path.resolve(process.env.DB_PATH)
+    : path.resolve(__dirname, '../../base-sniper/base.db');
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 let _db: SqlJsDatabase | null = null;

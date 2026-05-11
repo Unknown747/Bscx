@@ -5,17 +5,25 @@ export default defineConfig({
     plugins: [react()],
     server: {
         host: true,
-        port: 5000,
+        port: 3000,
         allowedHosts: true,
         proxy: {
             '/api': {
                 target: 'http://localhost:5000',
-                changeOrigin: true
+                changeOrigin: true,
+                ws: true,
             }
         }
     },
     build: {
         outDir: 'dist',
-        sourcemap: false
+        sourcemap: false,
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    react: ['react', 'react-dom'],
+                }
+            }
+        }
     }
 });

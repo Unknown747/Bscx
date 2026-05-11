@@ -1069,7 +1069,13 @@ app.get('/api/connection-status', (_req: Request, res: Response) => {
 
 // ============ DEPLOYMENT STATUS ============
 const SERVER_START_TIME = Date.now();
-const BOT_VERSION = '1.0.0';
+const BOT_VERSION = '2.0.0';
+
+// ============ HEALTH CHECK (VPS / load-balancer ping) ============
+// Public endpoint — no auth required
+app.get('/health', (_req: Request, res: Response) => {
+    res.json({ status: 'ok', version: BOT_VERSION, uptime: Math.floor((Date.now() - SERVER_START_TIME) / 1000), timestamp: Date.now() });
+});
 
 app.get('/api/deployment-status', (_req: Request, res: Response) => {
     const uptimeMs      = Date.now() - SERVER_START_TIME;
