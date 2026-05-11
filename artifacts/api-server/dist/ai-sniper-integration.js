@@ -77,11 +77,6 @@ function fmtHoldTime(ms) {
         return `${m}m ${s}s`;
     return `${s}s`;
 }
-function fmtAddr(addr) {
-    if (!addr || addr.length < 10)
-        return addr;
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-}
 function fmtUsd(eth, ethPrice) {
     return `$${(eth * ethPrice).toFixed(2)}`;
 }
@@ -145,6 +140,7 @@ class AISniperBot extends events_1.EventEmitter {
             tradingStartHour: parseInt(process.env.TRADING_START_HOUR || '8'),
             tradingEndHour: parseInt(process.env.TRADING_END_HOUR || '23'),
             autoCompoundEnabled: process.env.AUTO_COMPOUND_ENABLED === 'true',
+            smartScreenerEnabled: process.env.SMART_SCREENER_ENABLED === 'true',
         };
         this.CONFIG = {
             MIN_AI_CONFIDENCE: parseInt(process.env.MIN_AI_CONFIDENCE || '75'),
@@ -215,7 +211,7 @@ class AISniperBot extends events_1.EventEmitter {
             }
         }
         catch { /* non-critical */ }
-        this.smartScreenerEnabled = this.runtimeConfig.geckoScannerEnabled;
+        this.smartScreenerEnabled = this.runtimeConfig.smartScreenerEnabled;
         console.log(`⚙️  Final config: TP1=${this.runtimeConfig.tp1Multiplier}x SL=${this.runtimeConfig.stopLoss}% Screener=${this.smartScreenerEnabled}`);
     }
     // ============ ACTIVITY LOG ============
@@ -1568,6 +1564,15 @@ class AISniperBot extends events_1.EventEmitter {
             r.tradingEndHour = s.tradingEndHour;
         if (s.autoCompoundEnabled != null)
             r.autoCompoundEnabled = s.autoCompoundEnabled;
+        // Smart Screener — independent toggle (does NOT affect geckoScannerEnabled)
+        if (s.smartScreenerEnabled != null) {
+            r.smartScreenerEnabled = s.smartScreenerEnabled;
+            this.smartScreenerEnabled = s.smartScreenerEnabled;
+            if (s.smartScreenerEnabled)
+                this.smartScreener.start();
+            else
+                this.smartScreener.stop();
+        }
         // Propagate limits to risk manager
         this.riskManager.updateLimits(r.maxDailyLossEth, r.maxConsecutiveLosses, r.cooldownAfterProfitMinutes, r.dailyLossCooldownHours);
         if (this.executor) {
@@ -1631,7 +1636,7 @@ class AISniperBot extends events_1.EventEmitter {
             this.addLog('info', '📡 Smart Screener NONAKTIF', '');
         }
         // Mirror to runtimeConfig + persist
-        this.runtimeConfig.geckoScannerEnabled = enabled;
+        this.runtimeConfig.smartScreenerEnabled = enabled;
         try {
             (0, db_1.dbSaveRuntimeConfig)(this.runtimeConfig);
         }

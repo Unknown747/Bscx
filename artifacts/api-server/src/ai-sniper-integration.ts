@@ -109,6 +109,8 @@ interface RuntimeConfig {
     tradingEndHour:         number;
     // Auto-compound profits
     autoCompoundEnabled: boolean;
+    // Smart Screener (independent from GeckoTerminal scanner)
+    smartScreenerEnabled: boolean;
 }
 
 function sanitizeTg(s: string): string {
@@ -123,11 +125,6 @@ function fmtHoldTime(ms: number): string {
     if (h > 0) return `${h}h ${m}m`;
     if (m > 0) return `${m}m ${s}s`;
     return `${s}s`;
-}
-
-function fmtAddr(addr: string): string {
-    if (!addr || addr.length < 10) return addr;
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
 function fmtUsd(eth: number, ethPrice: number): string {
@@ -200,6 +197,7 @@ export class AISniperBot extends EventEmitter {
         tradingStartHour:       parseInt(process.env.TRADING_START_HOUR || '8'),
         tradingEndHour:         parseInt(process.env.TRADING_END_HOUR   || '23'),
         autoCompoundEnabled:    process.env.AUTO_COMPOUND_ENABLED === 'true',
+        smartScreenerEnabled:   process.env.SMART_SCREENER_ENABLED === 'true',
     };
 
     private readonly CONFIG = {
@@ -275,7 +273,7 @@ export class AISniperBot extends EventEmitter {
             }
         } catch { /* non-critical */ }
 
-        this.smartScreenerEnabled = this.runtimeConfig.geckoScannerEnabled;
+        this.smartScreenerEnabled = this.runtimeConfig.smartScreenerEnabled;
         console.log(`⚙️  Final config: TP1=${this.runtimeConfig.tp1Multiplier}x SL=${this.runtimeConfig.stopLoss}% Screener=${this.smartScreenerEnabled}`);
     }
 
@@ -1709,6 +1707,14 @@ export class AISniperBot extends EventEmitter {
         if (s.tradingEndHour         != null) r.tradingEndHour         = s.tradingEndHour;
         if (s.autoCompoundEnabled    != null) r.autoCompoundEnabled    = s.autoCompoundEnabled;
 
+        // Smart Screener — independent toggle (does NOT affect geckoScannerEnabled)
+        if (s.smartScreenerEnabled   != null) {
+            r.smartScreenerEnabled = s.smartScreenerEnabled;
+            this.smartScreenerEnabled = s.smartScreenerEnabled;
+            if (s.smartScreenerEnabled) this.smartScreener.start();
+            else                        this.smartScreener.stop();
+        }
+
         // Propagate limits to risk manager
         this.riskManager.updateLimits(
             r.maxDailyLossEth,
@@ -1779,7 +1785,7 @@ export class AISniperBot extends EventEmitter {
             this.addLog('info', '📡 Smart Screener NONAKTIF', '');
         }
         // Mirror to runtimeConfig + persist
-        this.runtimeConfig.geckoScannerEnabled = enabled;
+        this.runtimeConfig.smartScreenerEnabled = enabled;
         try { dbSaveRuntimeConfig(this.runtimeConfig); } catch { /* non-critical */ }
     }
 

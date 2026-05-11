@@ -213,6 +213,7 @@ app.get('/api/config', (_req, res) => {
         tradingStartHour: rc.tradingStartHour,
         tradingEndHour: rc.tradingEndHour,
         autoCompoundEnabled: rc.autoCompoundEnabled,
+        smartScreenerEnabled: rc.smartScreenerEnabled,
     });
 });
 app.post('/api/settings', (req, res) => {
@@ -300,6 +301,7 @@ app.post('/api/settings', (req, res) => {
             tradingStartHour: s.tradingStartHour,
             tradingEndHour: s.tradingEndHour,
             autoCompoundEnabled: s.autoCompoundEnabled,
+            smartScreenerEnabled: s.smartScreenerEnabled,
         });
         res.json({ ok: true, message: 'Settings applied successfully' });
     }
@@ -594,6 +596,7 @@ app.patch('/api/config', (req, res) => {
             tradingStartHour: s.tradingStartHour,
             tradingEndHour: s.tradingEndHour,
             autoCompoundEnabled: s.autoCompoundEnabled,
+            smartScreenerEnabled: s.smartScreenerEnabled,
         });
         res.json({ ok: true, message: 'Settings applied successfully' });
     }

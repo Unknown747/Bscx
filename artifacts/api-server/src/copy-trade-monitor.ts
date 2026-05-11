@@ -376,15 +376,6 @@ export class CopyTradeMonitor extends EventEmitter {
             simulation,
         } as CopyTradeOpportunity);
 
-        setTimeout(() => {
-            this.emit('execute-copy', {
-                tokenAddress,
-                tokenSymbol:  tokenInfo.symbol,
-                amount:       copyAmount,
-                sourceWallet: wallet.name,
-                simulation,
-            });
-        }, this.CONFIG.COPY_DELAY_SECONDS * 1000);
     }
 
     private async getTokenInfo(tokenAddress: string): Promise<{ symbol: string; name: string; pairCreatedAt?: number } | null> {
