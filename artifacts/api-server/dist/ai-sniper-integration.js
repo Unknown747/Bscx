@@ -163,6 +163,7 @@ class AISniperBot extends events_1.EventEmitter {
         this.smartScreener = new smart_screener_1.default();
         try {
             this.executor = new swap_executor_1.SwapExecutor();
+            this.executor.loadPositionsFromDb();
         }
         catch (err) {
             console.warn(`⚠️  SwapExecutor disabled: ${err.message}`);

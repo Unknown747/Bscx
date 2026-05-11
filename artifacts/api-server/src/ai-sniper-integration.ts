@@ -223,6 +223,7 @@ export class AISniperBot extends EventEmitter {
 
         try {
             this.executor = new SwapExecutor();
+            this.executor.loadPositionsFromDb();
         } catch (err: any) {
             console.warn(`⚠️  SwapExecutor disabled: ${err.message}`);
             this.addLog('info', 'Live trading dinonaktifkan', 'Set PRIVATE_KEY di .env untuk aktifkan');

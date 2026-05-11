@@ -51,6 +51,9 @@ exports.dbSaveScreenerConfig = dbSaveScreenerConfig;
 exports.dbLoadScreenerConfig = dbLoadScreenerConfig;
 exports.dbSaveScreenerSignal = dbSaveScreenerSignal;
 exports.dbGetScreenerHistory = dbGetScreenerHistory;
+exports.dbSaveOpenPosition = dbSaveOpenPosition;
+exports.dbDeleteOpenPosition = dbDeleteOpenPosition;
+exports.dbLoadOpenPositions = dbLoadOpenPositions;
 const sql_js_1 = __importDefault(require("sql.js"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -191,6 +194,25 @@ async function initDb() {
             );
             CREATE INDEX IF NOT EXISTS idx_ssh_time   ON screener_signal_history(discovered_at);
             CREATE INDEX IF NOT EXISTS idx_ssh_signal ON screener_signal_history(signal);
+
+            CREATE TABLE IF NOT EXISTS open_positions (
+                token_address   TEXT    PRIMARY KEY,
+                token_symbol    TEXT    NOT NULL DEFAULT '',
+                amount_in_wei   TEXT    NOT NULL,
+                amount_out_wei  TEXT    NOT NULL,
+                entry_price_eth REAL    NOT NULL,
+                opened_at       INTEGER NOT NULL,
+                tx_hash         TEXT    NOT NULL,
+                peak_value_eth  REAL    NOT NULL DEFAULT 0,
+                tp1_hit         INTEGER NOT NULL DEFAULT 0,
+                tp2_hit         INTEGER NOT NULL DEFAULT 0,
+                tp3_hit         INTEGER NOT NULL DEFAULT 0,
+                tp1_sold_pct    REAL    NOT NULL DEFAULT 0,
+                tp2_sold_pct    REAL    NOT NULL DEFAULT 0,
+                dca_done        INTEGER NOT NULL DEFAULT 0,
+                source_wallet   TEXT,
+                init_liq_usd    REAL    NOT NULL DEFAULT 0
+            );
         `);
         // Migration: add data_source column if it doesn't exist yet
         const cols = runQuery('PRAGMA table_info(monitored_wallets)').map((c) => c.name);
@@ -553,6 +575,72 @@ function dbGetScreenerHistory(limit = 100, signal) {
         source: r.source,
         discoveredAt: r.discovered_at,
     }));
+}
+function dbSaveOpenPosition(p) {
+    try {
+        runExec(`
+            INSERT INTO open_positions
+                (token_address, token_symbol, amount_in_wei, amount_out_wei, entry_price_eth,
+                 opened_at, tx_hash, peak_value_eth, tp1_hit, tp2_hit, tp3_hit,
+                 tp1_sold_pct, tp2_sold_pct, dca_done, source_wallet, init_liq_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(token_address) DO UPDATE SET
+                token_symbol    = excluded.token_symbol,
+                amount_in_wei   = excluded.amount_in_wei,
+                amount_out_wei  = excluded.amount_out_wei,
+                entry_price_eth = excluded.entry_price_eth,
+                opened_at       = excluded.opened_at,
+                tx_hash         = excluded.tx_hash,
+                peak_value_eth  = excluded.peak_value_eth,
+                tp1_hit         = excluded.tp1_hit,
+                tp2_hit         = excluded.tp2_hit,
+                tp3_hit         = excluded.tp3_hit,
+                tp1_sold_pct    = excluded.tp1_sold_pct,
+                tp2_sold_pct    = excluded.tp2_sold_pct,
+                dca_done        = excluded.dca_done,
+                source_wallet   = excluded.source_wallet,
+                init_liq_usd    = excluded.init_liq_usd
+        `, [
+            p.tokenAddress.toLowerCase(), p.tokenSymbol,
+            p.amountInWei, p.amountOutWei, p.entryPriceEth,
+            p.openedAt, p.txHash, p.peakValueEth,
+            p.tp1Hit ? 1 : 0, p.tp2Hit ? 1 : 0, p.tp3Hit ? 1 : 0,
+            p.tp1SoldPct, p.tp2SoldPct, p.dcaDone ? 1 : 0,
+            p.sourceWallet ?? null, p.initLiqUsd,
+        ]);
+    }
+    catch { /* non-critical */ }
+}
+function dbDeleteOpenPosition(tokenAddress) {
+    try {
+        runExec('DELETE FROM open_positions WHERE token_address = ?', [tokenAddress.toLowerCase()]);
+    }
+    catch { /* non-critical */ }
+}
+function dbLoadOpenPositions() {
+    try {
+        return runQuery('SELECT * FROM open_positions').map(r => ({
+            tokenAddress: r.token_address,
+            tokenSymbol: r.token_symbol,
+            amountInWei: r.amount_in_wei,
+            amountOutWei: r.amount_out_wei,
+            entryPriceEth: r.entry_price_eth,
+            openedAt: r.opened_at,
+            txHash: r.tx_hash,
+            peakValueEth: r.peak_value_eth,
+            tp1Hit: !!r.tp1_hit,
+            tp2Hit: !!r.tp2_hit,
+            tp3Hit: !!r.tp3_hit,
+            tp1SoldPct: r.tp1_sold_pct,
+            tp2SoldPct: r.tp2_sold_pct,
+            dcaDone: !!r.dca_done,
+            sourceWallet: r.source_wallet ?? undefined,
+            initLiqUsd: r.init_liq_usd,
+        }));
+    }
+    catch {
+        return [];
+    }
 }
 exports.default = { initDb };
 //# sourceMappingURL=db.js.map

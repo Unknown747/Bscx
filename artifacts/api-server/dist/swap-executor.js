@@ -12,12 +12,14 @@ const axios_1 = __importDefault(require("axios"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const price_oracle_1 = require("./price-oracle");
 const dynamic_exit_1 = require("./dynamic-exit");
+const db_1 = require("./db");
 dotenv_1.default.config();
 // ============ CONSTANTS ============
 const UNISWAP_V3_ROUTER = '0x2626664c2603336E57B271c5C0b26F421741e481'; // SwapRouter02 on Base
+const AERODROME_CL_ROUTER = '0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5'; // Aerodrome CL (Slipstream) SwapRouter on Base
 const WETH_BASE = '0x4200000000000000000000000000000000000006';
 const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-// SwapRouter02 ABI (exactInputSingle only)
+// SwapRouter02 ABI — Uniswap V3 (exactInputSingle uses fee: uint24)
 const ROUTER_ABI = [
     {
         name: 'exactInputSingle',
@@ -38,6 +40,132 @@ const ROUTER_ABI = [
         outputs: [{ name: 'amountOut', type: 'uint256' }]
     }
 ];
+// Aerodrome CL (Slipstream) SwapRouter ABI — uses tickSpacing: int24 + deadline instead of fee
+const AERODROME_CL_ABI = [
+    {
+        name: 'exactInputSingle',
+        type: 'function',
+        inputs: [{
+                name: 'params',
+                type: 'tuple',
+                components: [
+                    { name: 'tokenIn', type: 'address' },
+                    { name: 'tokenOut', type: 'address' },
+                    { name: 'tickSpacing', type: 'int24' },
+                    { name: 'recipient', type: 'address' },
+                    { name: 'deadline', type: 'uint256' },
+                    { name: 'amountIn', type: 'uint256' },
+                    { name: 'amountOutMinimum', type: 'uint256' },
+                    { name: 'sqrtPriceLimitX96', type: 'uint160' }
+                ]
+            }],
+        outputs: [{ name: 'amountOut', type: 'uint256' }]
+    }
+];
+// Pool ABI — read tickSpacing for Aerodrome CL pools
+const POOL_TICK_SPACING_ABI = [
+    { name: 'tickSpacing', type: 'function', inputs: [], outputs: [{ type: 'int24' }], stateMutability: 'view' }
+];
+// Aerodrome V2 (classic AMM) Router — uses swapExactETHForTokens / swapExactTokensForETH
+const AERODROME_V2_ROUTER = '0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43';
+const AERODROME_V2_FACTORY = '0x420DD381b31aEf6683db6B902084cB0FFECe40D';
+const AERODROME_V2_ABI = [
+    {
+        name: 'swapExactETHForTokens',
+        type: 'function',
+        stateMutability: 'payable',
+        inputs: [
+            { name: 'amountOutMin', type: 'uint256' },
+            { name: 'routes', type: 'tuple[]', components: [
+                    { name: 'from', type: 'address' },
+                    { name: 'to', type: 'address' },
+                    { name: 'stable', type: 'bool' },
+                    { name: 'factory', type: 'address' }
+                ] },
+            { name: 'to', type: 'address' },
+            { name: 'deadline', type: 'uint256' }
+        ],
+        outputs: [{ name: 'amounts', type: 'uint256[]' }]
+    },
+    {
+        name: 'swapExactTokensForETH',
+        type: 'function',
+        stateMutability: 'nonpayable',
+        inputs: [
+            { name: 'amountIn', type: 'uint256' },
+            { name: 'amountOutMin', type: 'uint256' },
+            { name: 'routes', type: 'tuple[]', components: [
+                    { name: 'from', type: 'address' },
+                    { name: 'to', type: 'address' },
+                    { name: 'stable', type: 'bool' },
+                    { name: 'factory', type: 'address' }
+                ] },
+            { name: 'to', type: 'address' },
+            { name: 'deadline', type: 'uint256' }
+        ],
+        outputs: [{ name: 'amounts', type: 'uint256[]' }]
+    },
+    {
+        name: 'getAmountsOut',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [
+            { name: 'amountIn', type: 'uint256' },
+            { name: 'routes', type: 'tuple[]', components: [
+                    { name: 'from', type: 'address' },
+                    { name: 'to', type: 'address' },
+                    { name: 'stable', type: 'bool' },
+                    { name: 'factory', type: 'address' }
+                ] }
+        ],
+        outputs: [{ name: 'amounts', type: 'uint256[]' }]
+    }
+];
+// Uniswap V2-style ABI (used by BaseSwap V2, Uniswap V2, SwapBased, AlienBase V2, etc.)
+const UNISWAP_V2_ABI = [
+    {
+        name: 'swapExactETHForTokens',
+        type: 'function',
+        stateMutability: 'payable',
+        inputs: [
+            { name: 'amountOutMin', type: 'uint256' },
+            { name: 'path', type: 'address[]' },
+            { name: 'to', type: 'address' },
+            { name: 'deadline', type: 'uint256' }
+        ],
+        outputs: [{ name: 'amounts', type: 'uint256[]' }]
+    },
+    {
+        name: 'swapExactTokensForETH',
+        type: 'function',
+        stateMutability: 'nonpayable',
+        inputs: [
+            { name: 'amountIn', type: 'uint256' },
+            { name: 'amountOutMin', type: 'uint256' },
+            { name: 'path', type: 'address[]' },
+            { name: 'to', type: 'address' },
+            { name: 'deadline', type: 'uint256' }
+        ],
+        outputs: [{ name: 'amounts', type: 'uint256[]' }]
+    },
+    {
+        name: 'getAmountsOut',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [
+            { name: 'amountIn', type: 'uint256' },
+            { name: 'path', type: 'address[]' }
+        ],
+        outputs: [{ name: 'amounts', type: 'uint256[]' }]
+    }
+];
+// Uniswap V2-style routers on Base (all share same ABI interface)
+const V2_ROUTERS = [
+    { label: 'BaseSwap V2', address: '0x327Df1E6de05895d2ab08513aaDD9313Fe505d86' },
+    { label: 'Uniswap V2', address: '0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24' },
+    { label: 'AlienBase V2', address: '0x8c1A3cF8f83074169FE5D7aD50B978e1cD6b37c7' },
+    { label: 'SwapBased V2', address: '0xaaa3b1F1bd7BCc97fD1917c18ADE665C5D31361a' },
+];
 // ERC20 ABI (minimal)
 const ERC20_ABI = [
     { name: 'balanceOf', type: 'function', inputs: [{ name: 'account', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
@@ -50,12 +178,32 @@ const ERC20_ABI = [
 ];
 // ============ SWAP EXECUTOR ============
 class SwapExecutor extends events_1.EventEmitter {
+    async acquireBuyLock() {
+        if (!this.buyLock) {
+            this.buyLock = true;
+            return;
+        }
+        await new Promise(resolve => this.buyQueue.push(resolve));
+        this.buyLock = true;
+    }
+    releaseBuyLock() {
+        const next = this.buyQueue.shift();
+        if (next) {
+            next();
+        }
+        else {
+            this.buyLock = false;
+        }
+    }
     constructor() {
         super();
+        this.backupClients = [];
         this.openPositions = new Map();
         this.knownTokens = new Set();
         this.positionMonitorInterval = null;
         this.isReady = false;
+        this.buyLock = false; // mutex: prevent concurrent buy TXs (nonce collision)
+        this.buyQueue = [];
         this.CONFIG = {
             // ── Slippage ──────────────────────────────────────────────────────────
             DEFAULT_SLIPPAGE: parseFloat(process.env.MAX_SLIPPAGE_PERCENT || '8'), // 8%
@@ -102,15 +250,58 @@ class SwapExecutor extends events_1.EventEmitter {
         }
         const privateKey = rawKey.startsWith('0x') ? rawKey : `0x${rawKey}`;
         this.account = (0, accounts_1.privateKeyToAccount)(privateKey);
-        const rpcUrl = process.env.BASE_HTTP_URL || 'https://mainnet-preconf.base.org';
+        const rpcUrl = process.env.BASE_HTTP_URL || 'https://mainnet.base.org';
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.publicClient = (0, viem_1.createPublicClient)({ chain: chains_1.base, transport: (0, viem_1.http)(rpcUrl) });
         this.walletClient = (0, viem_1.createWalletClient)({ account: this.account, chain: chains_1.base, transport: (0, viem_1.http)(rpcUrl) });
+        // Backup RPC clients for receipt fallback (rotate when primary fails)
+        const backupRpcs = [
+            'https://base.llamarpc.com',
+            'https://base-rpc.publicnode.com',
+            'https://1rpc.io/base',
+            'https://base.meowrpc.com',
+        ].filter(u => u !== rpcUrl);
+        this.backupClients = backupRpcs.map(u => (0, viem_1.createPublicClient)({ chain: chains_1.base, transport: (0, viem_1.http)(u) }));
         this.isReady = true;
         console.log('💼 SwapExecutor initialized');
         console.log(`   Wallet: ${this.account.address}`);
         console.log(`   RPC:    ${rpcUrl}`);
         console.log(`   Mode:   ${this.CONFIG.GAS_MODE.toUpperCase()}`);
+    }
+    // Load persisted open positions from DB after initDb() completes
+    loadPositionsFromDb() {
+        try {
+            const rows = (0, db_1.dbLoadOpenPositions)();
+            if (rows.length === 0)
+                return;
+            for (const r of rows) {
+                const addr = r.tokenAddress;
+                this.openPositions.set(addr, {
+                    tokenAddress: addr,
+                    tokenSymbol: r.tokenSymbol,
+                    amountIn: BigInt(r.amountInWei),
+                    amountOut: BigInt(r.amountOutWei),
+                    entryPrice: r.entryPriceEth,
+                    openedAt: r.openedAt,
+                    txHash: r.txHash,
+                    takeProfit1Hit: r.tp1Hit,
+                    takeProfit2Hit: r.tp2Hit,
+                    takeProfit3Hit: r.tp3Hit,
+                    peakValueEth: r.peakValueEth,
+                    dcaDone: r.dcaDone,
+                    sourceWallet: r.sourceWallet,
+                    initialLiquidityUsd: r.initLiqUsd,
+                    tp1SoldPct: r.tp1SoldPct,
+                    tp2SoldPct: r.tp2SoldPct,
+                });
+                this.knownTokens.add(addr.toLowerCase());
+            }
+            console.log(`♻️  Restored ${rows.length} open position(s) from DB`);
+            this.startPositionMonitor();
+        }
+        catch (e) {
+            console.warn(`⚠️  Could not restore positions from DB: ${e?.message}`);
+        }
     }
     // ============ GAS PRICE ============
     // Base L2 reality: base fee is 0.001–0.01 gwei, NOT 1–2 gwei like Ethereum mainnet.
@@ -150,6 +341,43 @@ class SwapExecutor extends events_1.EventEmitter {
         const wei = await this.publicClient.getBalance({ address: this.account.address });
         return { eth: (0, viem_1.formatEther)(wei), wei };
     }
+    // ── Robust receipt waiting with multi-RPC rotation fallback ──
+    async waitForReceiptRobust(txHash, timeout = 90000) {
+        const deadline = Date.now() + timeout;
+        const allClients = [this.publicClient, ...this.backupClients];
+        let lastErr = null;
+        let attempt = 0;
+        while (Date.now() < deadline) {
+            const client = allClients[attempt % allClients.length];
+            try {
+                const remaining = deadline - Date.now();
+                const r = await client.waitForTransactionReceipt({ hash: txHash, timeout: Math.min(20000, remaining) });
+                return r;
+            }
+            catch (err) {
+                lastErr = err;
+                for (const c of allClients) {
+                    try {
+                        const r = await c.getTransactionReceipt({ hash: txHash });
+                        if (r)
+                            return r;
+                    }
+                    catch { /* not mined yet on this RPC */ }
+                }
+                await new Promise(r => setTimeout(r, 2000));
+                attempt++;
+            }
+        }
+        for (const c of allClients) {
+            try {
+                const r = await c.getTransactionReceipt({ hash: txHash });
+                if (r)
+                    return r;
+            }
+            catch { /* ignore */ }
+        }
+        throw lastErr ?? new Error('Receipt timeout');
+    }
     // ============ BUY TOKEN (ETH → Token) ============
     async buy(params) {
         if (!this.isReady)
@@ -157,6 +385,8 @@ class SwapExecutor extends events_1.EventEmitter {
         const { tokenAddress, amountInEth, slippagePercent = this.CONFIG.DEFAULT_SLIPPAGE, feeTier = 3000 } = params;
         const amountIn = (0, viem_1.parseEther)(amountInEth.toString());
         console.log(`\n🛒 BUY: ${amountInEth} ETH → ${tokenAddress.slice(0, 10)}...`);
+        // ── Sequential buy mutex — prevent nonce collision ──
+        await this.acquireBuyLock();
         try {
             // ── Balance check ──
             // Reserve 0.0001 ETH (~$0.30) for gas — Base L2 is very cheap (was 0.002 ETH = $6)
@@ -183,48 +413,76 @@ class SwapExecutor extends events_1.EventEmitter {
                 effectiveSlippage = Math.max(1, Math.min(15, 2 + tradeSharePct * 2));
                 console.log(`   🎯 Dynamic slippage: ${effectiveSlippage.toFixed(1)}% (trade $${tradeUsd.toFixed(0)} = ${tradeSharePct.toFixed(2)}% of pool $${impact.liquidityUsd.toFixed(0)})`);
             }
-            // ── Auto-detect best fee tier ──
-            const bestFee = await this.getBestFeeTier(tokenAddress);
-            console.log(`   ⛽ Using fee tier: ${bestFee / 10000}%`);
-            // ── Slippage protection: compute minimum tokens out from live price ──
-            let amountOutMinimum = 0n;
-            try {
-                const pair = await (0, price_oracle_1.getBestDexPair)(tokenAddress);
-                if (pair) {
-                    const tokenPriceEth = parseFloat(pair.priceNative || '0');
-                    if (tokenPriceEth > 0) {
-                        const decimals = await this.getTokenDecimals(tokenAddress);
-                        const expectedTokens = amountInEth / tokenPriceEth;
-                        const minTokens = expectedTokens * (1 - effectiveSlippage / 100);
-                        const minFixed = minTokens.toFixed(Math.min(decimals, 8));
-                        amountOutMinimum = (0, viem_1.parseUnits)(minFixed, decimals);
-                        console.log(`   🛡️ Slippage guard: min ${minTokens.toFixed(4)} tokens (${effectiveSlippage.toFixed(1)}% max slippage)`);
-                    }
-                }
+            // ── DEX-aware routing: detect best DEX and simulate before sending ──
+            // amountOutMinimum = 0n: stale price cache would cause reverts. Accept any output.
+            const amountOutMinimum = 0n;
+            const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
+            const swapRoute = await this.detectSwapRoute(tokenAddress, amountIn, amountOutMinimum, 'buy');
+            if (!swapRoute.ok) {
+                return { success: false, amountIn, amountOut: 0n, error: swapRoute.error ?? 'No valid swap route found' };
             }
-            catch {
-                console.log(`   ⚠️ Tidak bisa hitung amountOutMinimum — buy tanpa proteksi slippage`);
-            }
+            console.log(`   ⛽ DEX: ${swapRoute.dex} | Route: ${swapRoute.label}`);
+            console.log(`   🛡️ Slippage guard: disabled (price impact check protects, slippage=${effectiveSlippage.toFixed(1)}%)`);
             const gasPrice = await this.getGasPrice();
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const txHash = await this.walletClient.writeContract({
-                address: UNISWAP_V3_ROUTER,
-                abi: ROUTER_ABI,
-                functionName: 'exactInputSingle',
-                args: [{
-                        tokenIn: WETH_BASE,
-                        tokenOut: tokenAddress,
-                        fee: bestFee,
-                        recipient: this.account.address,
-                        amountIn,
-                        amountOutMinimum,
-                        sqrtPriceLimitX96: 0n
-                    }],
-                value: amountIn,
-                ...gasPrice
-            });
+            let txHash;
+            if (swapRoute.dex === 'aerodrome-cl') {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                txHash = await this.walletClient.writeContract({
+                    address: AERODROME_CL_ROUTER,
+                    abi: AERODROME_CL_ABI,
+                    functionName: 'exactInputSingle',
+                    args: [{
+                            tokenIn: WETH_BASE, tokenOut: tokenAddress,
+                            tickSpacing: swapRoute.tickSpacing,
+                            recipient: this.account.address,
+                            deadline, amountIn, amountOutMinimum, sqrtPriceLimitX96: 0n
+                        }],
+                    value: amountIn,
+                    ...gasPrice
+                });
+            }
+            else if (swapRoute.dex === 'aerodrome-v2') {
+                const route = [{ from: WETH_BASE, to: tokenAddress, stable: swapRoute.stable ?? false, factory: AERODROME_V2_FACTORY }];
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                txHash = await this.walletClient.writeContract({
+                    address: AERODROME_V2_ROUTER,
+                    abi: AERODROME_V2_ABI,
+                    functionName: 'swapExactETHForTokens',
+                    args: [amountOutMinimum, route, this.account.address, deadline],
+                    value: amountIn,
+                    ...gasPrice
+                });
+            }
+            else if (swapRoute.dex === 'uniswap-v2') {
+                const path = [WETH_BASE, tokenAddress];
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                txHash = await this.walletClient.writeContract({
+                    address: swapRoute.v2Router,
+                    abi: UNISWAP_V2_ABI,
+                    functionName: 'swapExactETHForTokens',
+                    args: [amountOutMinimum, path, this.account.address, deadline],
+                    value: amountIn,
+                    ...gasPrice
+                });
+            }
+            else {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                txHash = await this.walletClient.writeContract({
+                    address: UNISWAP_V3_ROUTER,
+                    abi: ROUTER_ABI,
+                    functionName: 'exactInputSingle',
+                    args: [{
+                            tokenIn: WETH_BASE, tokenOut: tokenAddress,
+                            fee: swapRoute.fee,
+                            recipient: this.account.address,
+                            amountIn, amountOutMinimum, sqrtPriceLimitX96: 0n
+                        }],
+                    value: amountIn,
+                    ...gasPrice
+                });
+            }
             console.log(`   📤 TX sent: ${txHash}`);
-            const receipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 30000 });
+            const receipt = await this.waitForReceiptRobust(txHash);
             if (receipt.status !== 'success') {
                 return { success: false, amountIn, amountOut: 0n, txHash, error: 'Transaction reverted' };
             }
@@ -237,7 +495,7 @@ class SwapExecutor extends events_1.EventEmitter {
             });
             const tokenSymbol = await this.getTokenSymbol(tokenAddress);
             // Record open position
-            this.openPositions.set(tokenAddress, {
+            const posData = {
                 tokenAddress,
                 tokenSymbol,
                 amountIn,
@@ -254,6 +512,20 @@ class SwapExecutor extends events_1.EventEmitter {
                 initialLiquidityUsd: impact.liquidityUsd,
                 tp1SoldPct: 0,
                 tp2SoldPct: 0,
+            };
+            this.openPositions.set(tokenAddress, posData);
+            // Persist to DB so position survives restarts
+            (0, db_1.dbSaveOpenPosition)({
+                tokenAddress, tokenSymbol,
+                amountInWei: amountIn.toString(),
+                amountOutWei: tokenBalance.toString(),
+                entryPriceEth: amountInEth,
+                openedAt: posData.openedAt,
+                txHash, peakValueEth: amountInEth,
+                tp1Hit: false, tp2Hit: false, tp3Hit: false,
+                tp1SoldPct: 0, tp2SoldPct: 0, dcaDone: false,
+                sourceWallet: params.sourceWallet,
+                initLiqUsd: impact.liquidityUsd,
             });
             this.knownTokens.add(tokenAddress.toLowerCase());
             console.log(`   ✅ BUY SUCCESS: ${(0, viem_1.formatEther)(tokenBalance)} ${tokenSymbol}`);
@@ -268,6 +540,9 @@ class SwapExecutor extends events_1.EventEmitter {
             console.error(`   ❌ BUY FAILED: ${msg}`);
             this.emit('buy-failed', { tokenAddress, error: msg });
             return { success: false, amountIn, amountOut: 0n, error: msg };
+        }
+        finally {
+            this.releaseBuyLock();
         }
     }
     // ============ SELL TOKEN (Token → ETH) ============
@@ -287,62 +562,93 @@ class SwapExecutor extends events_1.EventEmitter {
             }
             const amountIn = (tokenBalance * BigInt(percentToSell)) / 100n;
             const gasPrice = await this.getGasPrice();
-            // ── Skip approve if router already has sufficient allowance (saves 1 TX = ~$0.001) ──
+            // ── DEX-aware routing: approve correct router, then send ──
+            const amountOutMinimum = 0n; // must succeed — accept any ETH output
+            const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
+            // Detect which DEX/router to use for this token
+            const sellRoute = await this.detectSwapRoute(tokenAddress, amountIn, amountOutMinimum, 'sell');
+            // Approve the correct router (Uniswap V3, Aerodrome CL, Aerodrome V2, or V2-style)
+            const routerToApprove = sellRoute.dex === 'aerodrome-cl' ? AERODROME_CL_ROUTER
+                : sellRoute.dex === 'aerodrome-v2' ? AERODROME_V2_ROUTER
+                    : sellRoute.dex === 'uniswap-v2' ? sellRoute.v2Router
+                        : UNISWAP_V3_ROUTER;
             const allowance = await this.publicClient.readContract({
                 address: tokenAddress,
                 abi: ERC20_ABI,
                 functionName: 'allowance',
-                args: [this.account.address, UNISWAP_V3_ROUTER]
+                args: [this.account.address, routerToApprove]
             });
             if (allowance < amountIn) {
-                console.log(`   📝 Approving router (first time for this token)...`);
+                console.log(`   📝 Approving ${sellRoute.dex} router...`);
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const approveTx = await this.walletClient.writeContract({
                     address: tokenAddress,
                     abi: ERC20_ABI,
                     functionName: 'approve',
-                    args: [UNISWAP_V3_ROUTER, MAX_UINT256],
+                    args: [routerToApprove, MAX_UINT256],
                     ...gasPrice
                 });
-                await this.publicClient.waitForTransactionReceipt({ hash: approveTx, timeout: 20000 });
+                await this.waitForReceiptRobust(approveTx, 45000);
             }
             else {
                 console.log(`   ✅ Router already approved — skipping approve TX (saved ~$0.001)`);
             }
-            // ── Auto-detect best fee tier for this token ──
-            const bestFee = await this.getBestFeeTier(tokenAddress);
-            console.log(`   ⛽ Sell using fee tier: ${bestFee / 10000}%`);
-            // ── Slippage protection: estimate current ETH value, set minimum output ──
-            // Prevents sandwich attacks on exit (previously was 0n — no protection at all)
-            let amountOutMinimum = 0n;
-            try {
-                const estimatedEth = await this.estimateTokenValueEth(tokenAddress, amountIn);
-                if (estimatedEth && estimatedEth > 0) {
-                    const slippage = this.CONFIG.DEFAULT_SLIPPAGE;
-                    amountOutMinimum = BigInt(Math.floor(estimatedEth * (1 - slippage / 100) * 1e18));
-                    console.log(`   🛡️ Sell min output: ${(0, viem_1.formatEther)(amountOutMinimum)} ETH (${slippage}% max slippage)`);
-                }
+            console.log(`   ⛽ Sell DEX: ${sellRoute.dex} | ${sellRoute.label}`);
+            let txHash;
+            if (sellRoute.dex === 'aerodrome-cl') {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                txHash = await this.walletClient.writeContract({
+                    address: AERODROME_CL_ROUTER,
+                    abi: AERODROME_CL_ABI,
+                    functionName: 'exactInputSingle',
+                    args: [{
+                            tokenIn: tokenAddress, tokenOut: WETH_BASE,
+                            tickSpacing: sellRoute.tickSpacing,
+                            recipient: this.account.address,
+                            deadline, amountIn, amountOutMinimum, sqrtPriceLimitX96: 0n
+                        }],
+                    ...gasPrice
+                });
             }
-            catch { /* use 0n as safe fallback if price estimate unavailable */ }
-            // Execute sell
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const txHash = await this.walletClient.writeContract({
-                address: UNISWAP_V3_ROUTER,
-                abi: ROUTER_ABI,
-                functionName: 'exactInputSingle',
-                args: [{
-                        tokenIn: tokenAddress,
-                        tokenOut: WETH_BASE,
-                        fee: bestFee,
-                        recipient: this.account.address,
-                        amountIn,
-                        amountOutMinimum,
-                        sqrtPriceLimitX96: 0n
-                    }],
-                ...gasPrice
-            });
+            else if (sellRoute.dex === 'aerodrome-v2') {
+                const route = [{ from: tokenAddress, to: WETH_BASE, stable: sellRoute.stable ?? false, factory: AERODROME_V2_FACTORY }];
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                txHash = await this.walletClient.writeContract({
+                    address: AERODROME_V2_ROUTER,
+                    abi: AERODROME_V2_ABI,
+                    functionName: 'swapExactTokensForETH',
+                    args: [amountIn, amountOutMinimum, route, this.account.address, deadline],
+                    ...gasPrice
+                });
+            }
+            else if (sellRoute.dex === 'uniswap-v2') {
+                const path = [tokenAddress, WETH_BASE];
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                txHash = await this.walletClient.writeContract({
+                    address: sellRoute.v2Router,
+                    abi: UNISWAP_V2_ABI,
+                    functionName: 'swapExactTokensForETH',
+                    args: [amountIn, amountOutMinimum, path, this.account.address, deadline],
+                    ...gasPrice
+                });
+            }
+            else {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                txHash = await this.walletClient.writeContract({
+                    address: UNISWAP_V3_ROUTER,
+                    abi: ROUTER_ABI,
+                    functionName: 'exactInputSingle',
+                    args: [{
+                            tokenIn: tokenAddress, tokenOut: WETH_BASE,
+                            fee: sellRoute.fee,
+                            recipient: this.account.address,
+                            amountIn, amountOutMinimum, sqrtPriceLimitX96: 0n
+                        }],
+                    ...gasPrice
+                });
+            }
             console.log(`   📤 TX sent: ${txHash}`);
-            const receipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 30000 });
+            const receipt = await this.waitForReceiptRobust(txHash);
             if (receipt.status !== 'success') {
                 return { success: false, amountIn, amountOut: 0n, txHash, error: 'Sell transaction reverted' };
             }
@@ -367,6 +673,25 @@ class SwapExecutor extends events_1.EventEmitter {
             // Remove position if fully sold
             if (percentToSell >= 100) {
                 this.openPositions.delete(tokenAddress);
+                (0, db_1.dbDeleteOpenPosition)(tokenAddress);
+            }
+            else {
+                // Update persisted TP state
+                const pos = this.openPositions.get(tokenAddress);
+                if (pos) {
+                    (0, db_1.dbSaveOpenPosition)({
+                        tokenAddress, tokenSymbol: pos.tokenSymbol,
+                        amountInWei: pos.amountIn.toString(),
+                        amountOutWei: pos.amountOut.toString(),
+                        entryPriceEth: pos.entryPrice,
+                        openedAt: pos.openedAt, txHash: pos.txHash,
+                        peakValueEth: pos.peakValueEth,
+                        tp1Hit: pos.takeProfit1Hit, tp2Hit: pos.takeProfit2Hit, tp3Hit: pos.takeProfit3Hit,
+                        tp1SoldPct: pos.tp1SoldPct ?? 0, tp2SoldPct: pos.tp2SoldPct ?? 0,
+                        dcaDone: pos.dcaDone, sourceWallet: pos.sourceWallet,
+                        initLiqUsd: pos.initialLiquidityUsd ?? 0,
+                    });
+                }
             }
             return { success: true, txHash, amountIn, amountOut: 0n, gasUsed: receipt.gasUsed };
         }
@@ -404,12 +729,28 @@ class SwapExecutor extends events_1.EventEmitter {
         });
         if (currentBalance === 0n) {
             this.openPositions.delete(tokenAddress);
+            (0, db_1.dbDeleteOpenPosition)(tokenAddress);
             return;
         }
-        // Estimate current ETH value via DexScreener
+        // Estimate current ETH value
         const currentValueEth = await this.estimateTokenValueEth(tokenAddress, currentBalance);
-        if (currentValueEth === null)
+        // If price oracle completely fails, still enforce the timeout exit
+        // so positions don't hold forever when GeckoTerminal has no data yet
+        if (currentValueEth === null) {
+            const holdMinsNoPrice = (Date.now() - position.openedAt) / 60000;
+            console.log(`   ⚠️ ${position.tokenSymbol}: price oracle unavailable (${holdMinsNoPrice.toFixed(1)}min held, limit=${this.CONFIG.MAX_HOLD_MINUTES}min)`);
+            if (holdMinsNoPrice >= this.CONFIG.MAX_HOLD_MINUTES) {
+                console.log(`⏰ TIMEOUT EXIT (no price): selling ${position.tokenSymbol} after ${holdMinsNoPrice.toFixed(0)}min`);
+                this.emit('stop-loss', {
+                    tokenAddress, tokenSymbol: position.tokenSymbol, profitPct: null,
+                    reason: `⏰ Timeout (${this.CONFIG.MAX_HOLD_MINUTES}min — price oracle unavailable)`,
+                    peakMult: 1, sourceWallet: position.sourceWallet,
+                    holdMs: Date.now() - position.openedAt,
+                });
+                await this.sell(tokenAddress, 100, { source: 'stop-loss' });
+            }
             return;
+        }
         const entryEth = parseFloat((0, viem_1.formatEther)(position.amountIn));
         const profitPct = ((currentValueEth - entryEth) / entryEth) * 100;
         const multiplier = currentValueEth / entryEth;
@@ -670,27 +1011,226 @@ class SwapExecutor extends events_1.EventEmitter {
             return 'UNKNOWN';
         }
     }
+    // ============ DEX-AWARE SWAP ROUTE DETECTION ============
+    /**
+     * Detect the best DEX and swap parameters for a token.
+     * Tries GeckoTerminal first (for known DEX), then on-chain factory, then simulation.
+     * Supports: Uniswap V3 and Aerodrome CL (Slipstream).
+     */
+    async detectSwapRoute(tokenAddress, amountIn, amountOutMinimum, direction) {
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
+        // ── Step 1: Check GeckoTerminal pair data for known DEX ──
+        try {
+            const pairs = await (0, price_oracle_1.getDexUniV3Pairs)(tokenAddress); // returns ALL pairs now
+            // Sort by liquidity descending
+            const sorted = pairs.slice().sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
+            for (const pair of sorted) {
+                const dexId = pair.dexId ?? '';
+                // Skip DEXes we cannot trade on (Uniswap V4 uses PoolManager — not supported)
+                if (dexId.includes('uniswap-v4') || dexId.includes('pancakeswap-v3') || dexId.includes('sushiswap-v3')) {
+                    console.log(`   ℹ️  DEX "${dexId}" not yet supported — skipping this pool`);
+                    continue;
+                }
+                if (dexId === 'uniswap-v3' && pair.feeTier) {
+                    // Known Uniswap V3 pool with fee tier — simulate to confirm
+                    try {
+                        const tokenIn = direction === 'buy' ? WETH_BASE : tokenAddress;
+                        const tokenOut = direction === 'buy' ? tokenAddress : WETH_BASE;
+                        await this.publicClient.simulateContract({
+                            address: UNISWAP_V3_ROUTER, abi: ROUTER_ABI, functionName: 'exactInputSingle',
+                            args: [{ tokenIn, tokenOut, fee: pair.feeTier, recipient: this.account.address, amountIn, amountOutMinimum, sqrtPriceLimitX96: 0n }],
+                            ...(direction === 'buy' ? { value: amountIn } : {}),
+                            account: this.account.address,
+                        });
+                        return { ok: true, dex: 'uniswap-v3', fee: pair.feeTier, label: `Uniswap V3 fee=${pair.feeTier / 100}bps` };
+                    }
+                    catch { /* try next */ }
+                }
+                if (dexId === 'aerodrome-slipstream') {
+                    // Known Aerodrome CL pool — get tick spacing
+                    let ts = pair.tickSpacing;
+                    if (!ts && pair.pairAddress) {
+                        try {
+                            ts = await this.publicClient.readContract({
+                                address: pair.pairAddress, abi: POOL_TICK_SPACING_ABI, functionName: 'tickSpacing'
+                            });
+                        }
+                        catch {
+                            ts = 200;
+                        } // common default
+                    }
+                    ts = ts ?? 200;
+                    // Simulate Aerodrome CL swap
+                    try {
+                        const tokenIn = direction === 'buy' ? WETH_BASE : tokenAddress;
+                        const tokenOut = direction === 'buy' ? tokenAddress : WETH_BASE;
+                        await this.publicClient.simulateContract({
+                            address: AERODROME_CL_ROUTER, abi: AERODROME_CL_ABI, functionName: 'exactInputSingle',
+                            args: [{ tokenIn, tokenOut, tickSpacing: ts, recipient: this.account.address, deadline, amountIn, amountOutMinimum, sqrtPriceLimitX96: 0n }],
+                            ...(direction === 'buy' ? { value: amountIn } : {}),
+                            account: this.account.address,
+                        });
+                        return { ok: true, dex: 'aerodrome-cl', tickSpacing: ts, label: `Aerodrome CL tickSpacing=${ts}` };
+                    }
+                    catch { /* try next */ }
+                }
+                // Aerodrome V2 (classic AMM) — try volatile then stable
+                if (dexId === 'aerodrome-v2' || dexId === 'aerodrome' || dexId === 'aerodrome-finance') {
+                    for (const stable of [false, true]) {
+                        const route = [{ from: direction === 'buy' ? WETH_BASE : tokenAddress, to: direction === 'buy' ? tokenAddress : WETH_BASE, stable, factory: AERODROME_V2_FACTORY }];
+                        try {
+                            const amounts = await this.publicClient.readContract({
+                                address: AERODROME_V2_ROUTER, abi: AERODROME_V2_ABI, functionName: 'getAmountsOut',
+                                args: [amountIn, route]
+                            });
+                            if (amounts && amounts.length >= 2 && amounts[1] > 0n) {
+                                return { ok: true, dex: 'aerodrome-v2', stable, label: `Aerodrome V2 ${stable ? 'stable' : 'volatile'} (GeckoTerminal)` };
+                            }
+                        }
+                        catch { /* try next */ }
+                    }
+                }
+                // V2-style DEX from GeckoTerminal (BaseSwap, AlienBase, etc.) — brute-force all V2 routers
+                const isV2Style = dexId.includes('v2') || dexId.includes('baseswap') || dexId.includes('alienbase') || dexId.includes('swapbased') || dexId.includes('uniswap-v2') || dexId.includes('pancakeswap-v2');
+                if (isV2Style) {
+                    const path = direction === 'buy' ? [WETH_BASE, tokenAddress] : [tokenAddress, WETH_BASE];
+                    for (const router of V2_ROUTERS) {
+                        try {
+                            const amounts = await this.publicClient.readContract({
+                                address: router.address, abi: UNISWAP_V2_ABI, functionName: 'getAmountsOut',
+                                args: [amountIn, path]
+                            });
+                            if (amounts && amounts.length >= 2 && amounts[1] > 0n) {
+                                return { ok: true, dex: 'uniswap-v2', v2Router: router.address, label: `${router.label} (GeckoTerminal dexId=${dexId})` };
+                            }
+                        }
+                        catch { /* try next */ }
+                    }
+                }
+                // Unknown DEX — log it for future support
+                if (dexId !== 'uniswap-v3' && dexId !== 'aerodrome-slipstream' && dexId !== 'aerodrome-v2' && dexId !== 'aerodrome' && !dexId.includes('v2')) {
+                    console.log(`   ⚠️  Unknown DEX from GeckoTerminal: "${dexId}" — will try on-chain brute-force`);
+                }
+            }
+        }
+        catch { /* GeckoTerminal failed — fall through to on-chain detection */ }
+        // ── Step 2: On-chain Uniswap V3 factory scan ──
+        const v3Fee = await (0, price_oracle_1.getOnChainFeeTier)(this.publicClient, tokenAddress);
+        if (v3Fee !== null) {
+            const tokenIn = direction === 'buy' ? WETH_BASE : tokenAddress;
+            const tokenOut = direction === 'buy' ? tokenAddress : WETH_BASE;
+            try {
+                await this.publicClient.simulateContract({
+                    address: UNISWAP_V3_ROUTER, abi: ROUTER_ABI, functionName: 'exactInputSingle',
+                    args: [{ tokenIn, tokenOut, fee: v3Fee, recipient: this.account.address, amountIn, amountOutMinimum, sqrtPriceLimitX96: 0n }],
+                    ...(direction === 'buy' ? { value: amountIn } : {}),
+                    account: this.account.address,
+                });
+                return { ok: true, dex: 'uniswap-v3', fee: v3Fee, label: `Uniswap V3 fee=${v3Fee / 100}bps (on-chain)` };
+            }
+            catch { /* fall through */ }
+        }
+        // ── Step 3: Brute-force Aerodrome CL tick spacings ──
+        const aeroTicks = [200, 100, 50, 1];
+        for (const ts of aeroTicks) {
+            try {
+                const tokenIn = direction === 'buy' ? WETH_BASE : tokenAddress;
+                const tokenOut = direction === 'buy' ? tokenAddress : WETH_BASE;
+                await this.publicClient.simulateContract({
+                    address: AERODROME_CL_ROUTER, abi: AERODROME_CL_ABI, functionName: 'exactInputSingle',
+                    args: [{ tokenIn, tokenOut, tickSpacing: ts, recipient: this.account.address, deadline, amountIn, amountOutMinimum, sqrtPriceLimitX96: 0n }],
+                    ...(direction === 'buy' ? { value: amountIn } : {}),
+                    account: this.account.address,
+                });
+                return { ok: true, dex: 'aerodrome-cl', tickSpacing: ts, label: `Aerodrome CL tickSpacing=${ts} (brute-force)` };
+            }
+            catch { /* try next */ }
+        }
+        // ── Step 4: Brute-force remaining Uniswap V3 fee tiers ──
+        for (const fee of [500, 3000, 10000]) {
+            if (fee === v3Fee)
+                continue; // already tried
+            try {
+                const tokenIn = direction === 'buy' ? WETH_BASE : tokenAddress;
+                const tokenOut = direction === 'buy' ? tokenAddress : WETH_BASE;
+                await this.publicClient.simulateContract({
+                    address: UNISWAP_V3_ROUTER, abi: ROUTER_ABI, functionName: 'exactInputSingle',
+                    args: [{ tokenIn, tokenOut, fee, recipient: this.account.address, amountIn, amountOutMinimum, sqrtPriceLimitX96: 0n }],
+                    ...(direction === 'buy' ? { value: amountIn } : {}),
+                    account: this.account.address,
+                });
+                return { ok: true, dex: 'uniswap-v3', fee, label: `Uniswap V3 fee=${fee / 100}bps (brute-force)` };
+            }
+            catch { /* try next */ }
+        }
+        // ── Step 5: Brute-force Aerodrome V2 (volatile then stable) ──
+        for (const stable of [false, true]) {
+            const route = [{ from: direction === 'buy' ? WETH_BASE : tokenAddress, to: direction === 'buy' ? tokenAddress : WETH_BASE, stable, factory: AERODROME_V2_FACTORY }];
+            try {
+                const amounts = await this.publicClient.readContract({
+                    address: AERODROME_V2_ROUTER, abi: AERODROME_V2_ABI, functionName: 'getAmountsOut',
+                    args: [amountIn, route]
+                });
+                if (amounts && amounts.length >= 2 && amounts[1] > 0n) {
+                    return { ok: true, dex: 'aerodrome-v2', stable, label: `Aerodrome V2 ${stable ? 'stable' : 'volatile'} (brute-force)` };
+                }
+            }
+            catch { /* try next */ }
+        }
+        // ── Step 6: Brute-force Uniswap V2-style routers (BaseSwap, Uniswap V2, etc.) ──
+        const v2Path = direction === 'buy' ? [WETH_BASE, tokenAddress] : [tokenAddress, WETH_BASE];
+        for (const router of V2_ROUTERS) {
+            try {
+                const amounts = await this.publicClient.readContract({
+                    address: router.address, abi: UNISWAP_V2_ABI, functionName: 'getAmountsOut',
+                    args: [amountIn, v2Path]
+                });
+                if (amounts && amounts.length >= 2 && amounts[1] > 0n) {
+                    return { ok: true, dex: 'uniswap-v2', v2Router: router.address, label: `${router.label} (brute-force)` };
+                }
+            }
+            catch { /* try next */ }
+        }
+        // For sells: if ALL simulations fail (e.g. honeypot/tax), try Aerodrome V2 volatile anyway
+        if (direction === 'sell') {
+            const fallbackFee = v3Fee ?? 10000;
+            console.warn(`   ⚠️  All sell simulations failed — sending anyway at fee=${fallbackFee / 100}bps (possible honeypot tax)`);
+            return { ok: true, dex: 'uniswap-v3', fee: fallbackFee, label: `Uniswap V3 fee=${fallbackFee / 100}bps (emergency fallback)` };
+        }
+        return { ok: false, dex: 'uniswap-v3', error: 'No valid swap route — token not tradeable on any known DEX', label: 'none' };
+    }
     // ============ BEST FEE TIER DETECTION ============
     async getBestFeeTier(tokenAddress) {
         try {
-            // getDexUniV3Pairs uses the shared cache — no extra HTTP call if already fetched
             const pairs = await (0, price_oracle_1.getDexUniV3Pairs)(tokenAddress);
-            let bestLiq = 0;
-            let bestFee = 3000;
             const VALID_FEES = new Set([500, 3000, 10000]);
+            let bestLiq = 0;
+            let bestFee;
             for (const pair of pairs) {
                 const liq = pair.liquidity?.usd || 0;
-                if (liq > bestLiq) {
+                const rawFee = pair.feeTier ?? NaN;
+                const validFee = VALID_FEES.has(rawFee) ? rawFee : undefined;
+                if (validFee !== undefined && liq > bestLiq) {
                     bestLiq = liq;
-                    // Use the pair's actual fee tier, falling back to 3000 if not a valid UniV3 tier
-                    const rawFee = pair.feeTier ?? 3000;
-                    bestFee = VALID_FEES.has(rawFee) ? rawFee : 3000;
+                    bestFee = validFee;
                 }
             }
-            return bestFee;
+            if (bestFee !== undefined)
+                return bestFee;
+            // GeckoTerminal has no clear fee tier data → query factory on-chain
+            // Most new Base tokens launch at 1% (10000); check 10000, 3000, 500 in order
+            console.log(`   🔍 Fee tier unknown from GeckoTerminal — querying Uniswap factory on-chain...`);
+            const onChainFee = await (0, price_oracle_1.getOnChainFeeTier)(this.publicClient, tokenAddress);
+            if (onChainFee !== null) {
+                console.log(`   ⛓️  On-chain fee tier detected: ${onChainFee / 100}%`);
+                return onChainFee;
+            }
+            // Nothing found — default to 10000 (1%) since most new Base meme tokens use it
+            console.log(`   ⚠️  No pool found on-chain — defaulting to 1% fee tier (10000)`);
+            return 10000;
         }
         catch {
-            return 3000;
+            return 10000;
         }
     }
     // ============ PRICE IMPACT CHECK ============
@@ -796,7 +1336,7 @@ class SwapExecutor extends events_1.EventEmitter {
             }
             const gasPrice = await this.getGasPrice();
             const txHash = await this.walletClient.sendTransaction({ to, value, ...gasPrice });
-            await this.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 30000 });
+            await this.waitForReceiptRobust(txHash);
             console.log(`✅ Sent ${amountEth} ETH → ${to}`);
             return { success: true, txHash };
         }
@@ -819,7 +1359,7 @@ class SwapExecutor extends events_1.EventEmitter {
             const txHash = await this.walletClient.writeContract({
                 address: tokenAddress, abi: ERC20_ABI, functionName: 'transfer', args: [to, amount], ...gasPrice
             });
-            await this.publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 30000 });
+            await this.waitForReceiptRobust(txHash);
             console.log(`✅ Sent ${amountHuman} token (${tokenAddress}) → ${to}`);
             return { success: true, txHash };
         }

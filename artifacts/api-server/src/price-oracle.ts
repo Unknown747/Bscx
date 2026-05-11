@@ -59,8 +59,9 @@ export interface NormalizedPair {
     volume:       { h24: number };
     pairCreatedAt?: number;   // ms timestamp
     chainId:      string;
-    dexId:        string;
+    dexId:        string;     // GeckoTerminal dex ID: 'uniswap-v3', 'aerodrome-slipstream', 'aerodrome-v2', etc.
     feeTier?:     500 | 3000 | 10000;   // Uniswap V3 fee tier in basis points
+    tickSpacing?: number;     // Aerodrome CL (Slipstream) tick spacing
 }
 
 // ─── GeckoTerminal Cache ─────────────────────────────────────────────────────
@@ -148,19 +149,48 @@ function adaptPoolData(gtData: any, included: any[] = []): NormalizedPair | null
         ? new Date(attr.pool_created_at).getTime()
         : undefined;
 
-    // Extract Uniswap V3 fee tier — try direct attribute first, then parse pool name
+    // Extract REAL dexId from GeckoTerminal relationships (was wrongly hardcoded as 'uniswap_v3')
+    // GeckoTerminal dex IDs: 'uniswap-v3', 'aerodrome-slipstream', 'aerodrome-v2', 'baseswap-v2', etc.
+    const dexId: string = gtData.relationships?.dex?.data?.id ?? 'unknown';
+
+    // Extract Uniswap V3 fee tier — only relevant for uniswap-v3 pools
     // GeckoTerminal pool names look like "TOKEN / WETH 0.05%" | "0.3%" | "1%"
     let feeTier: 500 | 3000 | 10000 | undefined;
-    const rawFt = attr.fee_tier !== undefined ? parseInt(String(attr.fee_tier)) : NaN;
-    if (rawFt === 500 || rawFt === 3000 || rawFt === 10000) {
-        feeTier = rawFt;
-    } else {
-        const nameMatch = String(attr.name ?? '').match(/([\d.]+)%/);
-        if (nameMatch) {
-            const pct = parseFloat(nameMatch[1]);
-            if (Math.abs(pct - 0.05) < 0.01)  feeTier = 500;
-            else if (Math.abs(pct - 0.3) < 0.01) feeTier = 3000;
-            else if (Math.abs(pct - 1.0) < 0.01) feeTier = 10000;
+    if (dexId === 'uniswap-v3') {
+        const rawFt = attr.fee_tier !== undefined ? parseInt(String(attr.fee_tier)) : NaN;
+        if (rawFt === 500 || rawFt === 3000 || rawFt === 10000) {
+            feeTier = rawFt;
+        } else {
+            const nameMatch = String(attr.name ?? '').match(/([\d.]+)%/);
+            if (nameMatch) {
+                const pct = parseFloat(nameMatch[1]);
+                if (Math.abs(pct - 0.05) < 0.01)  feeTier = 500;
+                else if (Math.abs(pct - 0.3) < 0.01) feeTier = 3000;
+                else if (Math.abs(pct - 1.0) < 0.01) feeTier = 10000;
+            }
+        }
+    }
+
+    // Extract Aerodrome CL tick spacing (stored as fee_tier on GT but means tickSpacing for CL pools)
+    let tickSpacing: number | undefined;
+    if (dexId === 'aerodrome-slipstream') {
+        const rawTs = attr.fee_tier !== undefined ? parseInt(String(attr.fee_tier)) : NaN;
+        if (!isNaN(rawTs) && rawTs > 0) {
+            // GeckoTerminal stores Aerodrome tick spacing in the fee_tier field
+            // Common values: 1, 50, 100, 200
+            tickSpacing = rawTs;
+        }
+        // Also try to parse from pool name if fee_tier missing
+        if (tickSpacing === undefined) {
+            const nameMatch = String(attr.name ?? '').match(/([\d.]+)%/);
+            if (nameMatch) {
+                const pct = parseFloat(nameMatch[1]);
+                // Approximate tick spacing from fee %
+                if (Math.abs(pct - 0.01) < 0.005)  tickSpacing = 1;
+                else if (Math.abs(pct - 0.05) < 0.01) tickSpacing = 50;
+                else if (Math.abs(pct - 0.3) < 0.05)  tickSpacing = 100;
+                else if (Math.abs(pct - 1.0) < 0.1)   tickSpacing = 200;
+            }
         }
     }
 
@@ -182,8 +212,9 @@ function adaptPoolData(gtData: any, included: any[] = []): NormalizedPair | null
         volume:      { h24: parseFloat(attr.volume_usd?.h24 || '0') || 0 },
         pairCreatedAt,
         chainId: 'base',
-        dexId:   'uniswap_v3',
+        dexId,
         feeTier,
+        tickSpacing,
     };
 }
 
@@ -333,6 +364,34 @@ export async function getGeckoTrendingPools(): Promise<GeckoNewPool[]> {
         });
     }
     return results;
+}
+
+// ─── On-chain Fee Tier Detection ─────────────────────────────────────────────
+
+/**
+ * Find the Uniswap V3 fee tier for a token on Base by querying the factory on-chain.
+ * Returns the first fee tier (500, 3000, 10000) that has a valid pool, or null.
+ * Most new Base tokens launch at 10000 (1%), so we check that first.
+ */
+export async function getOnChainFeeTier(
+    publicClient: PublicClient,
+    tokenAddress: string,
+): Promise<500 | 3000 | 10000 | null> {
+    const ZERO = '0x0000000000000000000000000000000000000000';
+    // Check 10000 first — most new Base meme tokens launch at 1% fee
+    const orderedFees: readonly (500 | 3000 | 10000)[] = [10000, 3000, 500];
+    for (const fee of orderedFees) {
+        try {
+            const pool = await publicClient.readContract({
+                address:      UNI_V3_FACTORY as `0x${string}`,
+                abi:          FACTORY_ABI,
+                functionName: 'getPool',
+                args:         [tokenAddress as `0x${string}`, WETH as `0x${string}`, fee],
+            }) as string;
+            if (pool && pool.toLowerCase() !== ZERO) return fee;
+        } catch { continue; }
+    }
+    return null;
 }
 
 // ─── On-chain Price Fallback (Uniswap V3 slot0) ──────────────────────────────
