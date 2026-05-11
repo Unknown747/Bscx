@@ -21,6 +21,7 @@ import MempoolGauge from './MempoolGauge';
 import LiveDashboard from './LiveDashboard';
 import AIProviderStatus from './AIProviderStatus';
 import RpcStatusBadge from './RpcStatusBadge';
+import PaperTrading from './PaperTrading';
 import { authFetch } from '../lib/authFetch';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 
@@ -105,7 +106,7 @@ interface Config {
     dcaEnabled: boolean;
 }
 
-type Tab = 'live' | 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report' | 'screener' | 'deployment' | 'correlation' | 'deployer';
+type Tab = 'live' | 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report' | 'screener' | 'deployment' | 'correlation' | 'deployer' | 'paper';
 
 interface DashboardProps {
     apiUrl: string;
@@ -115,6 +116,7 @@ const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
     { id: 'live',         label: 'Live',        icon: '🔴' },
     { id: 'overview',     label: 'Overview',    icon: '📊' },
     { id: 'screener',     label: 'Screener',    icon: '📡' },
+    { id: 'paper',        label: 'Paper',       icon: '📄' },
     { id: 'correlation',  label: 'Korelasi',    icon: '🔗' },
     { id: 'deployer',     label: 'Deployer',    icon: '🕵️' },
     { id: 'portfolio',    label: 'Portfolio',   icon: '👜' },
@@ -608,6 +610,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     </div>
                 )}
 
+                {activeTab === 'paper'        && <PaperTrading apiUrl={apiUrl} />}
                 {activeTab === 'screener'     && <SmartScreener apiUrl={apiUrl} />}
                 {activeTab === 'correlation'  && <WhaleCorrelation apiUrl={apiUrl} />}
                 {activeTab === 'deployer'     && <DeployerRepCheck apiUrl={apiUrl} />}

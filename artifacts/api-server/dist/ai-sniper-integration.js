@@ -58,6 +58,7 @@ const push_manager_1 = require("./push-manager");
 const microcap_risk_manager_1 = require("./microcap-risk-manager");
 const performance_optimizer_1 = require("./performance-optimizer");
 const whale_analyzer_pro_1 = require("./whale-analyzer-pro");
+const paper_trader_1 = require("./paper-trader");
 const crypto_1 = require("crypto");
 const events_1 = require("events");
 const dotenv_1 = __importDefault(require("dotenv"));
@@ -751,6 +752,19 @@ class AISniperBot extends events_1.EventEmitter {
         });
         // ─── Executor events ───
         this.wireExecutorEvents();
+        // ─── Paper trading: wire to SmartScreener buy-signal ───
+        this.smartScreener.on('buy-signal', async (signal) => {
+            if (signal.signal === 'STRONG_BUY' || signal.signal === 'BUY') {
+                await paper_trader_1.paperTrader.openPosition(signal.tokenAddress, signal.tokenSymbol || signal.tokenAddress.slice(0, 8), 'screener', signal.dexUrl);
+            }
+        });
+        // ─── Paper trading: wire to GeckoScanner token-opportunity ───
+        this.geckoScanner.on('token-opportunity', async (opportunity) => {
+            const dexUrl = opportunity.pairAddress
+                ? `https://www.geckoterminal.com/base/pools/${opportunity.pairAddress}`
+                : undefined;
+            await paper_trader_1.paperTrader.openPosition(opportunity.tokenAddress, opportunity.tokenSymbol || opportunity.tokenAddress.slice(0, 8), 'gecko', dexUrl);
+        });
         // ─── Feature: Smart Screener STRONG_BUY Telegram notifications ───
         // ─── Log koin yang dilewati (stagnan / dump / tax naik) ke dashboard ───
         this.smartScreener.on('skipped', (d) => {

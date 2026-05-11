@@ -40,6 +40,7 @@ const express_1 = __importDefault(require("express"));
 const ai_sniper_integration_1 = require("./ai-sniper-integration");
 const push_manager_1 = require("./push-manager");
 const db_1 = require("./db");
+const paper_trader_1 = require("./paper-trader");
 const dotenv_1 = __importDefault(require("dotenv"));
 const crypto_1 = __importDefault(require("crypto"));
 const path_1 = __importDefault(require("path"));
@@ -1177,6 +1178,39 @@ app.get('/api/deployment-status', (_req, res) => {
         network: process.env.BASE_HTTP_URL || 'https://mainnet.base.org',
         port: PORT,
     });
+});
+// ============ PAPER TRADING ============
+app.get('/api/paper/stats', (_req, res) => {
+    res.json(paper_trader_1.paperTrader.getStats());
+});
+app.get('/api/paper/positions', (_req, res) => {
+    res.json(paper_trader_1.paperTrader.getOpenPositions());
+});
+app.get('/api/paper/trades', (_req, res) => {
+    const limit = parseInt(String(_req.query.limit || '200'));
+    res.json(paper_trader_1.paperTrader.getClosedTrades(limit));
+});
+app.post('/api/paper/toggle', (req, res) => {
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') {
+        res.status(400).json({ error: 'enabled (boolean) required' });
+        return;
+    }
+    paper_trader_1.paperTrader.setEnabled(enabled);
+    res.json({ ok: true, enabled });
+});
+app.delete('/api/paper/reset', (_req, res) => {
+    paper_trader_1.paperTrader.reset();
+    res.json({ ok: true, message: 'Paper trading reset' });
+});
+app.post('/api/paper/close', async (req, res) => {
+    const { tokenAddress } = req.body;
+    if (!tokenAddress) {
+        res.status(400).json({ error: 'tokenAddress required' });
+        return;
+    }
+    const ok = await paper_trader_1.paperTrader.manualClose(tokenAddress);
+    res.json({ ok, message: ok ? 'Posisi paper ditutup' : 'Posisi tidak ditemukan' });
 });
 // ============ SERVE FRONTEND (production) ============
 const frontendDist = (() => {

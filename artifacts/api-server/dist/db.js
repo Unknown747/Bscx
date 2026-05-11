@@ -56,6 +56,14 @@ exports.dbDeleteOpenPosition = dbDeleteOpenPosition;
 exports.dbLoadOpenPositions = dbLoadOpenPositions;
 exports.dbInsertActivityLog = dbInsertActivityLog;
 exports.dbGetRecentActivityLogs = dbGetRecentActivityLogs;
+exports.dbSavePaperPosition = dbSavePaperPosition;
+exports.dbDeletePaperPosition = dbDeletePaperPosition;
+exports.dbGetPaperPositions = dbGetPaperPositions;
+exports.dbInsertPaperTrade = dbInsertPaperTrade;
+exports.dbGetPaperTrades = dbGetPaperTrades;
+exports.dbResetPaperTrading = dbResetPaperTrading;
+exports.dbGetPaperConfig = dbGetPaperConfig;
+exports.dbSetPaperConfig = dbSetPaperConfig;
 const sql_js_1 = __importDefault(require("sql.js"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -228,11 +236,60 @@ async function initDb() {
                 init_liq_usd    REAL    NOT NULL DEFAULT 0
             );
         `);
+        _db.run(`
+            CREATE TABLE IF NOT EXISTS paper_positions (
+                token_address   TEXT    PRIMARY KEY,
+                token_symbol    TEXT    NOT NULL DEFAULT '',
+                entry_price_usd REAL    NOT NULL,
+                entry_price_eth REAL    NOT NULL DEFAULT 0,
+                virtual_eth_in  REAL    NOT NULL,
+                tokens_bought   REAL    NOT NULL DEFAULT 0,
+                remaining_pct   REAL    NOT NULL DEFAULT 100,
+                opened_at       INTEGER NOT NULL,
+                peak_price_usd  REAL    NOT NULL DEFAULT 0,
+                tp1_hit         INTEGER NOT NULL DEFAULT 0,
+                tp2_hit         INTEGER NOT NULL DEFAULT 0,
+                source          TEXT    NOT NULL DEFAULT 'screener',
+                dex_url         TEXT    NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS paper_trades (
+                id              TEXT    PRIMARY KEY,
+                token_address   TEXT    NOT NULL,
+                token_symbol    TEXT    NOT NULL,
+                entry_price_usd REAL    NOT NULL,
+                exit_price_usd  REAL    NOT NULL,
+                virtual_eth_in  REAL    NOT NULL,
+                virtual_eth_out REAL    NOT NULL,
+                profit_pct      REAL    NOT NULL,
+                profit_eth      REAL    NOT NULL,
+                hold_ms         INTEGER NOT NULL,
+                closed_at       INTEGER NOT NULL,
+                reason          TEXT    NOT NULL,
+                tp_level        INTEGER,
+                source          TEXT    NOT NULL DEFAULT 'screener',
+                dex_url         TEXT    NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_pt_closed ON paper_trades(closed_at);
+
+            CREATE TABLE IF NOT EXISTS paper_config (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        `);
         // Migration: add data_source column if it doesn't exist yet
         const cols = runQuery('PRAGMA table_info(monitored_wallets)').map((c) => c.name);
         if (!cols.includes('data_source')) {
             _db.run("ALTER TABLE monitored_wallets ADD COLUMN data_source TEXT NOT NULL DEFAULT 'gecko'");
         }
+        // Migration: add remaining_pct to paper_positions if missing
+        try {
+            const ppCols = runQuery('PRAGMA table_info(paper_positions)').map((c) => c.name);
+            if (!ppCols.includes('remaining_pct')) {
+                _db.run("ALTER TABLE paper_positions ADD COLUMN remaining_pct REAL NOT NULL DEFAULT 100");
+            }
+        }
+        catch { /* table may not exist yet on first run */ }
         saveDb();
         console.log(`💾 SQLite DB ready: ${DB_PATH}`);
     })();
@@ -680,6 +737,136 @@ function dbGetRecentActivityLogs(limit = 200) {
     catch {
         return [];
     }
+}
+function rowToPaperPosition(r) {
+    return {
+        tokenAddress: r.token_address,
+        tokenSymbol: r.token_symbol,
+        entryPriceUsd: r.entry_price_usd,
+        entryPriceEth: r.entry_price_eth,
+        virtualEthIn: r.virtual_eth_in,
+        tokensBought: r.tokens_bought,
+        remainingPct: r.remaining_pct ?? 100,
+        openedAt: r.opened_at,
+        peakPriceUsd: r.peak_price_usd,
+        tp1Hit: !!r.tp1_hit,
+        tp2Hit: !!r.tp2_hit,
+        source: r.source,
+        dexUrl: r.dex_url,
+    };
+}
+function rowToPaperTrade(r) {
+    return {
+        id: r.id,
+        tokenAddress: r.token_address,
+        tokenSymbol: r.token_symbol,
+        entryPriceUsd: r.entry_price_usd,
+        exitPriceUsd: r.exit_price_usd,
+        virtualEthIn: r.virtual_eth_in,
+        virtualEthOut: r.virtual_eth_out,
+        profitPct: r.profit_pct,
+        profitEth: r.profit_eth,
+        holdMs: r.hold_ms,
+        closedAt: r.closed_at,
+        reason: r.reason,
+        tpLevel: r.tp_level ?? undefined,
+        source: r.source,
+        dexUrl: r.dex_url,
+    };
+}
+function dbSavePaperPosition(p) {
+    try {
+        runExec(`
+            INSERT INTO paper_positions
+                (token_address, token_symbol, entry_price_usd, entry_price_eth, virtual_eth_in,
+                 tokens_bought, remaining_pct, opened_at, peak_price_usd, tp1_hit, tp2_hit, source, dex_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(token_address) DO UPDATE SET
+                token_symbol    = excluded.token_symbol,
+                entry_price_usd = excluded.entry_price_usd,
+                entry_price_eth = excluded.entry_price_eth,
+                virtual_eth_in  = excluded.virtual_eth_in,
+                tokens_bought   = excluded.tokens_bought,
+                remaining_pct   = excluded.remaining_pct,
+                peak_price_usd  = excluded.peak_price_usd,
+                tp1_hit         = excluded.tp1_hit,
+                tp2_hit         = excluded.tp2_hit,
+                source          = excluded.source,
+                dex_url         = excluded.dex_url
+        `, [
+            p.tokenAddress.toLowerCase(), p.tokenSymbol, p.entryPriceUsd, p.entryPriceEth,
+            p.virtualEthIn, p.tokensBought, p.remainingPct, p.openedAt,
+            p.peakPriceUsd, p.tp1Hit ? 1 : 0, p.tp2Hit ? 1 : 0, p.source, p.dexUrl,
+        ]);
+    }
+    catch { /* non-critical */ }
+}
+function dbDeletePaperPosition(tokenAddress) {
+    try {
+        runExec('DELETE FROM paper_positions WHERE token_address = ?', [tokenAddress.toLowerCase()]);
+    }
+    catch { /* non-critical */ }
+}
+function dbGetPaperPositions() {
+    try {
+        return runQuery('SELECT * FROM paper_positions ORDER BY opened_at DESC').map(rowToPaperPosition);
+    }
+    catch {
+        return [];
+    }
+}
+function dbInsertPaperTrade(t) {
+    try {
+        runExec(`
+            INSERT OR IGNORE INTO paper_trades
+                (id, token_address, token_symbol, entry_price_usd, exit_price_usd,
+                 virtual_eth_in, virtual_eth_out, profit_pct, profit_eth,
+                 hold_ms, closed_at, reason, tp_level, source, dex_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+            t.id, t.tokenAddress, t.tokenSymbol, t.entryPriceUsd, t.exitPriceUsd,
+            t.virtualEthIn, t.virtualEthOut, t.profitPct, t.profitEth,
+            t.holdMs, t.closedAt, t.reason, t.tpLevel ?? null, t.source, t.dexUrl,
+        ]);
+        // Cap at 1000 most recent
+        runExec(`DELETE FROM paper_trades WHERE id NOT IN (SELECT id FROM paper_trades ORDER BY closed_at DESC LIMIT 1000)`);
+    }
+    catch { /* non-critical */ }
+}
+function dbGetPaperTrades(limit = 200) {
+    try {
+        return runQuery('SELECT * FROM paper_trades ORDER BY closed_at DESC LIMIT ?', [limit]).map(rowToPaperTrade);
+    }
+    catch {
+        return [];
+    }
+}
+function dbResetPaperTrading() {
+    try {
+        runExec('DELETE FROM paper_positions');
+        runExec('DELETE FROM paper_trades');
+        runExec("DELETE FROM paper_config WHERE key = 'virtual_balance'");
+        scheduleSave();
+    }
+    catch { /* non-critical */ }
+}
+function dbGetPaperConfig(key) {
+    try {
+        const row = runGet('SELECT value FROM paper_config WHERE key = ?', [key]);
+        return row?.value ?? null;
+    }
+    catch {
+        return null;
+    }
+}
+function dbSetPaperConfig(key, value) {
+    try {
+        runExec(`
+            INSERT INTO paper_config (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `, [key, value]);
+    }
+    catch { /* non-critical */ }
 }
 exports.default = { initDb };
 //# sourceMappingURL=db.js.map

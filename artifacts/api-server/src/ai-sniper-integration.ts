@@ -37,6 +37,7 @@ import { pushBuySuccess, pushTakeProfit, pushStopLoss, pushWhaleMonitoring, push
 import { MicroCapRiskManager } from './microcap-risk-manager';
 import { getCacheStats, getEthPriceSync } from './performance-optimizer';
 import { analyzeWhale } from './whale-analyzer-pro';
+import { paperTrader } from './paper-trader';
 import type { Address } from 'viem';
 import { randomBytes } from 'crypto';
 import { EventEmitter } from 'events';
@@ -864,6 +865,31 @@ export class AISniperBot extends EventEmitter {
 
         // ─── Executor events ───
         this.wireExecutorEvents();
+
+        // ─── Paper trading: wire to SmartScreener buy-signal ───
+        this.smartScreener.on('buy-signal', async (signal: ScreenerSignal) => {
+            if (signal.signal === 'STRONG_BUY' || signal.signal === 'BUY') {
+                await paperTrader.openPosition(
+                    signal.tokenAddress,
+                    signal.tokenSymbol || signal.tokenAddress.slice(0, 8),
+                    'screener',
+                    signal.dexUrl,
+                );
+            }
+        });
+
+        // ─── Paper trading: wire to GeckoScanner token-opportunity ───
+        this.geckoScanner.on('token-opportunity', async (opportunity: TokenOpportunity) => {
+            const dexUrl = opportunity.pairAddress
+                ? `https://www.geckoterminal.com/base/pools/${opportunity.pairAddress}`
+                : undefined;
+            await paperTrader.openPosition(
+                opportunity.tokenAddress,
+                opportunity.tokenSymbol || opportunity.tokenAddress.slice(0, 8),
+                'gecko',
+                dexUrl,
+            );
+        });
 
         // ─── Feature: Smart Screener STRONG_BUY Telegram notifications ───
         // ─── Log koin yang dilewati (stagnan / dump / tax naik) ke dashboard ───

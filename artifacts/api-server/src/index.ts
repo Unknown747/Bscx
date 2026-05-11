@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import { AISniperBot } from './ai-sniper-integration';
 import { getVapidPublicKey, savePushSubscription, removePushSubscription, getSubscriptionCount } from './push-manager';
 import { initDb } from './db';
+import { paperTrader } from './paper-trader';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import path from 'path';
@@ -1106,6 +1107,42 @@ app.get('/api/deployment-status', (_req: Request, res: Response) => {
         network:       process.env.BASE_HTTP_URL || 'https://mainnet.base.org',
         port:          PORT,
     });
+});
+
+// ============ PAPER TRADING ============
+app.get('/api/paper/stats', (_req: Request, res: Response) => {
+    res.json(paperTrader.getStats());
+});
+
+app.get('/api/paper/positions', (_req: Request, res: Response) => {
+    res.json(paperTrader.getOpenPositions());
+});
+
+app.get('/api/paper/trades', (_req: Request, res: Response) => {
+    const limit = parseInt(String(_req.query.limit || '200'));
+    res.json(paperTrader.getClosedTrades(limit));
+});
+
+app.post('/api/paper/toggle', (req: Request, res: Response) => {
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') {
+        res.status(400).json({ error: 'enabled (boolean) required' });
+        return;
+    }
+    paperTrader.setEnabled(enabled);
+    res.json({ ok: true, enabled });
+});
+
+app.delete('/api/paper/reset', (_req: Request, res: Response) => {
+    paperTrader.reset();
+    res.json({ ok: true, message: 'Paper trading reset' });
+});
+
+app.post('/api/paper/close', async (req: Request, res: Response) => {
+    const { tokenAddress } = req.body;
+    if (!tokenAddress) { res.status(400).json({ error: 'tokenAddress required' }); return; }
+    const ok = await paperTrader.manualClose(tokenAddress);
+    res.json({ ok, message: ok ? 'Posisi paper ditutup' : 'Posisi tidak ditemukan' });
 });
 
 // ============ SERVE FRONTEND (production) ============
