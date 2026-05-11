@@ -19,6 +19,7 @@ import WhaleCorrelation from './WhaleCorrelation';
 import DeployerRepCheck from './DeployerRepCheck';
 import MempoolGauge from './MempoolGauge';
 import LiveDashboard from './LiveDashboard';
+import AIProviderStatus from './AIProviderStatus';
 import { authFetch } from '../lib/authFetch';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 
@@ -40,6 +41,15 @@ interface Status {
     emergencyStop: boolean;
     lastTradeAt: number | null;
     timestamp: number;
+    aiStats?: {
+        providers: {
+            groq:         { hasKey: boolean; onCooldown: boolean; cooldownSecsLeft: number; success: number; fail: number; avgLatency: number };
+            gemini:       { hasKey: boolean; onCooldown: boolean; cooldownSecsLeft: number; success: number; fail: number; avgLatency: number };
+            huggingface:  { hasKey: boolean; onCooldown: boolean; cooldownSecsLeft: number; success: number; fail: number; avgLatency: number };
+        };
+        currentProvider: string;
+        timestamp:       number;
+    };
 }
 
 interface RiskState {
@@ -443,6 +453,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                                 <p className="text-xs text-gray-600 mt-0.5">aktif</p>
                             </div>
                         </div>
+
+                        {/* AI Provider Status */}
+                        <AIProviderStatus aiStats={status?.aiStats} />
 
                         {/* Config card */}
                         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
