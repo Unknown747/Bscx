@@ -308,6 +308,19 @@ export class SmartScreener extends EventEmitter {
             return;
         }
 
+        // Koin yang sudah pump >200% dalam 1 jam — masuk terlambat, sudah overbought.
+        // Kebanyakan koin dump setelah pump besar, bukan berlanjut naik.
+        if (priceChangeH1 > 200) {
+            this.emit('skipped', {
+                symbol:       symQuick,
+                pairAddress,
+                reason:       `OVERBOUGHT — sudah pump +${priceChangeH1.toFixed(0)}% dalam 1j, masuk terlambat`,
+                priceChangeH1,
+                ageMinutes,
+            });
+            return;
+        }
+
         this.seenPairs.set(pairAddress, Date.now() + this.SIGNAL_TTL_MS);
 
         // ── Safety check (GoPlus) ─────────────────────────────────────────────
@@ -511,7 +524,8 @@ export class SmartScreener extends EventEmitter {
             if (sellTax > this.config.maxSellTax) return { ...FAIL, flags: [`SELL_TAX_${sellTax.toFixed(0)}%`] };
             if (buyTax  > this.config.maxBuyTax)  return { ...FAIL, flags: [`BUY_TAX_${buyTax.toFixed(0)}%`] };
             if (creatorPct > this.config.maxCreatorPct) return { ...FAIL, flags: [`CREATOR_${creatorPct.toFixed(0)}%`] };
-            if (holderCount < 5 && holderCount > 0) return { ...FAIL, flags: ['TOO_FEW_HOLDERS'] };
+            // Minimum 50 holder — koin dengan < 50 holder sangat mudah dimanipulasi
+            if (holderCount < 50 && holderCount > 0) return { ...FAIL, flags: [`TOO_FEW_HOLDERS_${holderCount}`] };
 
             // Warnings (reduce score)
             let score = 100;

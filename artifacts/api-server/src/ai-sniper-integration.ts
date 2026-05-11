@@ -578,7 +578,7 @@ export class AISniperBot extends EventEmitter {
             }
 
             // Run AI analysis on top of screener signal
-            const analysis = await this.ai.analyzeToken(tokenAddress, {
+            const rawAnalysis = await this.ai.analyzeToken(tokenAddress, {
                 liquidity:     signal.liquidityUsd / 3000,
                 volume24h:     signal.volumeH24,
                 ageSeconds:    signal.ageMinutes * 60,
@@ -588,7 +588,19 @@ export class AISniperBot extends EventEmitter {
                 fdvUsd:        signal.fdvUsd,
             });
 
-            console.log(`   🤖 AI: ${analysis.recommendation} (${analysis.confidence}%)`);
+            // Ketika tidak ada AI key, rule-based sering mengembalikan HOLD karena
+            // penalti "sudah lama" (>300d) dan "terkonsentrasi" — padahal screener
+            // STRONG_BUY (≥75) sudah memverifikasi kualitas token secara mandiri.
+            // Jika rule-based HOLD tapi confidence ≥45, percayai screener dan override ke BUY.
+            const isRuleBased = typeof rawAnalysis.reasoning === 'string' && rawAnalysis.reasoning.startsWith('Rule-based:');
+            // Threshold 15: tolak hanya jika confidence 0–14 (liq terlalu rendah / bsr negatif)
+            // yang tidak akan lolos screener pun. Penalti "sudah lama" + "terkonsentrasi"
+            // (rule-based) sudah di-handle oleh screener — tidak perlu double-hukum.
+            const analysis = (isRuleBased && rawAnalysis.recommendation !== 'BUY' && rawAnalysis.confidence >= 15)
+                ? { ...rawAnalysis, recommendation: 'BUY' as const, predictedProfit: Math.max(rawAnalysis.predictedProfit ?? 0, 20) }
+                : rawAnalysis;
+
+            console.log(`   🤖 AI: ${analysis.recommendation} (${analysis.confidence}%)${isRuleBased ? ' [rule-based]' : ''}`);
 
             if (this.shouldBuy(analysis)) {
                 const amount = await this.calculateDynamicAmount(analysis.confidence);
@@ -1169,10 +1181,16 @@ export class AISniperBot extends EventEmitter {
     private shouldBuy(analysis: any): boolean {
         if (!this.runtimeConfig.aiEnabled)                            return true;  // AI disabled = always try
         if (analysis.recommendation !== 'BUY')                        return false;
-        if (analysis.confidence     < this.runtimeConfig.minAiConfidence)  return false;
         if (analysis.riskLevel      === 'CRITICAL')                    return false;
+
+        // Rule-based (tidak ada AI key) → threshold 15, screener sudah jadi quality gate.
+        // Real AI key → gunakan minAiConfidence penuh dari config.
+        const isRuleBased = typeof analysis.reasoning === 'string' && analysis.reasoning.startsWith('Rule-based:');
+        const threshold   = isRuleBased ? 15 : this.runtimeConfig.minAiConfidence;
+        if (analysis.confidence < threshold)                           return false;
+
         // Dynamic profit threshold: semakin tinggi confidence, semakin longgar batas profit
-        const minProfit = analysis.confidence >= 85 ? 10 : analysis.confidence >= 75 ? 15 : 20;
+        const minProfit = analysis.confidence >= 85 ? 5 : analysis.confidence >= 75 ? 10 : 15;
         if (analysis.predictedProfit < minProfit)                      return false;
 
         const openCount = this.executor?.getOpenPositions().length ?? 0;

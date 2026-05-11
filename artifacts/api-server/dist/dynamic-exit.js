@@ -101,9 +101,16 @@ async function calculateExit(ctx) {
         if (peakDrop >= trail)
             return 'SELL_ALL_TRAILING';
     }
-    // ── Timeout exit ──────────────────────────────────────────────────────────
-    if (holdMins >= ctx.maxHoldMinutes && profitPct > 0)
+    // ── Timeout exit — keluar SELALU setelah max hold, profit atau tidak ────────
+    if (holdMins >= ctx.maxHoldMinutes)
         return 'SELL_ALL_TIMEOUT';
+    // ── Dead coin early exit — volume mati + rugi = koin tidak akan recover ────
+    // Jika sudah 5 menit, rugi > 5%, dan volume tiba-tiba hilang → keluar cepat.
+    if (holdMins >= 5 && profitPct < -5) {
+        const volume = await getVolumeMomentum(ctx.tokenAddress, 2);
+        if (volume !== null && volume < -60)
+            return 'SELL_ALL_PANIC';
+    }
     return 'HOLD';
 }
 exports.default = { calculateExit };

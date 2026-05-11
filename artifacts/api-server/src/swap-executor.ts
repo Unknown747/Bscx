@@ -298,45 +298,44 @@ export class SwapExecutor extends EventEmitter {
 
     private readonly CONFIG = {
         // ── Slippage ──────────────────────────────────────────────────────────
-        DEFAULT_SLIPPAGE:           parseFloat(process.env.MAX_SLIPPAGE_PERCENT      || '8'),   // 8%
-        // ── Profit Ladder TP (3 Level) ────────────────────────────────────────
-        // TP1: +50% (1.5x) → sell 30%
-        TAKE_PROFIT_1_X:            parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER  || '1.5'),
-        TAKE_PROFIT_1_PCT:          parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE  || '30'),
-        // TP2: +150% (2.5x) → sell 30% of original position
-        TAKE_PROFIT_2_X:            parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER  || '2.5'),
-        TAKE_PROFIT_2_PCT:          parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE  || '30'),
-        // TP3: trailing stop on remaining ~40% — activate after +50% profit
-        TRAILING_TP3_ACTIVATE_PCT:  50,   // activate trailing TP3 after +50% profit
-        TRAILING_TP3_FROM_PEAK_PCT: 15,   // sell remaining if drops 15% from peak
-        // ── Stop Loss ────────────────────────────────────────────────────────
-        STOP_LOSS_PCT:              parseFloat(process.env.STOP_LOSS_PERCENTAGE       || '20'),
-        // ── Gas — calibrated for Base L2 (NOT Ethereum mainnet) ──────────────
-        // Base typical base fee: 0.001–0.005 gwei. Priority fee: 0.001 gwei is enough.
-        MAX_PRIORITY_FEE_GWEI:      parseFloat(process.env.MAX_PRIORITY_FEE_GWEI     || '0.005'), // was 0.5 — 100x too high
-        MAX_FEE_GWEI:               parseFloat(process.env.MAX_FEE_PER_GAS_GWEI      || '0.05'),  // was 1.5 — 30x too high
-        GAS_MODE:                   process.env.GAS_MODE                             || 'auto',   // auto reads actual Base fee
+        DEFAULT_SLIPPAGE:           parseFloat(process.env.MAX_SLIPPAGE_PERCENT      || '8'),
+        // ── Profit Ladder TP (3 Level) — disetel untuk microcap Base ──────────
+        // TP1: +20% (1.2x) → jual 60% — ambil profit cepat sebelum dump
+        TAKE_PROFIT_1_X:            parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER  || '1.2'),
+        TAKE_PROFIT_1_PCT:          parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE  || '60'),
+        // TP2: +80% (1.8x) → jual 40% sisa posisi
+        TAKE_PROFIT_2_X:            parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER  || '1.8'),
+        TAKE_PROFIT_2_PCT:          parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE  || '40'),
+        // TP3: trailing stop pada sisa — aktif setelah profit +20%
+        TRAILING_TP3_ACTIVATE_PCT:  20,   // aktifkan trailing TP3 setelah +20% profit
+        TRAILING_TP3_FROM_PEAK_PCT: 8,    // jual jika turun 8% dari peak
+        // ── Stop Loss — ketat untuk modal kecil ──────────────────────────────
+        STOP_LOSS_PCT:              parseFloat(process.env.STOP_LOSS_PERCENTAGE       || '8'),
+        // ── Gas — calibrated for Base L2 ─────────────────────────────────────
+        MAX_PRIORITY_FEE_GWEI:      parseFloat(process.env.MAX_PRIORITY_FEE_GWEI     || '0.005'),
+        MAX_FEE_GWEI:               parseFloat(process.env.MAX_FEE_PER_GAS_GWEI      || '0.05'),
+        GAS_MODE:                   process.env.GAS_MODE                             || 'auto',
         // ── Position Monitor ─────────────────────────────────────────────────
         MONITOR_INTERVAL_MS:        5000,
-        // ── Trailing Stop Loss (for positions before TP3 activates) ─────────
-        TRAILING_SL_ACTIVATE_MULT:  1.50,  // start trailing after 50% profit
-        TRAILING_SL_FROM_PEAK_PCT:  12,    // sell if drops 12% from peak
+        // ── Trailing Stop Loss (aktif sebelum TP3) ────────────────────────────
+        TRAILING_SL_ACTIVATE_MULT:  1.20,  // mulai trailing setelah +20% profit
+        TRAILING_SL_FROM_PEAK_PCT:  8,     // jual jika turun 8% dari peak
         // ── Minimum Liquidity Guard ──────────────────────────────────────────
-        LIQUIDITY_DROP_EXIT_PCT:    50,    // exit if pool liquidity drops 50% from entry
+        LIQUIDITY_DROP_EXIT_PCT:    50,
         // ── Price Impact ─────────────────────────────────────────────────────
         MAX_PRICE_IMPACT_PCT:       5,
-        // ── DCA ─ disabled for small capital (gas cost > benefit) ────────────
+        // ── DCA — disabled untuk modal kecil ─────────────────────────────────
         DCA_TRIGGER_MULT:           0.98,
-        DCA_ENABLED:                process.env.DCA_ENABLED === 'true', // default OFF (was default ON)
+        DCA_ENABLED:                process.env.DCA_ENABLED === 'true',
         // ── Position Management ───────────────────────────────────────────────
-        MAX_HOLD_MINUTES:           parseInt(process.env.MAX_HOLD_MINUTES     || '30'),  // exit stale positions
-        EMERGENCY_EXIT_PCT:         parseFloat(process.env.EMERGENCY_EXIT_PCT || '-50'), // rug detection: exit if drops this fast
-        EMERGENCY_EXIT_MINUTES:     2,  // window for emergency exit check (first N minutes of trade)
+        // 10 menit max hold — microcap meme dump cepat, tidak perlu terlalu lama
+        MAX_HOLD_MINUTES:           parseInt(process.env.MAX_HOLD_MINUTES     || '10'),
+        // Emergency exit: jika turun 15% di 3 menit pertama = kemungkinan rug
+        EMERGENCY_EXIT_PCT:         parseFloat(process.env.EMERGENCY_EXIT_PCT || '-15'),
+        EMERGENCY_EXIT_MINUTES:     3,
         // ── Volume Collapse Emergency Exit ────────────────────────────────────
-        // Rug pulls often start with a sudden volume cliff before price crashes.
-        // Exit immediately if trading volume drops >70% vs the prior 2-minute window.
-        VOLUME_COLLAPSE_THRESHOLD_PCT: 70,  // % volume drop that triggers exit
-        VOLUME_COLLAPSE_MIN_HOLD_MINS: 2,   // only arm after N minutes (need candle history)
+        VOLUME_COLLAPSE_THRESHOLD_PCT: 70,
+        VOLUME_COLLAPSE_MIN_HOLD_MINS: 2,
     };
 
     constructor() {
