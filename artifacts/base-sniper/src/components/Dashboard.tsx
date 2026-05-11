@@ -20,6 +20,7 @@ import DeployerRepCheck from './DeployerRepCheck';
 import MempoolGauge from './MempoolGauge';
 import LiveDashboard from './LiveDashboard';
 import AIProviderStatus from './AIProviderStatus';
+import RpcStatusBadge from './RpcStatusBadge';
 import { authFetch } from '../lib/authFetch';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 
@@ -150,8 +151,12 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 authFetch(`${apiUrl}/api/status`),
                 authFetch(`${apiUrl}/api/config`)
             ]);
-            setStatus(await statusRes.json());
-            setConfig(await configRes.json());
+            if (!statusRes.ok || !configRes.ok) throw new Error('Server error');
+            const statusJson = await statusRes.json();
+            const configJson = await configRes.json();
+            if (statusJson.error) throw new Error(statusJson.error);
+            setStatus(statusJson);
+            if (!configJson.error) setConfig(configJson);
             setLastUpdate(new Date().toLocaleTimeString('id-ID'));
             setError('');
         } catch {
@@ -275,10 +280,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1.5">
-                            <div className={`w-2 h-2 rounded-full ${status?.connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                            <span className="text-xs text-gray-400">{status?.connected ? 'Live' : 'Offline'}</span>
-                        </div>
+                        <RpcStatusBadge apiUrl={apiUrl} connected={status?.connected} />
                         <button
                             onClick={handleEmergencyStop}
                             disabled={emergencyLoading || emergencyDone || (status?.emergencyStop === true)}

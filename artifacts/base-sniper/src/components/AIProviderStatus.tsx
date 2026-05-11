@@ -1,5 +1,3 @@
-import { useEffect } from 'react';
-
 interface ProviderStat {
     hasKey:           boolean;
     onCooldown:       boolean;
@@ -42,11 +40,6 @@ function formatSecs(secs: number): string {
 }
 
 export default function AIProviderStatus({ aiStats }: Props) {
-    useEffect(() => {
-        const t = setInterval(() => {}, 1000);
-        return () => clearInterval(t);
-    }, []);
-
     if (!aiStats?.providers) return null;
 
     const providers = ['groq', 'gemini', 'huggingface'] as const;

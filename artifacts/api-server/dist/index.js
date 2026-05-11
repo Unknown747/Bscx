@@ -1107,6 +1107,17 @@ app.get('/api/report', requireAuth, async (_req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+// ============ CONNECTION STATUS ============
+app.get('/api/connection-status', (_req, res) => {
+    const status = bot.getStatus();
+    res.json({
+        wsConnected: status.connected,
+        rpcUrl: (process.env.BASE_HTTP_URL || 'https://mainnet.base.org').replace('https://', '').replace('http://', ''),
+        wssUrl: (process.env.BASE_WSS_URL || 'wss://base.drpc.org').replace('wss://', '').replace('ws://', ''),
+        lastTradeAt: status.lastTradeAt,
+        timestamp: Date.now(),
+    });
+});
 // ============ DEPLOYMENT STATUS ============
 const SERVER_START_TIME = Date.now();
 const BOT_VERSION = '1.0.0';

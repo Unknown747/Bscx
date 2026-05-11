@@ -16,9 +16,10 @@ export const MempoolGauge: React.FC<Props> = ({ apiUrl }) => {
     const load = useCallback(async () => {
         try {
             const res  = await authFetch(`${apiUrl}/api/mempool`);
-            const json = await res.json() as MempoolData;
-            setData(json);
-            setHistory(prev => [...prev.slice(-29), json.size]);
+            const json = await res.json();
+            if (json.error || json.size === undefined) return;
+            setData(json as MempoolData);
+            setHistory(prev => [...prev.slice(-29), (json as MempoolData).size]);
         } catch { /* silent */ }
     }, [apiUrl]);
 

@@ -80,6 +80,7 @@ const TradeHistory: React.FC<Props> = ({ apiUrl }) => {
         try {
             const res  = await authFetch(`${apiUrl}/api/history`);
             const json = await res.json();
+            if (json.error) { setError(json.error); return; }
             setData(json);
             setError('');
         } catch {

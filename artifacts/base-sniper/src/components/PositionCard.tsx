@@ -218,12 +218,15 @@ const PositionCard: React.FC<PositionCardProps> = ({ apiUrl }) => {
             ]);
             const posJson = await posRes.json();
             const cfgJson = await cfgRes.json();
+            if (posJson.error) throw new Error(posJson.error);
             setData(posJson);
-            setTpsl({
-                tp1Multiplier: cfgJson.tp1Multiplier ?? 1.5,
-                tp2Multiplier: cfgJson.tp2Multiplier ?? 2.5,
-                stopLoss:      cfgJson.stopLoss      ?? 30
-            });
+            if (!cfgJson.error) {
+                setTpsl({
+                    tp1Multiplier: cfgJson.tp1Multiplier ?? 1.5,
+                    tp2Multiplier: cfgJson.tp2Multiplier ?? 2.5,
+                    stopLoss:      cfgJson.stopLoss      ?? 30
+                });
+            }
             setError('');
         } catch {
             setError('Gagal memuat posisi');

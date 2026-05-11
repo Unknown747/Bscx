@@ -39,6 +39,7 @@ const DeploymentStatus: React.FC<Props> = ({ apiUrl }) => {
         try {
             const res  = await authFetch(`${apiUrl}/api/deployment-status`);
             const json = await res.json();
+            if (json.error) { setError(true); return; }
             setData(json);
             setError(false);
         } catch {
