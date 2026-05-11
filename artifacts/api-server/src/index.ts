@@ -1058,6 +1058,8 @@ app.get('*', (req: Request, res: Response) => {
     }
     const indexFile = path.join(frontendDist, 'index.html');
     if (fs.existsSync(indexFile)) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
         res.sendFile(indexFile);
     } else {
         res.status(503).send('Frontend not built. Run: cd artifacts/base-sniper && npm run build');

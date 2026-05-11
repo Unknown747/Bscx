@@ -1130,6 +1130,8 @@ app.get('*', (req, res) => {
     }
     const indexFile = path_1.default.join(frontendDist, 'index.html');
     if (fs_1.default.existsSync(indexFile)) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
         res.sendFile(indexFile);
     }
     else {

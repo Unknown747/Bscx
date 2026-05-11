@@ -512,14 +512,24 @@ Respond HANYA JSON (tidak ada teks lain):
     }
     // ============ MONITORING ============
     getStats() {
+        const now = Date.now();
+        const providerKeys = ['groq', 'gemini', 'huggingface'];
+        const providers = {};
+        for (const p of providerKeys) {
+            const s = this.stats.get(p);
+            const coolUntil = this.providerCooldown.get(p) ?? 0;
+            providers[p] = {
+                ...s,
+                hasKey: !!(this.API_KEYS[p.toUpperCase()]),
+                onCooldown: now < coolUntil,
+                cooldownUntil: coolUntil,
+                cooldownSecsLeft: now < coolUntil ? Math.ceil((coolUntil - now) / 1000) : 0,
+            };
+        }
         return {
-            providers: {
-                groq: this.stats.get('groq'),
-                gemini: this.stats.get('gemini'),
-                huggingface: this.stats.get('huggingface')
-            },
+            providers,
             currentProvider: this.currentProvider,
-            timestamp: Date.now()
+            timestamp: now,
         };
     }
     healthCheck() {

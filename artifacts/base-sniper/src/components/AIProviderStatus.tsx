@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
 interface ProviderStat {
     hasKey:           boolean;
@@ -42,10 +42,8 @@ function formatSecs(secs: number): string {
 }
 
 export default function AIProviderStatus({ aiStats }: Props) {
-    const [tick, setTick] = useState(0);
-
     useEffect(() => {
-        const t = setInterval(() => setTick(n => n + 1), 1000);
+        const t = setInterval(() => {}, 1000);
         return () => clearInterval(t);
     }, []);
 
