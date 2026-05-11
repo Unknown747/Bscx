@@ -400,15 +400,37 @@ export class FlashblocksScanner extends EventEmitter {
     }
 
     private handleDisconnect(): void {
-        if (!this.isConnected) return; // prevent multiple disconnect triggers
+        if (!this.isConnected) return;
         this.isConnected = false;
+
+        // Clear keepAlive on disconnect
+        if (this.keepAliveInterval) {
+            clearInterval(this.keepAliveInterval);
+            this.keepAliveInterval = null;
+        }
+
         this.reconnectAttempts++;
-        
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-        console.log(`🔄 Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})...`);
-        
-        setTimeout(() => {
-            this.connect().catch(console.error);
+
+        // Exponential backoff dengan jitter: mencegah semua koneksi reconnect bersamaan
+        // Max 15 detik (bukan 30 detik) — koneksi harus pulih cepat untuk tidak melewatkan pool baru
+        const baseDelay  = Math.min(500 * Math.pow(1.8, this.reconnectAttempts), 15000);
+        const jitter     = Math.random() * 1000; // random 0-1 detik
+        const delay      = Math.round(baseDelay + jitter);
+
+        // Rotasi endpoint saat reconnect — jangan selalu ke endpoint yang sama
+        const idx = this.reconnectAttempts % this.RPC_ENDPOINTS.length;
+        this.currentWsUrl = this.RPC_ENDPOINTS[idx].url;
+
+        console.log(`🔄 Reconnect #${this.reconnectAttempts} → ${this.RPC_ENDPOINTS[idx].type} dalam ${Math.round(delay/1000)}s...`);
+
+        setTimeout(async () => {
+            try {
+                await this.connect();
+                console.log(`✅ Reconnected berhasil ke ${this.RPC_ENDPOINTS[idx].type}`);
+                this.reconnectAttempts = 0; // reset setelah berhasil
+            } catch (err: any) {
+                console.error(`❌ Reconnect gagal: ${err?.message} — akan coba lagi...`);
+            }
         }, delay);
     }
 

@@ -234,44 +234,52 @@ class SwapExecutor extends events_1.EventEmitter {
         this.vcPoolCache = new Map();
         this.CONFIG = {
             // ── Slippage ──────────────────────────────────────────────────────────
-            DEFAULT_SLIPPAGE: parseFloat(process.env.MAX_SLIPPAGE_PERCENT || '8'),
-            // ── Profit Ladder TP (3 Level) — disetel untuk microcap Base ──────────
-            // TP1: +20% (1.2x) → jual 60% — ambil profit cepat sebelum dump
-            TAKE_PROFIT_1_X: parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER || '1.2'),
-            TAKE_PROFIT_1_PCT: parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE || '60'),
-            // TP2: +80% (1.8x) → jual 40% sisa posisi
-            TAKE_PROFIT_2_X: parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER || '1.8'),
+            DEFAULT_SLIPPAGE: parseFloat(process.env.MAX_SLIPPAGE_PERCENT || '6'),
+            // ── Profit Ladder TP (3 Level) — STRATEGI OPTIMAL untuk microcap Base ─
+            //
+            // FILOSOFI: "Ambil profit cepat, potong rugi lebih cepat"
+            // Microcap sering pump 25-60% lalu langsung dump — jangan tunggu 2x.
+            // Dengan jual bertahap, modal terlindungi dan sisa posisi bisa runner.
+            //
+            // TP1: +25% (1.25x) → jual 40% — amankan modal lebih awal
+            // (sebelumnya 1.2x jual 60% — terlalu banyak dijual, sisa runner kecil)
+            TAKE_PROFIT_1_X: parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER || '1.25'),
+            TAKE_PROFIT_1_PCT: parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE || '40'),
+            // TP2: +60% (1.6x) → jual 40% sisa — lebih realistis dari 1.8x
+            // (sebelumnya 1.8x/80% — jarang tercapai di microcap, posisi terlalu lama)
+            TAKE_PROFIT_2_X: parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER || '1.6'),
             TAKE_PROFIT_2_PCT: parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE || '40'),
-            // TP3: trailing stop pada sisa — aktif setelah profit +20%
-            TRAILING_TP3_ACTIVATE_PCT: 20, // aktifkan trailing TP3 setelah +20% profit
-            TRAILING_TP3_FROM_PEAK_PCT: 8, // jual jika turun 8% dari peak
+            // TP3: trailing stop aktif setelah +15% profit (lebih cepat dari sebelumnya +20%)
+            TRAILING_TP3_ACTIVATE_PCT: 15,
+            TRAILING_TP3_FROM_PEAK_PCT: 6, // jual jika turun 6% dari peak (sebelumnya 8%)
             // ── Stop Loss — ketat untuk modal kecil ──────────────────────────────
             STOP_LOSS_PCT: parseFloat(process.env.STOP_LOSS_PERCENTAGE || '8'),
             // ── Gas — calibrated for Base L2 ─────────────────────────────────────
             MAX_PRIORITY_FEE_GWEI: parseFloat(process.env.MAX_PRIORITY_FEE_GWEI || '0.005'),
             MAX_FEE_GWEI: parseFloat(process.env.MAX_FEE_PER_GAS_GWEI || '0.05'),
             GAS_MODE: process.env.GAS_MODE || 'auto',
-            // ── Position Monitor ─────────────────────────────────────────────────
-            MONITOR_INTERVAL_MS: 5000,
-            // ── Trailing Stop Loss (aktif sebelum TP3) ────────────────────────────
-            TRAILING_SL_ACTIVATE_MULT: 1.20, // mulai trailing setelah +20% profit
-            TRAILING_SL_FROM_PEAK_PCT: 8, // jual jika turun 8% dari peak
+            // ── Position Monitor — lebih cepat untuk deteksi exit lebih awal ──────
+            MONITOR_INTERVAL_MS: 3000, // dari 5000ms → 3000ms (lebih responsif)
+            // ── Trailing Stop Loss ─────────────────────────────────────────────────
+            TRAILING_SL_ACTIVATE_MULT: 1.15, // dari 1.20 → 1.15 (aktif lebih awal)
+            TRAILING_SL_FROM_PEAK_PCT: 6, // dari 8% → 6% (lebih ketat)
             // ── Minimum Liquidity Guard ──────────────────────────────────────────
-            LIQUIDITY_DROP_EXIT_PCT: 50,
+            LIQUIDITY_DROP_EXIT_PCT: 40, // dari 50% → 40% (exit lebih awal saat rug)
             // ── Price Impact ─────────────────────────────────────────────────────
             MAX_PRICE_IMPACT_PCT: 5,
             // ── DCA — disabled untuk modal kecil ─────────────────────────────────
             DCA_TRIGGER_MULT: 0.98,
             DCA_ENABLED: process.env.DCA_ENABLED === 'true',
             // ── Position Management ───────────────────────────────────────────────
-            // 10 menit max hold — microcap meme dump cepat, tidak perlu terlalu lama
-            MAX_HOLD_MINUTES: parseInt(process.env.MAX_HOLD_MINUTES || '10'),
-            // Emergency exit: jika turun 15% di 3 menit pertama = kemungkinan rug
-            EMERGENCY_EXIT_PCT: parseFloat(process.env.EMERGENCY_EXIT_PCT || '-15'),
-            EMERGENCY_EXIT_MINUTES: 3,
-            // ── Volume Collapse Emergency Exit ────────────────────────────────────
-            VOLUME_COLLAPSE_THRESHOLD_PCT: 70,
-            VOLUME_COLLAPSE_MIN_HOLD_MINS: 2,
+            // 8 menit max hold — dari 10 menit, microcap yang tidak pump dalam 8 menit tidak akan pump
+            MAX_HOLD_MINUTES: parseInt(process.env.MAX_HOLD_MINUTES || '8'),
+            // Emergency exit: jika turun 10% di 2 menit pertama = kemungkinan rug/honeypot
+            // (sebelumnya -15% dalam 3 menit — terlalu lambat untuk rug detection)
+            EMERGENCY_EXIT_PCT: parseFloat(process.env.EMERGENCY_EXIT_PCT || '-10'),
+            EMERGENCY_EXIT_MINUTES: 2, // dari 3 menit → 2 menit
+            // ── Volume Collapse Emergency Exit — lebih sensitif ───────────────────
+            VOLUME_COLLAPSE_THRESHOLD_PCT: 65, // dari 70% → 65% (deteksi lebih awal)
+            VOLUME_COLLAPSE_MIN_HOLD_MINS: 1.5, // dari 2 menit → 1.5 menit
         };
         // ============ PRICE ESTIMATION ============
         // In-process decimals cache to avoid repeated on-chain calls
@@ -1166,8 +1174,28 @@ class SwapExecutor extends events_1.EventEmitter {
                     return;
                 }
                 // Skip scaling signals if TP2 has already sold its portion (avoid double-sell)
+                // SELL_30_PERCENT: profit +25% dengan momentum masih OK → jual 30%, biarkan runner
+                if (exitSignal === 'SELL_30_PERCENT' && !position.dynamicSell25Done && !position.takeProfit2Hit) {
+                    console.log(`📊 [DynamicExit] TP awal +25% — jual 30% dari ${position.tokenSymbol}, biarkan runner`);
+                    await this.sell(tokenAddress, 30, { source: 'take-profit', tpLevel: 1 });
+                    position.dynamicSell25Done = true;
+                    return;
+                }
+                // SELL_40_PERCENT: profit +40% → jual 40% lagi dari sisa
+                if (exitSignal === 'SELL_40_PERCENT' && !position.dynamicSell50Done && !position.takeProfit2Hit) {
+                    console.log(`📊 [DynamicExit] TP +40% — jual 40% dari ${position.tokenSymbol}`);
+                    this.emit('take-profit', {
+                        tokenAddress, tokenSymbol: position.tokenSymbol,
+                        level: 2, multiplier, profitPct,
+                        holdMs: Date.now() - position.openedAt,
+                        sourceWallet: position.sourceWallet,
+                    });
+                    await this.sell(tokenAddress, 40, { source: 'take-profit', tpLevel: 2 });
+                    position.dynamicSell50Done = true;
+                    return;
+                }
                 if (exitSignal === 'SELL_50_PERCENT' && !position.dynamicSell50Done && !position.takeProfit2Hit) {
-                    console.log(`📉 [DynamicExit] Momentum weakening — selling 50% of ${position.tokenSymbol}`);
+                    console.log(`📉 [DynamicExit] Momentum melemah — jual 50% dari ${position.tokenSymbol}`);
                     this.emit('take-profit', {
                         tokenAddress, tokenSymbol: position.tokenSymbol,
                         level: 2, multiplier, profitPct,
@@ -1179,7 +1207,7 @@ class SwapExecutor extends events_1.EventEmitter {
                     return;
                 }
                 if (exitSignal === 'SELL_25_PERCENT' && !position.dynamicSell25Done && !position.takeProfit2Hit) {
-                    console.log(`📉 [DynamicExit] Scale out — selling 25% of ${position.tokenSymbol}`);
+                    console.log(`📉 [DynamicExit] Scale out — jual 25% dari ${position.tokenSymbol}`);
                     await this.sell(tokenAddress, 25, { source: 'take-profit', tpLevel: 2 });
                     position.dynamicSell25Done = true;
                     return;

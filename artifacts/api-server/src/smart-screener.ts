@@ -85,20 +85,21 @@ export interface ScreenerConfig {
 }
 
 const DEFAULT_CONFIG: ScreenerConfig = {
-    minLiquidityUsd:    3_000,
-    maxLiquidityUsd:    300_000,
-    minVolumeH24:       500,
-    maxAgeMinutes:      120,
-    minBuyTxH1:         10,
-    maxSellBuyRatio:    2.0,
-    minScore:           75,
-    maxSellTax:         5,
-    maxBuyTax:          5,
-    maxCreatorPct:      15,
-    scanIntervalMs:     20_000,
+    // Likuiditas: cukup untuk masuk/keluar tanpa slippage besar, tapi tidak terlalu besar
+    minLiquidityUsd:    5_000,    // dinaikkan dari $3K → $5K (filter token terlalu kecil)
+    maxLiquidityUsd:    200_000,  // diturunkan dari $300K → $200K (fokus microcap sejati)
+    minVolumeH24:       1_000,    // dinaikkan dari $500 → $1K (pastikan ada likuiditas nyata)
+    maxAgeMinutes:      90,       // diturunkan dari 120 → 90 menit (fokus token lebih fresh)
+    minBuyTxH1:         15,       // dinaikkan dari 10 → 15 buys/jam (sinyal minat lebih kuat)
+    maxSellBuyRatio:    1.5,      // diturunkan dari 2.0 → 1.5 (tolak jika banyak yang jual)
+    minScore:           75,       // tetap 75
+    maxSellTax:         5,        // tetap 5%
+    maxBuyTax:          5,        // tetap 5%
+    maxCreatorPct:      12,       // diturunkan dari 15% → 12% (lebih ketat konsentrasi creator)
+    scanIntervalMs:     15_000,   // diturunkan dari 20s → 15s (scan lebih cepat)
     maxSignalsKept:     50,
-    targetProfitPct:    [20, 40, 100],
-    stopLossPct:        15,
+    targetProfitPct:    [25, 60, 100],  // disesuaikan dengan TP baru: 25%, 60%, 100%
+    stopLossPct:        8,        // diturunkan dari 15% → 8% (konsisten dengan swap-executor)
 };
 
 interface GeckoPool {
