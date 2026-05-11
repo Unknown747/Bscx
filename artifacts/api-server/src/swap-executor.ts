@@ -35,6 +35,33 @@ const AERODROME_CL_ROUTER = '0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5' as Addr
 const WETH_BASE            = '0x4200000000000000000000000000000000000006' as Address;
 const MAX_UINT256          = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
 
+// QuoterV2 on Base — used to get expected output before sending buy TX
+const UNISWAP_V3_QUOTER_V2 = '0x3d4e44Eb1374240CE5F1B136a8047CeBEaC0b89E' as Address;
+const QUOTER_V2_ABI = [
+    {
+        name: 'quoteExactInputSingle',
+        type: 'function',
+        stateMutability: 'nonpayable',
+        inputs: [{
+            name: 'params',
+            type: 'tuple',
+            components: [
+                { name: 'tokenIn',           type: 'address' },
+                { name: 'tokenOut',          type: 'address' },
+                { name: 'amountIn',          type: 'uint256' },
+                { name: 'fee',               type: 'uint24'  },
+                { name: 'sqrtPriceLimitX96', type: 'uint160' }
+            ]
+        }],
+        outputs: [
+            { name: 'amountOut',               type: 'uint256' },
+            { name: 'sqrtPriceX96After',       type: 'uint160' },
+            { name: 'initializedTicksCrossed', type: 'uint32'  },
+            { name: 'gasEstimate',             type: 'uint256' }
+        ]
+    }
+] as const;
+
 // SwapRouter02 ABI — Uniswap V3 (exactInputSingle uses fee: uint24)
 const ROUTER_ABI = [
     {
@@ -370,6 +397,73 @@ export class SwapExecutor extends EventEmitter {
         }
     }
 
+    // ============ QUOTE HELPERS ============
+
+    /**
+     * Get expected token output for a Uniswap V3 buy using QuoterV2 (eth_call, no TX).
+     * Returns null on failure — caller must fall back to amountOutMinimum=0.
+     */
+    private async getV3QuotedAmountOut(
+        tokenIn: Address, tokenOut: Address, amountIn: bigint, fee: 500 | 3000 | 10000
+    ): Promise<bigint | null> {
+        try {
+            const result = await this.publicClient.simulateContract({
+                address:      UNISWAP_V3_QUOTER_V2,
+                abi:          QUOTER_V2_ABI,
+                functionName: 'quoteExactInputSingle',
+                args: [{ tokenIn, tokenOut, amountIn, fee, sqrtPriceLimitX96: 0n }],
+            });
+            const out = (result.result as any)[0] ?? result.result;
+            const outBig = typeof out === 'bigint' ? out : BigInt(out);
+            return outBig > 0n ? outBig : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Get expected token output for a V2-style or Aerodrome V2 buy using getAmountsOut.
+     * Returns null on failure.
+     */
+    private async getV2QuotedAmountOut(
+        tokenAddress: Address,
+        amountIn: bigint,
+        route: { dex: string; v2Router?: Address; stable?: boolean }
+    ): Promise<bigint | null> {
+        try {
+            if (route.dex === 'aerodrome-v2') {
+                const r = [{ from: WETH_BASE, to: tokenAddress, stable: route.stable ?? false, factory: AERODROME_V2_FACTORY }];
+                const amounts = await this.publicClient.readContract({
+                    address: AERODROME_V2_ROUTER, abi: AERODROME_V2_ABI, functionName: 'getAmountsOut',
+                    args: [amountIn, r]
+                }) as bigint[];
+                const out = amounts?.[1] ?? 0n;
+                return out > 0n ? out : null;
+            }
+            if (route.dex === 'uniswap-v2' && route.v2Router) {
+                const path: readonly [Address, Address] = [WETH_BASE, tokenAddress];
+                const amounts = await this.publicClient.readContract({
+                    address: route.v2Router, abi: UNISWAP_V2_ABI, functionName: 'getAmountsOut',
+                    args: [amountIn, path]
+                }) as bigint[];
+                const out = amounts?.[1] ?? 0n;
+                return out > 0n ? out : null;
+            }
+            return null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Apply slippage to a quoted amount to get amountOutMinimum.
+     * slippagePct = e.g. 8 means 8%.
+     */
+    private applySlippage(quotedOut: bigint, slippagePct: number): bigint {
+        const bps = BigInt(Math.round(slippagePct * 100));
+        return (quotedOut * (10000n - bps)) / 10000n;
+    }
+
     // ============ GAS PRICE ============
     // Base L2 reality: base fee is 0.001–0.01 gwei, NOT 1–2 gwei like Ethereum mainnet.
     // A full swap on Base costs ~150k gas × 0.005 gwei = ~$0.002. Calibrate accordingly.
@@ -485,17 +579,32 @@ export class SwapExecutor extends EventEmitter {
             }
 
             // ── DEX-aware routing: detect best DEX and simulate before sending ──
-            // amountOutMinimum = 0n: stale price cache would cause reverts. Accept any output.
-            const amountOutMinimum = 0n;
             const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
 
-            const swapRoute = await this.detectSwapRoute(tokenAddress, amountIn, amountOutMinimum, 'buy');
+            const swapRoute = await this.detectSwapRoute(tokenAddress, amountIn, 0n, 'buy');
             if (!swapRoute.ok) {
                 return { success: false, amountIn, amountOut: 0n, error: swapRoute.error ?? 'No valid swap route found' };
             }
 
             console.log(`   ⛽ DEX: ${swapRoute.dex} | Route: ${swapRoute.label}`);
-            console.log(`   🛡️ Slippage guard: disabled (price impact check protects, slippage=${effectiveSlippage.toFixed(1)}%)`);
+
+            // ── Get on-chain quote → compute real amountOutMinimum with slippage ──
+            // For V3: use QuoterV2 (eth_call). For V2/Aerodrome: use getAmountsOut.
+            // Falls back to 0 only when quote is unavailable (new token not yet indexed).
+            let quotedOut: bigint | null = null;
+            if (swapRoute.dex === 'uniswap-v3' && swapRoute.fee) {
+                quotedOut = await this.getV3QuotedAmountOut(WETH_BASE, tokenAddress, amountIn, swapRoute.fee);
+            } else if (swapRoute.dex === 'aerodrome-v2' || swapRoute.dex === 'uniswap-v2') {
+                quotedOut = await this.getV2QuotedAmountOut(tokenAddress, amountIn, swapRoute);
+            }
+
+            let amountOutMinimum = 0n;
+            if (quotedOut !== null && quotedOut > 0n) {
+                amountOutMinimum = this.applySlippage(quotedOut, effectiveSlippage);
+                console.log(`   🛡️ Slippage guard: min out = ${amountOutMinimum} (quoted=${quotedOut}, slippage=${effectiveSlippage.toFixed(1)}%)`);
+            } else {
+                console.log(`   ⚠️  Quote unavailable — amountOutMinimum=0 (simulation-only protection, slippage=${effectiveSlippage.toFixed(1)}%)`);
+            }
 
             const gasPrice = await this.getGasPrice();
             let txHash: Hex;
@@ -766,9 +875,14 @@ export class SwapExecutor extends EventEmitter {
                 this.openPositions.delete(tokenAddress);
                 dbDeleteOpenPosition(tokenAddress);
             } else {
-                // Update persisted TP state
+                // Scale down position proportionally so P&L stays accurate after partial sells.
+                // Example: sold 30% → remaining cost basis = 70% of original amountIn.
+                // Without this, profitPct after TP1 looks like -30% even when still profitable.
                 const pos = this.openPositions.get(tokenAddress);
                 if (pos) {
+                    const remainingPct = BigInt(100 - percentToSell);
+                    pos.amountIn  = pos.amountIn  * remainingPct / 100n;
+                    pos.amountOut = pos.amountOut * remainingPct / 100n;
                     dbSaveOpenPosition({
                         tokenAddress, tokenSymbol: pos.tokenSymbol,
                         amountInWei: pos.amountIn.toString(),
@@ -985,8 +1099,12 @@ export class SwapExecutor extends EventEmitter {
         }
 
         // ─── DYNAMIC EXIT: momentum-based OHLCV exit (active after TP1) ───
-        // Uses momentum & volume signals from GeckoTerminal for more precise exits
-        if (position.takeProfit1Hit && !position.takeProfit3Hit) {
+        // Uses momentum & volume signals from GeckoTerminal for more precise exits.
+        // Guard: skip if the TP ladder is about to handle this price level to avoid double-sells.
+        //   - TP2 fires at TAKE_PROFIT_2_X (default 2.5x / +150%) — skip dynamic scaling above that
+        //   - TP3 trailing already handled above — skip dynamic if TP2 already hit
+        const tp2AboutToFire = position.takeProfit1Hit && !position.takeProfit2Hit && multiplier >= this.CONFIG.TAKE_PROFIT_2_X;
+        if (position.takeProfit1Hit && !position.takeProfit3Hit && !tp2AboutToFire) {
             try {
                 const exitSignal = await calculateExit({
                     tokenAddress,
@@ -1012,7 +1130,8 @@ export class SwapExecutor extends EventEmitter {
                     return;
                 }
 
-                if (exitSignal === 'SELL_50_PERCENT' && !position.dynamicSell50Done) {
+                // Skip scaling signals if TP2 has already sold its portion (avoid double-sell)
+                if (exitSignal === 'SELL_50_PERCENT' && !position.dynamicSell50Done && !position.takeProfit2Hit) {
                     console.log(`📉 [DynamicExit] Momentum weakening — selling 50% of ${position.tokenSymbol}`);
                     this.emit('take-profit', {
                         tokenAddress, tokenSymbol: position.tokenSymbol,
@@ -1025,7 +1144,7 @@ export class SwapExecutor extends EventEmitter {
                     return;
                 }
 
-                if (exitSignal === 'SELL_25_PERCENT' && !position.dynamicSell25Done) {
+                if (exitSignal === 'SELL_25_PERCENT' && !position.dynamicSell25Done && !position.takeProfit2Hit) {
                     console.log(`📉 [DynamicExit] Scale out — selling 25% of ${position.tokenSymbol}`);
                     await this.sell(tokenAddress, 25, { source: 'take-profit', tpLevel: 2 });
                     position.dynamicSell25Done = true;
