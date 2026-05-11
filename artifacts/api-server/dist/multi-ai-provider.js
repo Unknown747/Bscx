@@ -22,8 +22,10 @@ class MultiAIProvider {
             gemini: 'https://generativelanguage.googleapis.com/v1beta/models',
             huggingface: 'https://api-inference.huggingface.co/models'
         };
-        // ── Token analysis cache (30s TTL) ────────────────────────────────────────
+        // ── Token analysis cache (5 min TTL) ─────────────────────────────────────
         this.tokenAnalysisCache = new Map();
+        // ── Per-provider rate-limit cooldown ─────────────────────────────────────
+        this.providerCooldown = new Map(); // provider → retryAfterMs
         this.groqClient = axios_1.default.create({
             headers: {
                 'Authorization': `Bearer ${this.API_KEYS.GROQ}`,
@@ -80,23 +82,39 @@ class MultiAIProvider {
             const stat = this.stats.get(provider);
             stat.fail++;
             this.stats.set(provider, stat);
-            console.error(`❌ AI [${provider}] failed:`, error);
+            const resp = error?.response;
+            const errMsg = resp
+                ? `HTTP ${resp.status} — ${resp.data?.error?.message ?? resp.statusText}`
+                : error?.message ?? String(error);
+            console.error(`❌ AI [${provider}] failed: ${errMsg}`);
+            // Track rate-limit cooldown (429) — parse retry-after header
+            if (resp?.status === 429) {
+                const retryAfterSec = parseInt(resp.headers?.['retry-after'] ?? '60', 10);
+                const cooldownMs = Math.min((isNaN(retryAfterSec) ? 60 : retryAfterSec) * 1000, 900000);
+                this.providerCooldown.set(provider, Date.now() + cooldownMs);
+                console.warn(`⏳ AI [${provider}] rate-limited — cooldown ${Math.round(cooldownMs / 1000)}s`);
+            }
             return this.fallbackQuery(prompt, provider);
         }
     }
+    isOnCooldown(provider) {
+        const until = this.providerCooldown.get(provider) ?? 0;
+        return Date.now() < until;
+    }
     selectBestProvider(prompt) {
-        if (prompt.includes('detect') || prompt.includes('pool') || prompt.includes('transaction')) {
-            return 'groq';
-        }
-        if (prompt.includes('wallet') || prompt.includes('analyze') || prompt.includes('pattern')) {
-            if (this.API_KEYS.GEMINI && this.stats.get('gemini').fail < 3) {
-                return 'gemini';
+        const order = ['groq', 'gemini', 'huggingface'];
+        // Try preferred order, skip any provider on rate-limit cooldown
+        for (const p of order) {
+            if (!this.isOnCooldown(p) && this.API_KEYS[p.toUpperCase()]) {
+                return p;
             }
-            return 'groq';
         }
-        if (this.stats.get('groq').fail > 5)
-            return 'gemini';
-        return this.currentProvider;
+        // All on cooldown — pick least recently cooled (closest to expiry)
+        return order.reduce((best, p) => {
+            const a = this.providerCooldown.get(best) ?? 0;
+            const b = this.providerCooldown.get(p) ?? 0;
+            return b < a ? p : best;
+        });
     }
     // Call private provider methods directly to avoid infinite recursion
     async fallbackQuery(originalPrompt, failedProvider) {
@@ -285,8 +303,8 @@ Respond HANYA JSON (tidak ada teks lain):
                 predictedProfit: parsed.predictedProfit || 0,
                 reasoning: parsed.reasoning || 'No reasoning provided'
             };
-            // Cache result for 30 seconds
-            this.tokenAnalysisCache.set(cacheKey, { result, expiresAt: Date.now() + 30000 });
+            // Cache result for 5 minutes to conserve free-tier API quotas
+            this.tokenAnalysisCache.set(cacheKey, { result, expiresAt: Date.now() + 300000 });
             return result;
         }
         catch {
@@ -504,18 +522,12 @@ Respond HANYA JSON (tidak ada teks lain):
             timestamp: Date.now()
         };
     }
-    async healthCheck() {
-        const results = {
-            groq: false,
-            gemini: false,
-            huggingface: false
+    healthCheck() {
+        return {
+            groq: !!this.API_KEYS.GROQ,
+            gemini: !!this.API_KEYS.GEMINI,
+            huggingface: !!this.API_KEYS.HUGGINGFACE,
         };
-        await Promise.allSettled([
-            this.queryGroq('Return {"test": "ok"}').then(() => { results.groq = true; }),
-            this.queryGemini('Return {"test": "ok"}').then(() => { results.gemini = true; }),
-            this.queryHuggingFace('Return {"test": "ok"}').then(() => { results.huggingface = true; })
-        ]);
-        return results;
     }
 }
 exports.MultiAIProvider = MultiAIProvider;

@@ -1070,7 +1070,8 @@ process.on('uncaughtException', (err) => {
     console.error('❌ Uncaught Exception (non-fatal — continuing):', err?.message || err);
 });
 process.on('unhandledRejection', (reason) => {
-    console.error('❌ Unhandled Promise Rejection (non-fatal — continuing):', reason);
+    const msg = (reason as any)?.message ?? String(reason);
+    console.error('❌ Unhandled Promise Rejection (non-fatal — continuing):', msg);
 });
 
 // ============ START SERVER ============

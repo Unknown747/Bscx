@@ -113,25 +113,45 @@ export class MultiAIProvider {
             const stat = this.stats.get(provider)!;
             stat.fail++;
             this.stats.set(provider, stat);
-            console.error(`❌ AI [${provider}] failed:`, error);
+            const resp = (error as any)?.response;
+            const errMsg = resp
+                ? `HTTP ${resp.status} — ${resp.data?.error?.message ?? resp.statusText}`
+                : (error as any)?.message ?? String(error);
+            console.error(`❌ AI [${provider}] failed: ${errMsg}`);
+
+            // Track rate-limit cooldown (429) — parse retry-after header
+            if (resp?.status === 429) {
+                const retryAfterSec = parseInt(resp.headers?.['retry-after'] ?? '60', 10);
+                const cooldownMs = Math.min((isNaN(retryAfterSec) ? 60 : retryAfterSec) * 1000, 900_000);
+                this.providerCooldown.set(provider, Date.now() + cooldownMs);
+                console.warn(`⏳ AI [${provider}] rate-limited — cooldown ${Math.round(cooldownMs / 1000)}s`);
+            }
+
             return this.fallbackQuery(prompt, provider);
         }
     }
 
+    private isOnCooldown(provider: AIProvider): boolean {
+        const until = this.providerCooldown.get(provider) ?? 0;
+        return Date.now() < until;
+    }
+
     private selectBestProvider(prompt: string): AIProvider {
-        if (prompt.includes('detect') || prompt.includes('pool') || prompt.includes('transaction')) {
-            return 'groq';
-        }
+        const order: AIProvider[] = ['groq', 'gemini', 'huggingface'];
 
-        if (prompt.includes('wallet') || prompt.includes('analyze') || prompt.includes('pattern')) {
-            if (this.API_KEYS.GEMINI && this.stats.get('gemini')!.fail < 3) {
-                return 'gemini';
+        // Try preferred order, skip any provider on rate-limit cooldown
+        for (const p of order) {
+            if (!this.isOnCooldown(p) && this.API_KEYS[p.toUpperCase() as 'GROQ' | 'GEMINI' | 'HUGGINGFACE']) {
+                return p;
             }
-            return 'groq';
         }
 
-        if (this.stats.get('groq')!.fail > 5) return 'gemini';
-        return this.currentProvider;
+        // All on cooldown — pick least recently cooled (closest to expiry)
+        return order.reduce((best, p) => {
+            const a = this.providerCooldown.get(best) ?? 0;
+            const b = this.providerCooldown.get(p) ?? 0;
+            return b < a ? p : best;
+        });
     }
 
     // Call private provider methods directly to avoid infinite recursion
@@ -263,8 +283,10 @@ export class MultiAIProvider {
         };
     }
 
-    // ── Token analysis cache (30s TTL) ────────────────────────────────────────
+    // ── Token analysis cache (5 min TTL) ─────────────────────────────────────
     private tokenAnalysisCache = new Map<string, { result: TokenAnalysis; expiresAt: number }>();
+    // ── Per-provider rate-limit cooldown ─────────────────────────────────────
+    private providerCooldown = new Map<AIProvider, number>(); // provider → retryAfterMs
 
     // ============ SPECIALIZED METHODS ============
     async analyzeToken(tokenAddress: string, tokenData: {
@@ -359,8 +381,8 @@ Respond HANYA JSON (tidak ada teks lain):
                 predictedProfit: parsed.predictedProfit  || 0,
                 reasoning:       parsed.reasoning        || 'No reasoning provided'
             };
-            // Cache result for 30 seconds
-            this.tokenAnalysisCache.set(cacheKey, { result, expiresAt: Date.now() + 30_000 });
+            // Cache result for 5 minutes to conserve free-tier API quotas
+            this.tokenAnalysisCache.set(cacheKey, { result, expiresAt: Date.now() + 300_000 });
             return result;
         } catch {
             const fallback: TokenAnalysis = {
@@ -564,20 +586,12 @@ Respond HANYA JSON (tidak ada teks lain):
         };
     }
 
-    async healthCheck(): Promise<Record<AIProvider, boolean>> {
-        const results: Record<AIProvider, boolean> = {
-            groq: false,
-            gemini: false,
-            huggingface: false
+    healthCheck(): Record<AIProvider, boolean> {
+        return {
+            groq:         !!this.API_KEYS.GROQ,
+            gemini:       !!this.API_KEYS.GEMINI,
+            huggingface:  !!this.API_KEYS.HUGGINGFACE,
         };
-
-        await Promise.allSettled([
-            this.queryGroq('Return {"test": "ok"}').then(() => { results.groq = true; }),
-            this.queryGemini('Return {"test": "ok"}').then(() => { results.gemini = true; }),
-            this.queryHuggingFace('Return {"test": "ok"}').then(() => { results.huggingface = true; })
-        ]);
-
-        return results;
     }
 }
 

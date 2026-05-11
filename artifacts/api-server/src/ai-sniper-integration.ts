@@ -1535,7 +1535,7 @@ export class AISniperBot extends EventEmitter {
         console.log(`🐋 Whale Auto-Scan: ${this.runtimeConfig.whaleAutoScanEnabled ? '✅' : '❌'}`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
-        const health = await this.ai.healthCheck();
+        const health = this.ai.healthCheck();
         console.log(`🔍 AI: Groq=${health.groq ? '✅' : '❌'} Gemini=${health.gemini ? '✅' : '❌'} HF=${health.huggingface ? '✅' : '❌'}\n`);
 
         // ── Load persisted copy wallets from DB ──
