@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { authFetch } from '../lib/authFetch';
 import WhaleDetailModal from './WhaleDetailModal';
 
@@ -105,6 +105,9 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
     // ─── Finder tab state ───────────────────────────────────────────────────────
     const [candidates, setCandidates]       = useState<WhaleCandidate[]>([]);
     const [scanning, setScanning]           = useState(false);
+    const [scanMsg, setScanMsg]             = useState('');
+    const [scanError, setScanError]         = useState('');
+    const [scanFound, setScanFound]         = useState<number | null>(null);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [simResult, setSimResult]         = useState<SimResult | null>(null);
     const [simAddress, setSimAddress]       = useState('');
@@ -113,6 +116,7 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
     const [statusFilter, setStatusFilter]   = useState<StatusFilter>('all');
     const [sortMode, setSortMode]           = useState<SortMode>('score');
     const [scoreMin, setScoreMin]           = useState(0);
+    const scanPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // ─── Detail modal state ─────────────────────────────────────────────────────
     const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
@@ -133,6 +137,40 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
             setCandidates(data.candidates || []);
         } catch { }
     }, [apiUrl]);
+
+    // Poll scan status while scan is running in background
+    const startScanPolling = useCallback(() => {
+        if (scanPollRef.current) clearInterval(scanPollRef.current);
+        scanPollRef.current = setInterval(async () => {
+            try {
+                const res  = await authFetch(`${apiUrl}/api/whale/scan-status`);
+                const data = await res.json();
+                if (!data.scanning) {
+                    // Scan finished
+                    clearInterval(scanPollRef.current!);
+                    scanPollRef.current = null;
+                    setScanning(false);
+                    if (data.error) {
+                        setScanError(`Scan gagal: ${data.error}`);
+                        setScanMsg('');
+                    } else {
+                        setScanFound(data.found);
+                        setScanMsg(data.found > 0
+                            ? `✅ Ditemukan ${data.found} kandidat baru!`
+                            : '⚠️ Tidak ada kandidat baru ditemukan saat ini. Coba lagi nanti.'
+                        );
+                        setScanError('');
+                    }
+                    await fetchCandidates();
+                }
+            } catch { /* server hiccup — keep polling */ }
+        }, 3000);
+    }, [apiUrl, fetchCandidates]);
+
+    // Cleanup poll on unmount
+    useEffect(() => {
+        return () => { if (scanPollRef.current) clearInterval(scanPollRef.current); };
+    }, []);
 
     useEffect(() => { fetchWallets(); }, [fetchWallets]);
     useEffect(() => {
@@ -196,14 +234,24 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
 
     // ─── Finder tab handlers ───────────────────────────────────────────────────
     const handleScan = async () => {
+        setScanMsg('');
+        setScanError('');
+        setScanFound(null);
         setScanning(true);
         try {
             const res  = await authFetch(`${apiUrl}/api/whale/scan`, { method: 'POST' });
-            const data = await res.json();
-            if (data.candidates) setCandidates(data.candidates);
-            await fetchCandidates();
-        } catch { }
-        setScanning(false);
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                setScanError(data.error || `Server error ${res.status}`);
+                setScanning(false);
+                return;
+            }
+            // Scan is now running in background — start polling for status
+            startScanPolling();
+        } catch {
+            setScanError('Gagal menghubungi server. Periksa koneksi internet.');
+            setScanning(false);
+        }
     };
 
     const handleApprove = async (address: string) => {
@@ -441,10 +489,38 @@ const CopyWalletsModal: React.FC<CopyWalletsModalProps> = ({ apiUrl, onClose }) 
                                 {scanning ? (
                                     <>
                                         <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>
-                                        Scanning GeckoTerminal...
+                                        Scanning GeckoTerminal… (~30 detik)
                                     </>
                                 ) : '🔍 Scan Sekarang'}
                             </button>
+
+                            {/* Scan progress info */}
+                            {scanning && (
+                                <div className="mt-2 flex items-center gap-2 text-xs text-blue-400/80 bg-blue-950/40 border border-blue-800/40 rounded-lg px-3 py-2">
+                                    <svg className="animate-spin h-3 w-3 flex-shrink-0" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>
+                                    <span>Menganalisis trending pools di GeckoTerminal… harap tunggu, proses ini memakan ~30 detik.</span>
+                                </div>
+                            )}
+
+                            {/* Scan error */}
+                            {scanError && !scanning && (
+                                <div className="mt-2 flex items-start gap-2 text-xs text-red-400 bg-red-950/40 border border-red-800/50 rounded-lg px-3 py-2">
+                                    <span className="flex-shrink-0 mt-0.5">❌</span>
+                                    <span>{scanError}</span>
+                                </div>
+                            )}
+
+                            {/* Scan success */}
+                            {scanMsg && !scanning && (
+                                <div className={`mt-2 flex items-start gap-2 text-xs rounded-lg px-3 py-2 border ${
+                                    scanFound && scanFound > 0
+                                        ? 'text-green-400 bg-green-950/40 border-green-800/50'
+                                        : 'text-yellow-400 bg-yellow-950/30 border-yellow-800/40'
+                                }`}>
+                                    <span className="flex-shrink-0 mt-0.5">{scanFound && scanFound > 0 ? '✅' : '⚠️'}</span>
+                                    <span>{scanMsg}</span>
+                                </div>
+                            )}
                         </div>
 
                         {/* ── Filter & Sort Controls ── */}

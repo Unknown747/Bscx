@@ -597,14 +597,47 @@ app.get('/api/whale/all', (_req: Request, res: Response) => {
     res.json({ candidates: bot.getAllWhales() });
 });
 
-// POST /api/whale/scan — trigger manual scan now (always bypasses cooldown)
-app.post('/api/whale/scan', async (_req: Request, res: Response) => {
-    try {
-        const candidates = await bot.runWhaleScan(true);
-        res.json({ ok: true, found: candidates.length, candidates });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
+// ── Whale scan background state ──────────────────────────────────────────────
+let _whaleScanRunning  = false;
+let _whaleScanFinished = 0;   // epoch ms of last completed scan
+let _whaleScanFound    = 0;
+let _whaleScanError    = '';
+
+// POST /api/whale/scan — fire-and-forget: respond immediately, scan in background
+app.post('/api/whale/scan', (_req: Request, res: Response) => {
+    if (_whaleScanRunning) {
+        res.json({ ok: true, scanning: true, message: 'Scan sedang berjalan…' });
+        return;
     }
+    _whaleScanRunning = true;
+    _whaleScanError   = '';
+    _whaleScanFound   = 0;
+
+    // Respond immediately so the browser doesn't time out
+    res.json({ ok: true, scanning: true, message: 'Scan dimulai — hasil akan muncul dalam ~30 detik' });
+
+    // Run scan in background
+    bot.runWhaleScan(true)
+        .then(candidates => {
+            _whaleScanFound    = candidates.length;
+            _whaleScanFinished = Date.now();
+            _whaleScanError    = '';
+        })
+        .catch((err: any) => {
+            _whaleScanError    = err?.message ?? 'Scan gagal';
+            _whaleScanFinished = Date.now();
+        })
+        .finally(() => { _whaleScanRunning = false; });
+});
+
+// GET /api/whale/scan-status — poll scan progress
+app.get('/api/whale/scan-status', (_req: Request, res: Response) => {
+    res.json({
+        scanning:    _whaleScanRunning,
+        finishedAt:  _whaleScanFinished,
+        found:       _whaleScanFound,
+        error:       _whaleScanError,
+    });
 });
 
 // POST /api/whale/approve — (legacy alias) redirect to monitoring flow
