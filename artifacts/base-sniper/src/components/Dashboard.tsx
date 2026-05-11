@@ -93,6 +93,7 @@ interface Config {
     dynamicSizingEnabled: boolean;
     tradeBalancePct: string;
     geckoScannerEnabled: boolean;
+    smartScreenerEnabled: boolean;
     whaleValidationEnabled: boolean;
     whaleAutoScanEnabled: boolean;
     blockHoneypot: boolean;
@@ -476,6 +477,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                                     { label: 'Copy Trading',       value: config?.copyEnabled            ? '✓ Aktif' : '✗ Nonaktif', green: config?.copyEnabled },
                                     { label: 'Dynamic Sizing',     value: config?.dynamicSizingEnabled   ? `✓ ${config.tradeBalancePct || 10}%/trade` : '✗ Nonaktif', green: config?.dynamicSizingEnabled },
                                     { label: 'GeckoTerminal Scan', value: config?.geckoScannerEnabled    ? '✓ Aktif' : '✗ Nonaktif', green: config?.geckoScannerEnabled },
+                                    { label: 'Smart Screener',     value: config?.smartScreenerEnabled   ? '✓ Aktif' : '✗ Nonaktif', green: config?.smartScreenerEnabled },
                                     { label: 'Auto Whale Finder',  value: config?.whaleAutoScanEnabled   ? '✓ Aktif' : '✗ Nonaktif', green: config?.whaleAutoScanEnabled },
                                     { label: 'Jumlah Copy',        value: `${config?.copyAmount || '—'} ETH` },
                                     { label: 'Min Safety Score',   value: `${config?.minSafetyScore || '—'}/100` },

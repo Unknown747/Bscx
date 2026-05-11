@@ -59,6 +59,8 @@ export interface BotSettings {
     tradingEndHour: number;
     // Auto-compound
     autoCompoundEnabled: boolean;
+    // Smart Screener
+    smartScreenerEnabled: boolean;
 }
 
 interface KeyStatus {
@@ -118,6 +120,7 @@ const DEFAULTS: BotSettings = {
     maxDailyLossEth: 0.0015, maxConsecutiveLosses: 3, cooldownAfterProfitMinutes: 15, dailyLossCooldownHours: 2,
     tradingScheduleEnabled: false, tradingStartHour: 8, tradingEndHour: 23,
     autoCompoundEnabled: false,
+    smartScreenerEnabled: false,
 };
 
 function fromConfig(c: Record<string, any>): BotSettings {
@@ -165,6 +168,7 @@ function fromConfig(c: Record<string, any>): BotSettings {
         tradingStartHour:       pn(c.tradingStartHour, DEFAULTS.tradingStartHour),
         tradingEndHour:         pn(c.tradingEndHour, DEFAULTS.tradingEndHour),
         autoCompoundEnabled:    pb(c.autoCompoundEnabled, DEFAULTS.autoCompoundEnabled),
+        smartScreenerEnabled:   pb(c.smartScreenerEnabled, DEFAULTS.smartScreenerEnabled),
     };
 }
 
@@ -323,7 +327,8 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
                 tradingScheduleEnabled: s.tradingScheduleEnabled,
                 tradingStartHour: s.tradingStartHour,
                 tradingEndHour: s.tradingEndHour,
-                autoCompoundEnabled: s.autoCompoundEnabled,
+                autoCompoundEnabled:  s.autoCompoundEnabled,
+                smartScreenerEnabled: s.smartScreenerEnabled,
             };
             const res = await authFetch(`${apiUrl}/api/settings`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
@@ -557,6 +562,9 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
             <Section title="🔍 Scanner">
                 <Row label="GeckoTerminal Scanner" sub="Scan token peluang via GeckoTerminal API">
                     <Toggle checked={s.geckoScannerEnabled} onChange={v => upd({ geckoScannerEnabled: v })} color="green" />
+                </Row>
+                <Row label="Smart Screener" sub="Skor 0–100 per token, auto-beli STRONG_BUY (independen dari GeckoTerminal)">
+                    <Toggle checked={s.smartScreenerEnabled} onChange={v => upd({ smartScreenerEnabled: v })} color="purple" />
                 </Row>
                 <Row label="Flashblocks Scanner" sub="WebSocket ke Base Flashblocks (pool baru)">
                     <Toggle checked={s.enableFlashblocks} onChange={v => upd({ enableFlashblocks: v })} color="orange" />
