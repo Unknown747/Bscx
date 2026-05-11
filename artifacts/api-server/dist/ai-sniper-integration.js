@@ -448,6 +448,12 @@ class AISniperBot extends events_1.EventEmitter {
         this.smartScreener.on('buy-signal', async (signal) => {
             if (!this.smartScreenerEnabled)
                 return;
+            // ── Only act on STRONG_BUY — skip BUY/WATCH signals ──
+            if (signal.signal !== 'STRONG_BUY') {
+                console.log(`   ⏭️  [SmartScreener] ${signal.signal} skipped — hanya STRONG_BUY yang dieksekusi`);
+                this.addLog('info', `📡 Screener: ${signal.signal} dilewati — ${signal.tokenSymbol}`, `score:${signal.score.total} | hanya STRONG_BUY (≥75) yang dieksekusi`);
+                return;
+            }
             // ── Hard circuit breaker: daily loss limit ──
             if (this.riskManager.isCircuitBreakerTripped()) {
                 console.log(`🔴 [CircuitBreaker] Signal ignored — ${this.riskManager.getCircuitBreakerReason()}`);
@@ -460,7 +466,7 @@ class AISniperBot extends events_1.EventEmitter {
                 return;
             }
             const tokenAddress = signal.tokenAddress;
-            console.log(`\n📡 [SmartScreener] ${signal.signal} — ${signal.tokenSymbol} (score: ${signal.score.total})`);
+            console.log(`\n📡 [SmartScreener] 🔥 STRONG_BUY — ${signal.tokenSymbol} (score: ${signal.score.total})`);
             // Always log the screener signal so the dashboard shows activity even without a wallet
             this.addLog('info', `📡 Screener: ${signal.signal} — ${signal.tokenSymbol}`, `score:${signal.score.total} liq:$${Math.round(signal.liquidityUsd).toLocaleString()} 1h:${signal.priceChangeH1 >= 0 ? '+' : ''}${signal.priceChangeH1.toFixed(1)}% addr:${signal.tokenAddress}`);
             // ── Optimization 4: Volume velocity filter ──────────────────────────

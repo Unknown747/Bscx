@@ -505,6 +505,16 @@ export class AISniperBot extends EventEmitter {
         this.smartScreener.on('buy-signal', async (signal: ScreenerSignal) => {
             if (!this.smartScreenerEnabled) return;
 
+            // ── Only act on STRONG_BUY — skip BUY/WATCH signals ──
+            if (signal.signal !== 'STRONG_BUY') {
+                console.log(`   ⏭️  [SmartScreener] ${signal.signal} skipped — hanya STRONG_BUY yang dieksekusi`);
+                this.addLog('info',
+                    `📡 Screener: ${signal.signal} dilewati — ${signal.tokenSymbol}`,
+                    `score:${signal.score.total} | hanya STRONG_BUY (≥75) yang dieksekusi`
+                );
+                return;
+            }
+
             // ── Hard circuit breaker: daily loss limit ──
             if (this.riskManager.isCircuitBreakerTripped()) {
                 console.log(`🔴 [CircuitBreaker] Signal ignored — ${this.riskManager.getCircuitBreakerReason()}`);
@@ -519,7 +529,7 @@ export class AISniperBot extends EventEmitter {
             }
 
             const tokenAddress = signal.tokenAddress as Address;
-            console.log(`\n📡 [SmartScreener] ${signal.signal} — ${signal.tokenSymbol} (score: ${signal.score.total})`);
+            console.log(`\n📡 [SmartScreener] 🔥 STRONG_BUY — ${signal.tokenSymbol} (score: ${signal.score.total})`);
 
             // Always log the screener signal so the dashboard shows activity even without a wallet
             this.addLog('info',

@@ -146,6 +146,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const [emergencyDone, setEmergencyDone]       = useState(false);
     const [riskState, setRiskState]               = useState<RiskState | null>(null);
     const failCountRef = React.useRef(0);
+    const [connStatus, setConnStatus] = useState<'online' | 'warning' | 'offline'>('online');
 
     const fetchData = useCallback(async () => {
         try {
@@ -158,13 +159,17 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
             const configJson = await configRes.json();
             if (statusJson.error) throw new Error(statusJson.error);
             failCountRef.current = 0;
+            setConnStatus('online');
             setStatus(statusJson);
             if (!configJson.error) setConfig(configJson);
             setLastUpdate(new Date().toLocaleTimeString('id-ID'));
             setError('');
         } catch {
             failCountRef.current += 1;
-            if (failCountRef.current >= 3) {
+            if (failCountRef.current === 1 || failCountRef.current === 2) {
+                setConnStatus('warning');
+            } else if (failCountRef.current >= 3) {
+                setConnStatus('offline');
                 setError('Gagal terhubung ke server');
             }
         }
@@ -286,6 +291,19 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
+                        {/* Connection indicator */}
+                        <div className="flex items-center gap-1.5" title={connStatus === 'online' ? 'Server terhubung' : connStatus === 'warning' ? 'Koneksi tidak stabil' : 'Server tidak terhubung'}>
+                            <span className={`inline-block w-2 h-2 rounded-full ${
+                                connStatus === 'online'  ? 'bg-green-500 shadow-[0_0_6px_#22c55e]' :
+                                connStatus === 'warning' ? 'bg-yellow-400 shadow-[0_0_6px_#facc15] animate-pulse' :
+                                                           'bg-red-500 shadow-[0_0_6px_#ef4444] animate-pulse'
+                            }`} />
+                            <span className={`text-xs font-medium ${
+                                connStatus === 'online' ? 'text-green-400' : connStatus === 'warning' ? 'text-yellow-400' : 'text-red-400'
+                            }`}>
+                                {connStatus === 'online' ? 'Online' : connStatus === 'warning' ? 'Tidak stabil' : 'Offline'}
+                            </span>
+                        </div>
                         <RpcStatusBadge apiUrl={apiUrl} connected={status?.connected} />
                         <button
                             onClick={handleEmergencyStop}
