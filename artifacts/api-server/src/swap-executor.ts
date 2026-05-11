@@ -265,6 +265,7 @@ interface OpenPosition {
     dynamicSell50Done?: boolean;
     dynamicSell25Done?: boolean;
     exitingNow?: boolean;
+    volumeCollapseExited?: boolean;
 }
 
 // ============ SWAP EXECUTOR ============
@@ -280,6 +281,9 @@ export class SwapExecutor extends EventEmitter {
 
     private buyLock = false;   // mutex: prevent concurrent buy TXs (nonce collision)
     private buyQueue: Array<() => void> = [];
+
+    // ── Volume Collapse detection: cache best pool address per token ──────────
+    private vcPoolCache = new Map<string, { poolAddress: string; expiresAt: number }>();
 
     private async acquireBuyLock(): Promise<void> {
         if (!this.buyLock) { this.buyLock = true; return; }
@@ -328,6 +332,11 @@ export class SwapExecutor extends EventEmitter {
         MAX_HOLD_MINUTES:           parseInt(process.env.MAX_HOLD_MINUTES     || '30'),  // exit stale positions
         EMERGENCY_EXIT_PCT:         parseFloat(process.env.EMERGENCY_EXIT_PCT || '-50'), // rug detection: exit if drops this fast
         EMERGENCY_EXIT_MINUTES:     2,  // window for emergency exit check (first N minutes of trade)
+        // ── Volume Collapse Emergency Exit ────────────────────────────────────
+        // Rug pulls often start with a sudden volume cliff before price crashes.
+        // Exit immediately if trading volume drops >70% vs the prior 2-minute window.
+        VOLUME_COLLAPSE_THRESHOLD_PCT: 70,  // % volume drop that triggers exit
+        VOLUME_COLLAPSE_MIN_HOLD_MINS: 2,   // only arm after N minutes (need candle history)
     };
 
     constructor() {
@@ -912,6 +921,60 @@ export class SwapExecutor extends EventEmitter {
         }
     }
 
+    // ============ VOLUME COLLAPSE DETECTOR ============
+    // Fetches 1-minute OHLCV from GeckoTerminal and compares the last 2 candles
+    // (volume) vs the 2 candles before that.  Returns { collapsed, dropPct }.
+    private async detectVolumeCollapse(tokenAddress: string): Promise<{ collapsed: boolean; dropPct: number }> {
+        const GECKO  = 'https://api.geckoterminal.com/api/v2';
+        const HDR    = { Accept: 'application/json;version=20230302' };
+        const key    = tokenAddress.toLowerCase();
+
+        try {
+            // ── Step 1: resolve best pool (cached 2 min) ─────────────────────
+            let poolAddress: string | null = null;
+            const cached = this.vcPoolCache.get(key);
+            if (cached && cached.expiresAt > Date.now()) {
+                poolAddress = cached.poolAddress;
+            } else {
+                const poolsRes = await axios.get(
+                    `${GECKO}/networks/base/tokens/${tokenAddress}/pools?page=1`,
+                    { headers: HDR, timeout: 5000 }
+                );
+                const pools: any[] = poolsRes.data?.data ?? [];
+                if (!pools.length) return { collapsed: false, dropPct: 0 };
+                const best = pools.reduce((b: any, p: any) =>
+                    parseFloat(p.attributes?.reserve_in_usd ?? '0') >
+                    parseFloat(b.attributes?.reserve_in_usd ?? '0') ? p : b, pools[0]);
+                poolAddress = best.attributes?.address ?? null;
+                if (!poolAddress) return { collapsed: false, dropPct: 0 };
+                this.vcPoolCache.set(key, { poolAddress, expiresAt: Date.now() + 120_000 });
+            }
+
+            // ── Step 2: fetch last 6 × 1-minute candles ───────────────────────
+            const ohlcvRes = await axios.get(
+                `${GECKO}/networks/base/pools/${poolAddress}/ohlcv/minute?aggregate=1&limit=6&currency=usd`,
+                { headers: HDR, timeout: 5000 }
+            );
+            // rawList is newest-first: [ts, o, h, l, c, v]
+            const rawList: number[][] = ohlcvRes.data?.data?.attributes?.ohlcv_list ?? [];
+            if (rawList.length < 4) return { collapsed: false, dropPct: 0 };
+
+            const recentVol = rawList[0][5] + rawList[1][5];   // last 2 min
+            const priorVol  = rawList[2][5] + rawList[3][5];   // 2 min before that
+
+            // Need meaningful baseline to avoid divide-by-near-zero false positives
+            if (priorVol < 50) return { collapsed: false, dropPct: 0 };
+
+            const dropPct = ((priorVol - recentVol) / priorVol) * 100;
+            return {
+                collapsed: dropPct >= this.CONFIG.VOLUME_COLLAPSE_THRESHOLD_PCT,
+                dropPct,
+            };
+        } catch {
+            return { collapsed: false, dropPct: 0 };
+        }
+    }
+
     // ============ POSITION MONITOR (Take Profit + Stop Loss) ============
     private startPositionMonitor(): void {
         if (this.positionMonitorInterval) return; // already running
@@ -1072,6 +1135,39 @@ export class SwapExecutor extends EventEmitter {
                     }
                 }
             } catch { /* silent — don't block position monitor */ }
+        }
+
+        // ─── VOLUME COLLAPSE EMERGENCY EXIT ──────────────────────────────────
+        // Many rug pulls show a sudden volume cliff BEFORE price tanks.
+        // Arm after VOLUME_COLLAPSE_MIN_HOLD_MINS minutes so we have candle history.
+        // Fire at most once per position (volumeCollapseExited flag prevents repeat).
+        if (!position.exitingNow && !position.volumeCollapseExited) {
+            const holdMinsVC = (Date.now() - position.openedAt) / 60_000;
+            if (holdMinsVC >= this.CONFIG.VOLUME_COLLAPSE_MIN_HOLD_MINS) {
+                try {
+                    const { collapsed, dropPct } = await this.detectVolumeCollapse(tokenAddress);
+                    if (collapsed) {
+                        console.log(
+                            `📉 VOLUME COLLAPSE EXIT: ${position.tokenSymbol} — ` +
+                            `volume -${dropPct.toFixed(0)}% dalam 2min ` +
+                            `(threshold ${this.CONFIG.VOLUME_COLLAPSE_THRESHOLD_PCT}%) — JUAL SEMUA!`
+                        );
+                        position.exitingNow         = true;
+                        position.volumeCollapseExited = true;
+                        this.emit('stop-loss', {
+                            tokenAddress,
+                            tokenSymbol:  position.tokenSymbol,
+                            profitPct,
+                            reason:       `📉 Volume Collapse: -${dropPct.toFixed(0)}% dalam 2 menit (rug signal)`,
+                            peakMult,
+                            sourceWallet: position.sourceWallet,
+                            holdMs:       Date.now() - position.openedAt,
+                        });
+                        await this.sell(tokenAddress, 100, { source: 'stop-loss' });
+                        return;
+                    }
+                } catch { /* silent — never block monitor */ }
+            }
         }
 
         // ─── PROFIT LADDER TP1: sell 30% at 1.5x (+50%) ───
