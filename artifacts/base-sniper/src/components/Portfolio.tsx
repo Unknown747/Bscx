@@ -102,10 +102,10 @@ function pnlBgColor(pct: number | null): string {
 
 function fmtHoldTime(ms: number): string {
     const s = Math.floor(ms / 1000);
-    if (s < 60)    return `${s}d`;
+    if (s < 60)    return `${s}s`;
     if (s < 3600)  return `${Math.floor(s / 60)}m`;
     if (s < 86400) return `${Math.floor(s / 3600)}j ${Math.floor((s % 3600) / 60)}m`;
-    return `${Math.floor(s / 86400)}h`;
+    return `${Math.floor(s / 86400)}d`;
 }
 
 const SWAP_PRESETS = [25, 50, 75, 100];

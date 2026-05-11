@@ -155,7 +155,7 @@ class CopyTradeMonitor extends events_1.EventEmitter {
                 continue;
             if (txTime === 0)
                 continue;
-            if (now - txTime > 30000)
+            if (now - txTime > 60000)
                 continue;
             const tokenAddress = this.extractTokenAddress(tx);
             if (tokenAddress === wallet.lastBuyToken)

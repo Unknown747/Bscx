@@ -1591,8 +1591,6 @@ class AISniperBot extends events_1.EventEmitter {
             minLiquidity: r.minLiquidity,
             maxTaxPercent: r.maxTaxPercent,
         });
-        // Sync smartScreener enable state
-        this.smartScreenerEnabled = r.geckoScannerEnabled;
         // ── Persist to BOTH stores ──
         // 1. SQLite DB (immediate, highest priority on next startup)
         try {
