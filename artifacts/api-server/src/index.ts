@@ -12,13 +12,32 @@ dotenv.config();
 const app  = express();
 const PORT = process.env.PORT || 8080;
 
-// ── Session store ──────────────────────────────────────────────────────────────
-const sessions    = new Map<string, number>();
+// ── Stateless HMAC session tokens (survive server restarts) ────────────────────
 const SESSION_TTL = 12 * 3600 * 1000;
-setInterval(() => {
-    const now = Date.now();
-    for (const [t, exp] of sessions) if (exp < now) sessions.delete(t);
-}, 3_600_000).unref();
+const _sigSecret  = () => (process.env.APP_PASSWORD || 'fallback').trim();
+
+function generateToken(): string {
+    const nonce     = crypto.randomBytes(16).toString('hex');
+    const expiresAt = Date.now() + SESSION_TTL;
+    const payload   = `${nonce}:${expiresAt}`;
+    const sig       = crypto.createHmac('sha256', _sigSecret()).update(payload).digest('hex');
+    return `${payload}.${sig}`;
+}
+
+function verifyToken(token: string | undefined): boolean {
+    if (!token) return false;
+    const lastDot = token.lastIndexOf('.');
+    if (lastDot === -1) return false;
+    const payload   = token.substring(0, lastDot);
+    const sig       = token.substring(lastDot + 1);
+    const parts     = payload.split(':');
+    if (parts.length < 2) return false;
+    const expiresAt = parseInt(parts[parts.length - 1], 10);
+    if (isNaN(expiresAt) || expiresAt < Date.now()) return false;
+    const expected  = crypto.createHmac('sha256', _sigSecret()).update(payload).digest('hex');
+    try { return crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex')); }
+    catch { return false; }
+}
 
 // ── Rate limiting ──────────────────────────────────────────────────────────────
 const authAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -46,9 +65,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // ── Auth guard ────────────────────────────────────────────────────────────────
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
-    const token  = req.headers['x-session-token'] as string | undefined;
-    const expiry = token ? sessions.get(token) : undefined;
-    if (!token || !expiry || expiry < Date.now()) {
+    const token = req.headers['x-session-token'] as string | undefined;
+    if (!verifyToken(token)) {
         res.status(401).json({ error: 'Session invalid or expired. Please log in again.' });
         return;
     }
@@ -90,8 +108,7 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
     const match = trimmedPassword.length === expected.length &&
         crypto.timingSafeEqual(Buffer.from(trimmedPassword), Buffer.from(expected));
     if (match) {
-        const token = crypto.randomBytes(32).toString('hex');
-        sessions.set(token, Date.now() + SESSION_TTL);
+        const token = generateToken();
         res.json({ ok: true, token });
     } else {
         res.status(401).json({ ok: false, error: 'Incorrect password' });

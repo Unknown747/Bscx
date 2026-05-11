@@ -38,6 +38,17 @@ const LoginGate: React.FC<LoginGateProps> = ({ apiUrl, children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Listen for 401 responses from any authFetch — auto-redirect to login
+    useEffect(() => {
+        const handleSessionExpired = () => {
+            setUnlocked(false);
+            setVerifying(false);
+            setError('Sesi berakhir. Silakan login kembali.');
+        };
+        window.addEventListener('sessionExpired', handleSessionExpired);
+        return () => window.removeEventListener('sessionExpired', handleSessionExpired);
+    }, []);
+
     // Block after 5 wrong attempts for 30 seconds
     useEffect(() => {
         if (attempts >= 5) {

@@ -42,5 +42,12 @@ export function authFetch(url: string, options: RequestInit = {}): Promise<Respo
             ...options.headers,
             ...(_token ? { 'X-Session-Token': _token } : {})
         }
+    }).then((res) => {
+        if (res.status === 401) {
+            // Session expired or invalidated — clear token and notify LoginGate
+            setAuthToken('');
+            window.dispatchEvent(new CustomEvent('sessionExpired'));
+        }
+        return res;
     });
 }
