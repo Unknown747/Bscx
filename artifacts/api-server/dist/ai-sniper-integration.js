@@ -230,8 +230,32 @@ class AISniperBot extends events_1.EventEmitter {
         this.activityLog.unshift(entry);
         if (this.activityLog.length > MAX_LOG_ENTRIES)
             this.activityLog.length = MAX_LOG_ENTRIES;
+        // Persist to DB (non-blocking, best-effort)
+        try {
+            (0, db_1.dbInsertActivityLog)(entry);
+        }
+        catch { /* DB may not be ready */ }
     }
     getActivityLog() { return this.activityLog; }
+    loadLogsFromDb() {
+        try {
+            const rows = (0, db_1.dbGetRecentActivityLogs)(200);
+            // Merge with in-memory (in-memory entries are newer; rows are sorted newest-first)
+            const inMemoryIds = new Set(this.activityLog.map(e => e.id));
+            for (const row of rows) {
+                if (!inMemoryIds.has(row.id)) {
+                    this.activityLog.push(row);
+                }
+            }
+            // Re-sort newest-first and cap
+            this.activityLog.sort((a, b) => b.timestamp - a.timestamp);
+            if (this.activityLog.length > MAX_LOG_ENTRIES)
+                this.activityLog.length = MAX_LOG_ENTRIES;
+            if (rows.length > 0)
+                console.log(`📋 Restored ${rows.length} activity log(s) from DB`);
+        }
+        catch { /* non-critical */ }
+    }
     // ============ TELEGRAM ============
     isWithinTradingHours() {
         if (!this.runtimeConfig.tradingScheduleEnabled)
@@ -1371,6 +1395,8 @@ class AISniperBot extends events_1.EventEmitter {
                 console.log(`📦 Restored ${restored.size} token(s) from trade history into portfolio scanner`);
             }
         }
+        // Restore activity logs from DB so they survive server restarts
+        this.loadLogsFromDb();
         await this.scanner.connect();
         if (this.runtimeConfig.copyEnabled) {
             this.copyMonitor.start();

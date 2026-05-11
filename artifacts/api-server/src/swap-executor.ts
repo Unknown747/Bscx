@@ -874,6 +874,9 @@ export class SwapExecutor extends EventEmitter {
             if (percentToSell >= 100) {
                 this.openPositions.delete(tokenAddress);
                 dbDeleteOpenPosition(tokenAddress);
+                // Also remove from knownTokens so it's not scanned on future portfolio polls
+                this.knownTokens.delete(tokenAddress.toLowerCase() as Address);
+                this.knownTokens.delete(tokenAddress as Address);
             } else {
                 // Scale down position proportionally so P&L stays accurate after partial sells.
                 // Example: sold 30% → remaining cost basis = 70% of original amountIn.
@@ -1551,7 +1554,7 @@ export class SwapExecutor extends EventEmitter {
                     this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'decimals' }) as Promise<number>,
                     this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'symbol' }) as Promise<string>
                 ]);
-                if (balance === 0n) return;
+                if (balance === 0n && addr !== WETH_ADDR) return;
                 const balanceHuman = Number(formatUnits(balance, decimals));
                 let priceUsd: number | null = null;
                 let change24h: number | null = null;

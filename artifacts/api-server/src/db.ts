@@ -149,6 +149,15 @@ export async function initDb(): Promise<void> {
             CREATE INDEX IF NOT EXISTS idx_ssh_time   ON screener_signal_history(discovered_at);
             CREATE INDEX IF NOT EXISTS idx_ssh_signal ON screener_signal_history(signal);
 
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                id         TEXT    PRIMARY KEY,
+                type       TEXT    NOT NULL,
+                message    TEXT    NOT NULL,
+                detail     TEXT,
+                timestamp  INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_al_time ON activity_logs(timestamp);
+
             CREATE TABLE IF NOT EXISTS open_positions (
                 token_address   TEXT    PRIMARY KEY,
                 token_symbol    TEXT    NOT NULL DEFAULT '',
@@ -740,6 +749,39 @@ export function dbLoadOpenPositions(): OpenPositionRow[] {
             dcaDone:       !!r.dca_done,
             sourceWallet:  r.source_wallet ?? undefined,
             initLiqUsd:    r.init_liq_usd,
+        }));
+    } catch { return []; }
+}
+
+// ── Activity Logs (persist across restarts) ───────────────────────────────────
+
+export interface ActivityLogRow {
+    id:        string;
+    type:      string;
+    message:   string;
+    detail?:   string;
+    timestamp: number;
+}
+
+export function dbInsertActivityLog(entry: ActivityLogRow): void {
+    try {
+        runExec(`
+            INSERT OR IGNORE INTO activity_logs (id, type, message, detail, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        `, [entry.id, entry.type, entry.message, entry.detail ?? null, entry.timestamp]);
+        // Keep only the latest 500 entries
+        runExec(`DELETE FROM activity_logs WHERE id NOT IN (SELECT id FROM activity_logs ORDER BY timestamp DESC LIMIT 500)`);
+    } catch { /* non-critical */ }
+}
+
+export function dbGetRecentActivityLogs(limit = 200): ActivityLogRow[] {
+    try {
+        return runQuery('SELECT * FROM activity_logs ORDER BY timestamp DESC LIMIT ?', [limit]).map(r => ({
+            id:        r.id,
+            type:      r.type,
+            message:   r.message,
+            detail:    r.detail ?? undefined,
+            timestamp: r.timestamp,
         }));
     } catch { return []; }
 }

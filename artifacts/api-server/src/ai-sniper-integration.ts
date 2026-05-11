@@ -24,6 +24,7 @@ import {
     dbGetMonitoredWallet, dbSetMonitoredVerdict, dbApproveWhale,
     dbSaveRuntimeConfig, dbLoadRuntimeConfig, dbSaveScreenerConfig, dbLoadScreenerConfig,
     dbSaveScreenerSignal,
+    dbInsertActivityLog, dbGetRecentActivityLogs,
     type TradeRow, type MonitoredWalletRow,
 } from './db';
 import SmartScreener, { type ScreenerSignal, type ScreenerConfig } from './smart-screener';
@@ -289,9 +290,28 @@ export class AISniperBot extends EventEmitter {
         };
         this.activityLog.unshift(entry);
         if (this.activityLog.length > MAX_LOG_ENTRIES) this.activityLog.length = MAX_LOG_ENTRIES;
+        // Persist to DB (non-blocking, best-effort)
+        try { dbInsertActivityLog(entry); } catch { /* DB may not be ready */ }
     }
 
     getActivityLog(): LogEntry[] { return this.activityLog; }
+
+    loadLogsFromDb(): void {
+        try {
+            const rows = dbGetRecentActivityLogs(200);
+            // Merge with in-memory (in-memory entries are newer; rows are sorted newest-first)
+            const inMemoryIds = new Set(this.activityLog.map(e => e.id));
+            for (const row of rows) {
+                if (!inMemoryIds.has(row.id)) {
+                    this.activityLog.push(row as LogEntry);
+                }
+            }
+            // Re-sort newest-first and cap
+            this.activityLog.sort((a, b) => b.timestamp - a.timestamp);
+            if (this.activityLog.length > MAX_LOG_ENTRIES) this.activityLog.length = MAX_LOG_ENTRIES;
+            if (rows.length > 0) console.log(`📋 Restored ${rows.length} activity log(s) from DB`);
+        } catch { /* non-critical */ }
+    }
 
     // ============ TELEGRAM ============
     private isWithinTradingHours(): boolean {
@@ -1556,6 +1576,9 @@ export class AISniperBot extends EventEmitter {
                 console.log(`📦 Restored ${restored.size} token(s) from trade history into portfolio scanner`);
             }
         }
+
+        // Restore activity logs from DB so they survive server restarts
+        this.loadLogsFromDb();
 
         await this.scanner.connect();
 
