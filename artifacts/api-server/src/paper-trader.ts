@@ -44,17 +44,21 @@ export interface PaperStats {
 }
 
 const DEFAULT_CONFIG: PaperConfig = {
-    enabled:        false,
-    virtualBalance: 0.5,
-    tradeSize:      0.01,
-    tp1Multiplier:  2.0,
-    tp1Percentage:  50,
-    tp2Multiplier:  5.0,
-    stopLoss:       20,
+    enabled:        true,     // aktif by default — test tanpa risiko uang nyata
+    virtualBalance: 0.5,      // modal virtual 0.5 ETH untuk simulasi
+    tradeSize:      0.00034,  // sama dengan maxTradeAmount di trading-config.json
+    // ── STRATEGI BARU (disinkronkan dengan swap-executor CONFIG) ──────────────
+    // TP1: +25% → jual 40% (dulu 2.0x/50% — terlalu jarang tercapai)
+    tp1Multiplier:  1.25,
+    tp1Percentage:  40,
+    // TP2: +60% → jual sisa (dulu 5.0x — hampir tidak pernah tercapai)
+    tp2Multiplier:  1.6,
+    // SL: -8% (dulu 20% — terlalu lebar untuk modal kecil)
+    stopLoss:       8,
     maxPositions:   10,
 };
 
-const MONITOR_INTERVAL_MS = 60_000; // poll every 60 seconds
+const MONITOR_INTERVAL_MS = 15_000; // dari 60 detik → 15 detik (lebih responsif)
 
 export class PaperTrader extends EventEmitter {
     private config: PaperConfig;
@@ -262,25 +266,44 @@ export class PaperTrader extends EventEmitter {
                     dbSavePaperPosition(pos);
                 }
 
-                const multiplier = currentPriceUsd / pos.entryPriceUsd;
+                const multiplier     = currentPriceUsd / pos.entryPriceUsd;
+                const peakMultiplier = pos.peakPriceUsd / pos.entryPriceUsd;
+                const holdMs         = Date.now() - pos.openedAt;
 
-                // ── Stop Loss ──
+                // ── Dead Coin Exit: -3% drop + holding > 20 min ──────────────
+                // Kalau harga turun ke bawah -3% dari entry dan sudah 20 menit,
+                // coin ini tidak bergerak — keluar lebih awal daripada tunggu SL -8%
+                if (!pos.tp1Hit && multiplier < 0.97 && holdMs > 20 * 60_000) {
+                    await this.closePosition(addr, 'dead-coin', pos.remainingPct, currentPriceUsd);
+                    continue;
+                }
+
+                // ── Fixed Stop Loss: -8% dari entry ─────────────────────────
                 const slThreshold = 1 - (this.config.stopLoss / 100);
                 if (multiplier <= slThreshold) {
                     await this.closePosition(addr, 'stop-loss', pos.remainingPct, currentPriceUsd);
                     continue;
                 }
 
-                // ── TP2 ──
+                // ── Trailing Stop: aktif setelah peak ≥ 1.15x ───────────────
+                // Jika harga pernah capai +15%, pasang trailing stop 6% di bawah peak
+                if (peakMultiplier >= 1.15) {
+                    const trailThreshold = pos.peakPriceUsd * 0.94; // 6% dari peak
+                    if (currentPriceUsd <= trailThreshold) {
+                        await this.closePosition(addr, 'trailing-stop', pos.remainingPct, currentPriceUsd);
+                        continue;
+                    }
+                }
+
+                // ── TP2: jual sisa setelah TP1 ───────────────────────────────
                 if (!pos.tp2Hit && pos.tp1Hit && multiplier >= this.config.tp2Multiplier) {
                     await this.closePosition(addr, 'take-profit', pos.remainingPct, currentPriceUsd, 2);
                     continue;
                 }
 
-                // ── TP1 ──
+                // ── TP1: +25% → jual 40% ─────────────────────────────────────
                 if (!pos.tp1Hit && multiplier >= this.config.tp1Multiplier) {
-                    const tp1SellPct = this.config.tp1Percentage;
-                    await this.closePartial(addr, 'take-profit', tp1SellPct, currentPriceUsd, 1);
+                    await this.closePartial(addr, 'take-profit', this.config.tp1Percentage, currentPriceUsd, 1);
                 }
 
             } catch (e: any) {
