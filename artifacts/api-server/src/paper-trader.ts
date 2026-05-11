@@ -98,6 +98,21 @@ export class PaperTrader extends EventEmitter {
         }
     }
 
+    /**
+     * Call this AFTER initDb() to restore persisted state.
+     * The constructor-time loadState() fires before the DB is ready and silently
+     * returns empty data. This method re-runs it once the DB is fully initialised
+     * and starts position monitoring if paper trading was previously enabled.
+     */
+    reloadState(): void {
+        this.positions.clear();
+        this.loadState();
+        if (this.config.enabled && !this.monitorTimer) {
+            this.startMonitor();
+            console.log('📄 Paper trader: monitoring resumed after DB reload');
+        }
+    }
+
     private saveConfig(): void {
         try {
             dbSetPaperConfig('enabled', String(this.config.enabled));

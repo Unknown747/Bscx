@@ -202,8 +202,8 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
             const today = data?.today;
             if (today) {
                 setTodayPnl({
-                    eth: parseFloat(today.profitEth ?? today.profit ?? 0),
-                    pct: parseFloat(today.profitPct ?? today.winRate ?? 0),
+                    eth: 0,
+                    pct: parseFloat(today.totalPnlPct ?? 0),
                 });
             }
         } catch { }
@@ -280,13 +280,13 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                                 {ethBalance !== null && (
                                     <p className="text-xs text-green-400 font-medium">Ξ {ethBalance}</p>
                                 )}
-                                {todayPnl !== null && todayPnl.eth !== 0 && (
+                                {todayPnl !== null && todayPnl.pct !== 0 && (
                                     <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
-                                        todayPnl.eth >= 0
+                                        todayPnl.pct >= 0
                                             ? 'bg-green-900/50 text-green-400'
                                             : 'bg-red-900/50 text-red-400'
                                     }`}>
-                                        {todayPnl.eth >= 0 ? '+' : ''}{todayPnl.eth.toFixed(4)} ETH hari ini
+                                        {todayPnl.pct >= 0 ? '+' : ''}{todayPnl.pct.toFixed(1)}% P&L hari ini
                                     </span>
                                 )}
                             </div>

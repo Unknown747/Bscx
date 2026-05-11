@@ -128,6 +128,7 @@ app.use((req, res, next) => {
 const bot = new ai_sniper_integration_1.AISniperBot();
 async function startBot() {
     await (0, db_1.initDb)();
+    paper_trader_1.paperTrader.reloadState(); // restore paper positions & config now that DB is ready
     console.log('\n🚀 STARTING BASE SNIPER ULTIMATE (GeckoTerminal Edition)...');
     console.log(`💰 Capital: ${process.env.TOTAL_CAPITAL_ETH || 0.006} ETH`);
     console.log(`🐋 Copy Trading: ${process.env.COPY_TRADING_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
