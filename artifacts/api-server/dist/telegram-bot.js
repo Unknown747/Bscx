@@ -1,16 +1,14 @@
 "use strict";
 /**
- * telegram-bot.ts — Pro Telegram Command Interface for Base Sniper
+ * telegram-bot.ts — Telegram Command Interface for Base Sniper
  *
  * Features:
  *  • Long-polling with inline keyboard / callback query support
  *  • Visual score bars, structured sections, dividers
- *  • Inline buttons for whale approve/reject/promote
- *  • 17 commands covering status, trading, whale mgmt, settings
+ *  • Commands covering status, trading, screener, settings
  *
  * Commands:
  *   INFO:     /status /balance /positions /screener /risk /history /dailyreport
- *   WHALE:    /candidates /approve /reject /promote /scan
  *   CONTROLS: /sell /pause /resume /blacklist
  *   SETTINGS: /set /help
  */

@@ -5,7 +5,7 @@
  * Independent token scanner powered by GeckoTerminal.
  * Scans new & trending pools on Base every 30 seconds.
  * Applies strict AI + safety filters before emitting buy signals.
- * Works independently from copy trading — dual income stream.
+ * Focused on new meme coins — primary signal source for the sniper.
  */
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };

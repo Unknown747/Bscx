@@ -4,7 +4,7 @@
  * Persistent configuration manager with two layers:
  *
  *  1. trading-config.json  — committed to git, survives redeployments.
- *     Stores all non-secret trading settings (TP/SL, copy amounts, flags).
+ *     Stores all non-secret trading settings (TP/SL, screener thresholds, flags).
  *     Changes made via the UI are saved here immediately.
  *
  *  2. .runtime-keys.json   — gitignored, survives server restarts but NOT

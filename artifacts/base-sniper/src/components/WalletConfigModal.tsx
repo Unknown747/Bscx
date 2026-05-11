@@ -191,7 +191,7 @@ const WalletConfigModal: React.FC<WalletConfigModalProps> = ({ apiUrl, onClose }
                                 <p className="text-green-400 font-medium mb-1">✅ Permanen (survive redeploy)</p>
                                 <p className="text-gray-400">PRIVATE_KEY via Replit Secrets</p>
                                 <p className="text-gray-400">Semua pengaturan trading</p>
-                                <p className="text-gray-400">(TP/SL, copy config, dsb)</p>
+                                <p className="text-gray-400">(TP/SL, screener config, dsb)</p>
                             </div>
                             <div className="bg-yellow-900/20 border border-yellow-800/40 rounded-lg p-2">
                                 <p className="text-yellow-400 font-medium mb-1">⚠️ Sementara (survive restart)</p>

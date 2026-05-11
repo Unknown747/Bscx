@@ -3,42 +3,19 @@
  * db.ts — SQLite persistent storage for Base Sniper
  * Uses sql.js (pure JS, no native build tools required)
  *
- * Tables: whale_candidates, trade_history, blacklist, copy_wallets
+ * Tables: trade_history, blacklist, screener_signal_history, activity_logs, open_positions, app_settings, push_subscriptions
  */
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.initDb = initDb;
-exports.dbUpsertWhale = dbUpsertWhale;
-exports.dbGetWhale = dbGetWhale;
-exports.dbGetPendingWhales = dbGetPendingWhales;
-exports.dbGetAllWhales = dbGetAllWhales;
-exports.dbApproveWhale = dbApproveWhale;
-exports.dbRejectWhale = dbRejectWhale;
-exports.dbWhaleExists = dbWhaleExists;
-exports.dbIsRejected = dbIsRejected;
 exports.dbInsertTrade = dbInsertTrade;
 exports.dbGetTrades = dbGetTrades;
 exports.dbAddToBlacklist = dbAddToBlacklist;
 exports.dbRemoveFromBlacklist = dbRemoveFromBlacklist;
 exports.dbGetBlacklist = dbGetBlacklist;
 exports.dbIsBlacklisted = dbIsBlacklisted;
-exports.dbAddCopyWallet = dbAddCopyWallet;
-exports.dbRemoveCopyWallet = dbRemoveCopyWallet;
-exports.dbGetCopyWallets = dbGetCopyWallets;
-exports.dbUpdateCopyWallet = dbUpdateCopyWallet;
-exports.dbInsertWaitlistEvent = dbInsertWaitlistEvent;
-exports.dbGetWaitlistEvents = dbGetWaitlistEvents;
-exports.dbGetWaitlistSummary = dbGetWaitlistSummary;
-exports.dbMonitorWhale = dbMonitorWhale;
-exports.dbAddMonitoredWallet = dbAddMonitoredWallet;
-exports.dbRemoveMonitoredWallet = dbRemoveMonitoredWallet;
-exports.dbGetMonitoredWallets = dbGetMonitoredWallets;
-exports.dbGetMonitoredWallet = dbGetMonitoredWallet;
-exports.dbIsMonitored = dbIsMonitored;
-exports.dbUpdateMonitoredStats = dbUpdateMonitoredStats;
-exports.dbSetMonitoredVerdict = dbSetMonitoredVerdict;
 exports.dbGetPushSubscriptions = dbGetPushSubscriptions;
 exports.dbSavePushSubscription = dbSavePushSubscription;
 exports.dbDeletePushSubscription = dbDeletePushSubscription;
@@ -108,20 +85,6 @@ async function initDb() {
         }
         _db.run(`PRAGMA foreign_keys = ON;`);
         _db.run(`
-            CREATE TABLE IF NOT EXISTS whale_candidates (
-                address            TEXT PRIMARY KEY,
-                estimated_win_rate INTEGER NOT NULL,
-                trade_count        INTEGER NOT NULL,
-                avg_profit_pct     REAL    NOT NULL,
-                total_volume_eth   REAL    NOT NULL,
-                last_active_ms     INTEGER NOT NULL,
-                discovered_at      INTEGER NOT NULL,
-                score              INTEGER NOT NULL,
-                tokens             TEXT    NOT NULL,
-                status             TEXT    NOT NULL DEFAULT 'pending',
-                approved_at        INTEGER
-            );
-
             CREATE TABLE IF NOT EXISTS trade_history (
                 id            TEXT PRIMARY KEY,
                 token_address TEXT    NOT NULL,
@@ -142,26 +105,6 @@ async function initDb() {
                 added_at INTEGER NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS copy_wallets (
-                address   TEXT PRIMARY KEY,
-                name      TEXT    NOT NULL,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                added_at  INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS whale_waitlist_events (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                address      TEXT    NOT NULL,
-                event_type   TEXT    NOT NULL,
-                token        TEXT,
-                profit_pct   REAL,
-                volume_eth   REAL,
-                recorded_at  INTEGER NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_wwe_address ON whale_waitlist_events(address);
-            CREATE INDEX IF NOT EXISTS idx_wwe_time    ON whale_waitlist_events(recorded_at);
-
             CREATE TABLE IF NOT EXISTS app_settings (
                 key        TEXT PRIMARY KEY,
                 value      TEXT NOT NULL,
@@ -172,22 +115,6 @@ async function initDb() {
                 endpoint   TEXT PRIMARY KEY,
                 data       TEXT NOT NULL,
                 created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
-            );
-
-            CREATE TABLE IF NOT EXISTS monitored_wallets (
-                address          TEXT    PRIMARY KEY,
-                name             TEXT    NOT NULL,
-                monitored_since  INTEGER NOT NULL,
-                trades_observed  INTEGER NOT NULL DEFAULT 0,
-                wins_observed    INTEGER NOT NULL DEFAULT 0,
-                losses_observed  INTEGER NOT NULL DEFAULT 0,
-                total_pnl_pct    REAL    NOT NULL DEFAULT 0,
-                trades_per_day   REAL    NOT NULL DEFAULT 0,
-                last_trade_ms    INTEGER NOT NULL DEFAULT 0,
-                ai_verdict       TEXT    NOT NULL DEFAULT 'pending',
-                ai_reason        TEXT,
-                ai_score         INTEGER,
-                promoted_at      INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS screener_signal_history (
@@ -318,67 +245,6 @@ function runExec(sql, params = []) {
     stmt.free();
     scheduleSave();
 }
-function rowToWhale(row) {
-    return {
-        address: row.address,
-        estimatedWinRate: row.estimated_win_rate,
-        tradeCount: row.trade_count,
-        avgProfitPct: row.avg_profit_pct,
-        totalVolumeEth: row.total_volume_eth,
-        lastActiveMs: row.last_active_ms,
-        discoveredAt: row.discovered_at,
-        score: row.score,
-        tokens: JSON.parse(row.tokens),
-        status: row.status,
-        approvedAt: row.approved_at ?? undefined,
-    };
-}
-function dbUpsertWhale(w) {
-    runExec(`
-        INSERT INTO whale_candidates
-            (address, estimated_win_rate, trade_count, avg_profit_pct, total_volume_eth,
-             last_active_ms, discovered_at, score, tokens, status, approved_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(address) DO UPDATE SET
-            estimated_win_rate = excluded.estimated_win_rate,
-            trade_count        = excluded.trade_count,
-            avg_profit_pct     = excluded.avg_profit_pct,
-            total_volume_eth   = excluded.total_volume_eth,
-            last_active_ms     = excluded.last_active_ms,
-            score              = excluded.score,
-            tokens             = excluded.tokens,
-            status             = excluded.status,
-            approved_at        = excluded.approved_at
-    `, [
-        w.address, w.estimatedWinRate, w.tradeCount, w.avgProfitPct,
-        w.totalVolumeEth, w.lastActiveMs, w.discoveredAt, w.score,
-        JSON.stringify(w.tokens), w.status, w.approvedAt ?? null
-    ]);
-}
-function dbGetWhale(address) {
-    const row = runGet('SELECT * FROM whale_candidates WHERE address = ?', [address.toLowerCase()]);
-    return row ? rowToWhale(row) : null;
-}
-function dbGetPendingWhales() {
-    return runQuery("SELECT * FROM whale_candidates WHERE status = 'pending' ORDER BY score DESC").map(rowToWhale);
-}
-function dbGetAllWhales() {
-    return runQuery('SELECT * FROM whale_candidates ORDER BY discovered_at DESC').map(rowToWhale);
-}
-function dbApproveWhale(address) {
-    const addr = address.toLowerCase();
-    runExec("UPDATE whale_candidates SET status = 'approved', approved_at = ? WHERE address = ?", [Date.now(), addr]);
-    return dbGetWhale(addr);
-}
-function dbRejectWhale(address) {
-    runExec("UPDATE whale_candidates SET status = 'rejected' WHERE address = ?", [address.toLowerCase()]);
-}
-function dbWhaleExists(address) {
-    return !!runGet('SELECT 1 FROM whale_candidates WHERE address = ?', [address.toLowerCase()]);
-}
-function dbIsRejected(address) {
-    return !!runGet("SELECT 1 FROM whale_candidates WHERE address = ? AND status = 'rejected'", [address.toLowerCase()]);
-}
 function dbInsertTrade(t) {
     runExec(`
         INSERT OR IGNORE INTO trade_history
@@ -424,142 +290,6 @@ function dbGetBlacklist() {
 }
 function dbIsBlacklisted(address) {
     return !!runGet('SELECT 1 FROM blacklist WHERE address = ?', [address.toLowerCase()]);
-}
-function dbAddCopyWallet(address, name) {
-    runExec(`
-        INSERT OR IGNORE INTO copy_wallets (address, name, is_active, added_at) VALUES (?, ?, 1, ?)
-    `, [address.toLowerCase(), name, Date.now()]);
-}
-function dbRemoveCopyWallet(address) {
-    runExec('DELETE FROM copy_wallets WHERE address = ?', [address.toLowerCase()]);
-}
-function dbGetCopyWallets() {
-    return runQuery('SELECT * FROM copy_wallets ORDER BY added_at DESC').map(row => ({
-        address: row.address,
-        name: row.name,
-        isActive: !!row.is_active,
-        addedAt: row.added_at,
-    }));
-}
-function dbUpdateCopyWallet(address, fields) {
-    if (fields.name !== undefined) {
-        runExec('UPDATE copy_wallets SET name = ? WHERE address = ?', [fields.name, address.toLowerCase()]);
-    }
-    if (fields.isActive !== undefined) {
-        runExec('UPDATE copy_wallets SET is_active = ? WHERE address = ?', [fields.isActive ? 1 : 0, address.toLowerCase()]);
-    }
-}
-function dbInsertWaitlistEvent(e) {
-    runExec(`
-        INSERT INTO whale_waitlist_events
-            (address, event_type, token, profit_pct, volume_eth, recorded_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `, [e.address.toLowerCase(), e.eventType, e.token ?? null, e.profitPct ?? null, e.volumeEth ?? null, e.recordedAt]);
-}
-function dbGetWaitlistEvents(address, limit = 50) {
-    return runQuery(`
-        SELECT * FROM whale_waitlist_events WHERE address = ? ORDER BY recorded_at DESC LIMIT ?
-    `, [address.toLowerCase(), limit]).map(r => ({
-        id: r.id,
-        address: r.address,
-        eventType: r.event_type,
-        token: r.token ?? undefined,
-        profitPct: r.profit_pct ?? undefined,
-        volumeEth: r.volume_eth ?? undefined,
-        recordedAt: r.recorded_at,
-    }));
-}
-function dbGetWaitlistSummary(address) {
-    const events = dbGetWaitlistEvents(address, 200);
-    const trades = events.filter(e => e.profitPct != null);
-    const wins = trades.filter(e => (e.profitPct ?? 0) > 0).length;
-    const losses = trades.filter(e => (e.profitPct ?? 0) < 0).length;
-    const avg = trades.length > 0 ? trades.reduce((s, e) => s + (e.profitPct ?? 0), 0) / trades.length : 0;
-    return { totalEvents: events.length, wins, losses, avgProfitPct: parseFloat(avg.toFixed(1)) };
-}
-// ── Whale Candidates — monitoring status ──────────────────────────────────────
-function dbMonitorWhale(address) {
-    runExec("UPDATE whale_candidates SET status = 'monitoring' WHERE address = ?", [address.toLowerCase()]);
-}
-function rowToMonitored(row) {
-    return {
-        address: row.address,
-        name: row.name,
-        monitoredSince: row.monitored_since,
-        tradesObserved: row.trades_observed,
-        winsObserved: row.wins_observed,
-        lossesObserved: row.losses_observed,
-        totalPnlPct: row.total_pnl_pct,
-        tradesPerDay: row.trades_per_day,
-        lastTradeMs: row.last_trade_ms,
-        aiVerdict: row.ai_verdict,
-        aiReason: row.ai_reason ?? undefined,
-        aiScore: row.ai_score ?? undefined,
-        promotedAt: row.promoted_at ?? undefined,
-        dataSource: (row.data_source ?? 'gecko'),
-    };
-}
-function dbAddMonitoredWallet(address, name) {
-    runExec(`
-        INSERT OR IGNORE INTO monitored_wallets
-            (address, name, monitored_since, trades_observed, wins_observed,
-             losses_observed, total_pnl_pct, trades_per_day, last_trade_ms, ai_verdict)
-        VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0, 'pending')
-    `, [address.toLowerCase(), name, Date.now()]);
-}
-function dbRemoveMonitoredWallet(address) {
-    runExec('DELETE FROM monitored_wallets WHERE address = ?', [address.toLowerCase()]);
-}
-function dbGetMonitoredWallets() {
-    return runQuery('SELECT * FROM monitored_wallets ORDER BY monitored_since DESC').map(rowToMonitored);
-}
-function dbGetMonitoredWallet(address) {
-    const row = runGet('SELECT * FROM monitored_wallets WHERE address = ?', [address.toLowerCase()]);
-    return row ? rowToMonitored(row) : null;
-}
-function dbIsMonitored(address) {
-    return !!runGet('SELECT 1 FROM monitored_wallets WHERE address = ?', [address.toLowerCase()]);
-}
-function dbUpdateMonitoredStats(address, stats) {
-    const sets = [];
-    const values = [];
-    if (stats.tradesObserved !== undefined) {
-        sets.push('trades_observed = ?');
-        values.push(stats.tradesObserved);
-    }
-    if (stats.winsObserved !== undefined) {
-        sets.push('wins_observed = ?');
-        values.push(stats.winsObserved);
-    }
-    if (stats.lossesObserved !== undefined) {
-        sets.push('losses_observed = ?');
-        values.push(stats.lossesObserved);
-    }
-    if (stats.totalPnlPct !== undefined) {
-        sets.push('total_pnl_pct = ?');
-        values.push(stats.totalPnlPct);
-    }
-    if (stats.tradesPerDay !== undefined) {
-        sets.push('trades_per_day = ?');
-        values.push(stats.tradesPerDay);
-    }
-    if (stats.lastTradeMs !== undefined) {
-        sets.push('last_trade_ms = ?');
-        values.push(stats.lastTradeMs);
-    }
-    if (stats.dataSource !== undefined) {
-        sets.push('data_source = ?');
-        values.push(stats.dataSource);
-    }
-    if (sets.length === 0)
-        return;
-    values.push(address.toLowerCase());
-    runExec(`UPDATE monitored_wallets SET ${sets.join(', ')} WHERE address = ?`, values);
-}
-function dbSetMonitoredVerdict(address, verdict, score, reason) {
-    runExec(`
-        UPDATE monitored_wallets SET ai_verdict = ?, ai_score = ?, ai_reason = ? WHERE address = ?
-    `, [verdict, score, reason, address.toLowerCase()]);
 }
 // ── Push Subscriptions ────────────────────────────────────────────────────────
 function dbGetPushSubscriptions() {

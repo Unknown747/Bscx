@@ -23,13 +23,6 @@ export interface TokenAnalysis {
     reasoning: string;
 }
 
-export interface WalletAnalysis {
-    address: string;
-    score: number;
-    tradingPattern: 'SCALPER' | 'SNIPER' | 'WHALE' | 'SWING';
-    shouldCopy: boolean;
-    reason: string;
-}
 
 // ============ MAIN AI PROVIDER CLASS ============
 export class MultiAIProvider {
@@ -395,47 +388,6 @@ Respond HANYA JSON (tidak ada teks lain):
             };
             this.tokenAnalysisCache.set(cacheKey, { result: fallback, expiresAt: Date.now() + 10_000 });
             return fallback;
-        }
-    }
-
-    async analyzeWallet(walletAddress: string, walletHistory: {
-        totalTrades: number;
-        winRate: number;
-        avgHoldTime: number;
-        avgProfit: number;
-    }): Promise<WalletAnalysis> {
-        const holdMin = Math.round(walletHistory.avgHoldTime / 60);
-        const prompt =
-            `Evaluasi wallet copy trade di jaringan Base blockchain. Jawab HANYA JSON tanpa teks lain.\n` +
-            `Alamat: ${walletAddress}\n` +
-            `Total trade: ${walletHistory.totalTrades}\n` +
-            `Win rate: ${walletHistory.winRate}%\n` +
-            `Rata-rata hold: ${holdMin} menit\n` +
-            `Rata-rata profit: ${walletHistory.avgProfit >= 0 ? '+' : ''}${walletHistory.avgProfit}%\n\n` +
-            `Kriteria COPY: win rate ≥50%, profit positif, trade aktif (≥5 trade), hold <120 menit (scalper/sniper lebih baik).\n` +
-            `Format respons (JSON saja): {"score":<0-100>,"tradingPattern":"SCALPER|SNIPER|WHALE|SWING","shouldCopy":<true/false>,"reason":"<alasan singkat bahasa Indonesia>"}`;
-
-        const response = await this.query(prompt);
-
-        try {
-            const jsonMatch = response.content.match(/\{[\s\S]*?\}/);
-            if (!jsonMatch) throw new Error('no JSON');
-            const parsed = JSON.parse(jsonMatch[0]);
-            return {
-                address:        walletAddress,
-                score:          Math.max(0, Math.min(100, parseInt(parsed.score) || 50)),
-                tradingPattern: parsed.tradingPattern  || 'SWING',
-                shouldCopy:     parsed.shouldCopy      === true,
-                reason:         parsed.reason          || 'Evaluasi selesai'
-            };
-        } catch {
-            return {
-                address:        walletAddress,
-                score:          50,
-                tradingPattern: 'SWING',
-                shouldCopy:     false,
-                reason:         'Analisis AI gagal — evaluasi manual disarankan'
-            };
         }
     }
 

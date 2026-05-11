@@ -121,7 +121,6 @@ export class MicroCapRiskManager {
     }
 
     // ── Gate: called BEFORE each trade ────────────────────────────────────────
-    // skipCooldown=true → hanya Emergency Stop yg memblokir (untuk copy trade)
     beforeTrade(
         token: { liquidityUSD?: number; createdAt?: number } = {},
         skipCooldown = false,
@@ -134,7 +133,6 @@ export class MicroCapRiskManager {
         }
 
         // Cooldown check (covers: daily loss CD, consecutive loss CD, big-profit CD)
-        // Copy trade melewati ini — whale signal independen dari screener kami
         if (!skipCooldown && this.cooldownUntil > Date.now()) {
             const remaining     = this.cooldownUntil - Date.now();
             const remainingMins = Math.ceil(remaining / 60_000);

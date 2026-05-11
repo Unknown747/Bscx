@@ -4,7 +4,7 @@ import { authFetch } from '../lib/authFetch';
 
 interface LogEntry {
     id: string;
-    type: 'buy-success' | 'buy-failed' | 'sell-success' | 'take-profit' | 'stop-loss' | 'copy-trade' | 'info';
+    type: 'buy-success' | 'buy-failed' | 'sell-success' | 'take-profit' | 'stop-loss' | 'info';
     message: string;
     detail?: string;
     timestamp: number;
@@ -20,7 +20,6 @@ const TYPE_CONFIG: Record<LogEntry['type'], { icon: string; color: string; label
     'sell-success': { icon: '💰', color: 'text-yellow-400', label: 'SELL'       },
     'take-profit':  { icon: '🎯', color: 'text-green-300',  label: 'TAKE PROFIT'},
     'stop-loss':    { icon: '🛑', color: 'text-red-500',    label: 'STOP LOSS'  },
-    'copy-trade':   { icon: '🐋', color: 'text-blue-400',   label: 'COPY'       },
     'info':         { icon: '📋', color: 'text-gray-400',   label: 'INFO'       }
 };
 

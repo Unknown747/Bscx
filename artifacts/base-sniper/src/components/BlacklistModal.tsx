@@ -176,7 +176,7 @@ const BlacklistModal: React.FC<BlacklistModalProps> = ({ apiUrl, onClose }) => {
                             <span className="text-lg">⚡</span>
                             <div className="text-xs text-yellow-300/80 leading-relaxed space-y-1">
                                 <p>Token yang diblacklist <span className="font-semibold text-yellow-300">langsung aktif</span> tanpa restart server.</p>
-                                <p>Bot tidak akan membeli token ini melalui sniper <span className="font-semibold">maupun copy trading</span>.</p>
+                                <p>Bot tidak akan membeli token ini melalui screener maupun sniper.</p>
                                 <p className="text-yellow-500">Token yang kena stop loss otomatis juga masuk blacklist ini.</p>
                             </div>
                         </div>
