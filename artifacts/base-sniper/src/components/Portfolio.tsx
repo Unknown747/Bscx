@@ -125,6 +125,14 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
     const [positions, setPositions] = useState<OpenPosition[]>([]);
     const [posLoading, setPosLoading] = useState(true);
 
+    // Wallet scan state
+    type ScanResult = { tokenAddress: string; tokenSymbol: string; balance: string; action: string; profitPct?: number | null; liqUsd?: number; note?: string };
+    const [scanLoading, setScanLoading] = useState(false);
+    const [scanResults, setScanResults] = useState<ScanResult[] | null>(null);
+    const [scanScanned, setScanScanned] = useState(0);
+    const [scanError, setScanError]     = useState('');
+    const [showScan, setShowScan]       = useState(false);
+
     const fetchPortfolio = useCallback(async () => {
         try {
             const res  = await authFetch(`${apiUrl}/api/portfolio`);
@@ -226,8 +234,39 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
         );
     }
 
+    const runWalletScan = useCallback(async () => {
+        setScanLoading(true);
+        setScanError('');
+        setScanResults(null);
+        setScanScanned(0);
+        setShowScan(true);
+        try {
+            const res  = await authFetch(`${apiUrl}/api/wallet-scan`, { method: 'POST' });
+            const json = await res.json();
+            if (json.error) { setScanError(json.error); }
+            else {
+                setScanResults(json.found ?? []);
+                setScanScanned(json.totalScanned ?? 0);
+                // Refresh portfolio to show newly imported tokens
+                fetchPortfolio();
+                fetchPositions();
+            }
+        } catch (e: any) {
+            setScanError(e.message || 'Scan gagal');
+        }
+        setScanLoading(false);
+    }, [apiUrl, fetchPortfolio, fetchPositions]);
+
     const ethBal   = data ? parseFloat(data.ethBalance) : 0;
     const totalUsd = data?.totalValueUsd ?? 0;
+
+    const actionLabel: Record<string, { icon: string; color: string; text: string }> = {
+        imported:       { icon: '✅', color: 'text-green-400',  text: 'Diimport' },
+        already_tracked:{ icon: '📌', color: 'text-blue-400',   text: 'Sudah dipantau' },
+        no_balance:     { icon: '🪹', color: 'text-gray-500',   text: 'Sudah terjual' },
+        auto_selling:   { icon: '🗑️', color: 'text-red-400',    text: 'Auto-jual (rugged)' },
+        error:          { icon: '⚠️', color: 'text-yellow-500', text: 'Error' },
+    };
 
     return (
         <div className="space-y-4 pb-6">
@@ -236,6 +275,10 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
             <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-300">Portfolio</h2>
                 <div className="flex items-center gap-2">
+                    <button onClick={runWalletScan} disabled={scanLoading}
+                        className="text-xs text-purple-400 hover:text-purple-300 transition-colors px-2 py-0.5 rounded border border-purple-900 hover:border-purple-700 disabled:opacity-50">
+                        {scanLoading ? '⏳ Scan...' : '🔍 Scan Wallet'}
+                    </button>
                     <button onClick={fetchPortfolio}
                         className="text-xs text-green-500 hover:text-green-400 transition-colors px-2 py-0.5 rounded border border-green-900 hover:border-green-700">
                         ↻ Refresh
@@ -243,6 +286,62 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
                     <span className="text-xs text-gray-600">auto {nextRefresh}s</span>
                 </div>
             </div>
+
+            {/* ── Wallet Scan Results Panel ── */}
+            {showScan && (
+                <div className="bg-gray-900 border border-purple-900/60 rounded-2xl p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-purple-300">
+                            {scanLoading ? '⏳ Scanning riwayat wallet...' : `🔍 Hasil Scan (${scanScanned} token diperiksa)`}
+                        </p>
+                        <button onClick={() => setShowScan(false)} className="text-xs text-gray-600 hover:text-gray-400">✕</button>
+                    </div>
+
+                    {scanLoading && (
+                        <div className="flex items-center gap-2 py-3">
+                            <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                            <p className="text-xs text-gray-500">Mengecek history Basescan + on-chain balance...</p>
+                        </div>
+                    )}
+
+                    {scanError && (
+                        <p className="text-xs text-red-400 bg-red-950/30 rounded-xl p-2">{scanError}</p>
+                    )}
+
+                    {scanResults && scanResults.length === 0 && (
+                        <p className="text-xs text-gray-500 text-center py-2">Tidak ada token baru ditemukan di history wallet</p>
+                    )}
+
+                    {scanResults && scanResults.length > 0 && (
+                        <div className="space-y-2">
+                            {scanResults.map((r, i) => {
+                                const a = actionLabel[r.action] ?? { icon: '?', color: 'text-gray-400', text: r.action };
+                                return (
+                                    <div key={i} className="flex items-center justify-between py-1.5 border-b border-gray-800 last:border-0">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <span className="text-sm">{a.icon}</span>
+                                            <div className="min-w-0">
+                                                <p className="text-xs font-bold text-white truncate">{r.tokenSymbol}</p>
+                                                <p className={`text-xs ${a.color}`}>{a.text}{r.note ? ` — ${r.note}` : ''}</p>
+                                            </div>
+                                        </div>
+                                        <div className="text-right flex-shrink-0">
+                                            {r.balance !== '0' && r.balance !== '?' && (
+                                                <p className="text-xs text-gray-400">{parseFloat(r.balance).toLocaleString(undefined, {maximumFractionDigits: 0})}</p>
+                                            )}
+                                            {r.profitPct != null && (
+                                                <p className={`text-xs font-semibold ${r.profitPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                    {r.profitPct >= 0 ? '+' : ''}{r.profitPct.toFixed(1)}%
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            )}
 
             {error && (
                 <div className="bg-red-900/30 border border-red-800 rounded-xl p-3 text-xs text-red-400">{error}</div>

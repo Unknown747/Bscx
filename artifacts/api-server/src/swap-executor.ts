@@ -25,7 +25,7 @@ import {
     getOnChainFeeTier,
 } from './price-oracle';
 import { calculateExit } from './dynamic-exit';
-import { dbSaveOpenPosition, dbDeleteOpenPosition, dbLoadOpenPositions } from './db';
+import { dbSaveOpenPosition, dbDeleteOpenPosition, dbLoadOpenPositions, dbGetTrades } from './db';
 
 dotenv.config();
 
@@ -1742,6 +1742,191 @@ export class SwapExecutor extends EventEmitter {
                 await this.sell(addr, 100);
             } catch { /* continue selling others */ }
         }
+    }
+
+    // ============ WALLET HISTORY SCAN ============
+    /**
+     * Scan wallet's full trade history from DB + Basescan, find tokens still held,
+     * import them into the portfolio, and auto-sell rugged/illiquid ones.
+     */
+    async scanWalletHistory(): Promise<{
+        found: Array<{
+            tokenAddress: string; tokenSymbol: string; balance: string;
+            action: 'imported' | 'already_tracked' | 'no_balance' | 'auto_selling' | 'error';
+            profitPct?: number | null; liqUsd?: number; note?: string;
+        }>;
+        totalScanned: number; errors: string[];
+    }> {
+        if (!this.isReady) return { found: [], totalScanned: 0, errors: ['Executor not ready'] };
+
+        const WALLET = this.account.address;
+        const found: any[]    = [];
+        const errors: string[] = [];
+
+        // ── Step 1: collect token addresses from DB trade history ──
+        const trades = dbGetTrades(500);
+        const tradeMap = new Map<string, { symbol: string; entryEth: number; txHash: string }>();
+        for (const t of trades) {
+            const key = t.tokenAddress.toLowerCase();
+            if (!tradeMap.has(key)) {
+                tradeMap.set(key, { symbol: t.tokenSymbol, entryEth: t.entryEth, txHash: t.txHash });
+            }
+        }
+
+        // ── Step 2: try Basescan v2 for tokens not in DB (no key needed) ──
+        try {
+            const url = `https://api.etherscan.io/v2/api?chainid=8453&module=account&action=tokentx&address=${WALLET}&sort=desc&page=1&offset=100`;
+            const res = await axios.get(url, { timeout: 8000 });
+            const txs: any[] = Array.isArray(res.data?.result) ? res.data.result : [];
+            for (const tx of txs) {
+                if (tx.to?.toLowerCase() === WALLET.toLowerCase()) {
+                    const key = tx.contractAddress.toLowerCase();
+                    if (!tradeMap.has(key)) {
+                        tradeMap.set(key, { symbol: tx.tokenSymbol || 'UNKNOWN', entryEth: 0, txHash: tx.hash });
+                    }
+                }
+            }
+        } catch { /* non-critical, fallback to DB only */ }
+
+        // Also try Blockscout v2
+        try {
+            const url2 = `https://base.blockscout.com/api/v2/addresses/${WALLET}/token-transfers?type=ERC-20&filter=to&limit=50`;
+            const res2 = await axios.get(url2, { timeout: 8000 });
+            const items: any[] = res2.data?.items ?? [];
+            for (const item of items) {
+                const addr = item.token?.address_hash?.toLowerCase();
+                const sym  = item.token?.symbol || 'UNKNOWN';
+                if (addr && !tradeMap.has(addr)) {
+                    tradeMap.set(addr, { symbol: sym, entryEth: 0, txHash: item.tx_hash || '' });
+                }
+            }
+        } catch { /* non-critical */ }
+
+        // ── Step 3: for each token, check balance + evaluate ──
+        const allAddresses = Array.from(tradeMap.keys());
+        console.log(`🔍 Wallet scan: checking ${allAddresses.length} token(s) from history…`);
+
+        for (const tokenAddr of allAddresses) {
+            const info    = tradeMap.get(tokenAddr)!;
+            const addr    = tokenAddr as Address;
+            const symbol  = info.symbol;
+
+            try {
+                // Check if already tracked
+                const alreadyTracked = this.openPositions.has(addr) ||
+                    this.openPositions.has(tokenAddr as Address);
+
+                // On-chain balance
+                let balance = 0n;
+                try {
+                    balance = await Promise.race([
+                        this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [WALLET] }) as Promise<bigint>,
+                        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
+                    ]);
+                } catch {
+                    for (const backup of this.backupClients) {
+                        try { balance = await (backup.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [WALLET] }) as Promise<bigint>); break; }
+                        catch { continue; }
+                    }
+                }
+
+                const decimals     = await this.getTokenDecimals(addr);
+                const balanceHuman = Number(formatUnits(balance, decimals));
+
+                if (balance === 0n) {
+                    found.push({ tokenAddress: tokenAddr, tokenSymbol: symbol, balance: '0', action: 'no_balance' });
+                    continue;
+                }
+
+                if (alreadyTracked) {
+                    found.push({ tokenAddress: tokenAddr, tokenSymbol: symbol, balance: balanceHuman.toFixed(6), action: 'already_tracked' });
+                    continue;
+                }
+
+                // Get current liquidity + price from GeckoTerminal
+                let liquidityUsd = 0;
+                let priceEth: number | null = null;
+                let poolAddr = '';
+                try {
+                    const gt = await axios.get(
+                        `https://api.geckoterminal.com/api/v2/networks/base/tokens/${addr}/pools?page=1`,
+                        { timeout: 6000, headers: { 'Accept': 'application/json;version=20230302' } }
+                    );
+                    const pool = gt.data?.data?.[0];
+                    if (pool) {
+                        liquidityUsd = parseFloat(pool.attributes?.reserve_in_usd || '0') || 0;
+                        poolAddr     = pool.attributes?.address || '';
+                        const ethPx  = await getEthPriceUsd();
+                        const priceUsdStr = pool.attributes?.base_token_price_usd || '0';
+                        const priceUsd = parseFloat(priceUsdStr) || 0;
+                        if (priceUsd > 0 && ethPx > 0) priceEth = priceUsd / ethPx;
+                    }
+                } catch { /* no price data */ }
+
+                const currentValueEth = priceEth !== null ? balanceHuman * priceEth : null;
+                const entryEth        = info.entryEth ?? 0;
+                const profitPct       = (currentValueEth !== null && entryEth > 0)
+                    ? ((currentValueEth - entryEth) / entryEth) * 100
+                    : null;
+
+                // Decision: sell if rugged, hold if healthy
+                const isRugged = liquidityUsd < 100;
+                const bigLoss  = profitPct !== null && profitPct <= -80;
+
+                if (isRugged || bigLoss) {
+                    // Auto-sell — fire and forget
+                    console.log(`🗑️ [WalletScan] ${symbol}: liq=$${liquidityUsd.toFixed(0)} pnl=${profitPct?.toFixed(1) ?? '?'}% — auto-selling`);
+                    this.addKnownToken(addr);
+                    found.push({ tokenAddress: tokenAddr, tokenSymbol: symbol, balance: balanceHuman.toFixed(6), action: 'auto_selling', liqUsd: liquidityUsd, profitPct, note: isRugged ? 'Likuiditas habis' : `Loss ${profitPct?.toFixed(0)}%` });
+                    this.sell(addr, 100, { source: 'stop-loss' }).catch(() => {});
+                } else {
+                    // Import into portfolio
+                    console.log(`✅ [WalletScan] ${symbol}: liq=$${liquidityUsd.toFixed(0)} pnl=${profitPct?.toFixed(1) ?? '?'}% — imported`);
+                    this.addKnownToken(addr);
+                    const now     = Date.now();
+                    const amtIn   = entryEth > 0 ? parseEther(entryEth.toFixed(18)) : parseEther('0.00008');
+                    const position: OpenPosition = {
+                        tokenAddress:        addr,
+                        tokenSymbol:         symbol,
+                        amountIn:            amtIn,
+                        amountOut:           balance,
+                        entryPrice:          priceEth ?? 0,
+                        openedAt:            now - 300_000, // assume held 5 min
+                        txHash:              (info.txHash || '') as Hex,
+                        takeProfit1Hit:      false,
+                        takeProfit2Hit:      false,
+                        takeProfit3Hit:      false,
+                        peakValueEth:        currentValueEth ?? 0,
+                        dcaDone:             false,
+                        initialLiquidityUsd: liquidityUsd,
+                        tp1SoldPct:          0,
+                        tp2SoldPct:          0,
+                    };
+                    this.openPositions.set(addr, position);
+                    dbSaveOpenPosition({
+                        tokenAddress:  addr,
+                        tokenSymbol:   symbol,
+                        amountInWei:   amtIn.toString(),
+                        amountOutWei:  balance.toString(),
+                        entryPriceEth: priceEth ?? 0,
+                        openedAt:      position.openedAt,
+                        txHash:        info.txHash || '',
+                        peakValueEth:  currentValueEth ?? 0,
+                        tp1Hit: false, tp2Hit: false, tp3Hit: false,
+                        tp1SoldPct: 0, tp2SoldPct: 0, dcaDone: false,
+                        sourceWallet: undefined, initLiqUsd: liquidityUsd,
+                    });
+                    found.push({ tokenAddress: tokenAddr, tokenSymbol: symbol, balance: balanceHuman.toFixed(6), action: 'imported', liqUsd: liquidityUsd, profitPct, note: `Liq $${liquidityUsd.toFixed(0)}` });
+                }
+            } catch (e: any) {
+                errors.push(`${symbol}(${tokenAddr.slice(0, 8)}): ${e?.message || 'error'}`);
+                found.push({ tokenAddress: tokenAddr, tokenSymbol: symbol, balance: '?', action: 'error', note: e?.message });
+            }
+        }
+
+        // Ensure position monitor is running
+        this.startPositionMonitor();
+        return { found, totalScanned: allAddresses.length, errors };
     }
 
     getWalletAddress(): Address {

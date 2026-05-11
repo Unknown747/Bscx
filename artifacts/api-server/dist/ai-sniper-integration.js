@@ -1747,6 +1747,11 @@ class AISniperBot extends events_1.EventEmitter {
         this.copyMonitor.renameWallet(address, name);
         (0, db_1.dbUpdateCopyWallet)(address, { name });
     }
+    async scanWalletHistory() {
+        if (!this.executor)
+            return { found: [], totalScanned: 0, errors: ['Bot not ready'] };
+        return this.executor.scanWalletHistory();
+    }
     getTradeHistory() {
         const trades = (0, db_1.dbGetTrades)(200);
         const withPnl = trades.filter(t => t.profitPct !== null && t.profitPct !== undefined);

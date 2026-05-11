@@ -1877,6 +1877,11 @@ export class AISniperBot extends EventEmitter {
         dbUpdateCopyWallet(address, { name });
     }
 
+    async scanWalletHistory() {
+        if (!this.executor) return { found: [], totalScanned: 0, errors: ['Bot not ready'] };
+        return this.executor.scanWalletHistory();
+    }
+
     getTradeHistory(): { trades: any[]; stats: any } {
         const trades   = dbGetTrades(200);
         const withPnl  = trades.filter(t => t.profitPct !== null && t.profitPct !== undefined);

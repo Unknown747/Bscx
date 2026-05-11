@@ -872,6 +872,16 @@ app.post('/api/whale/force-promote/:address', requireAuth, (req, res) => {
     res.json({ ok: true, message: 'Wallet dipromosikan secara manual ke copy wallet aktif!' });
 });
 // ============ FITUR BARU: EMERGENCY STOP, BACKTEST, CORRELATION, NARRATIVE, SAFETY ============
+// POST /api/wallet-scan — scan wallet history, import held tokens, auto-sell rugged ones
+app.post('/api/wallet-scan', requireAuth, async (_req, res) => {
+    try {
+        const result = await bot.scanWalletHistory();
+        res.json({ ...result, timestamp: Date.now() });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 // POST /api/emergency-stop — Feature 9: hentikan semua & jual semua posisi
 app.post('/api/emergency-stop', requireAuth, async (req, res) => {
     try {
