@@ -103,11 +103,6 @@ app.get('/api/status', (_req: Request, res: Response) => {
     res.json(bot.getStatus());
 });
 
-app.get('/api/positions', (_req: Request, res: Response) => {
-    const status = bot.getStatus();
-    res.json({ positions: status.openPositions, wallet: status.wallet, timestamp: Date.now() });
-});
-
 app.get('/api/config', (_req: Request, res: Response) => {
     const rc = bot.getRuntimeConfig();
     res.json({

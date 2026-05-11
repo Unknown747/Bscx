@@ -137,10 +137,14 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
         try {
             const res  = await authFetch(`${apiUrl}/api/portfolio`);
             const json = await res.json();
-            setData(json);
-            setLastUpdate(new Date().toLocaleTimeString('id-ID'));
-            setError('');
-            setNextRefresh(POLL_INTERVAL / 1000);
+            if (json.error) {
+                setError(json.error);
+            } else {
+                setData(json);
+                setLastUpdate(new Date().toLocaleTimeString('id-ID'));
+                setError('');
+                setNextRefresh(POLL_INTERVAL / 1000);
+            }
         } catch {
             setError('Gagal memuat portfolio');
         }
@@ -151,7 +155,9 @@ const Portfolio: React.FC<PortfolioProps> = ({ apiUrl }) => {
         try {
             const res  = await authFetch(`${apiUrl}/api/positions`);
             const json = await res.json();
-            setPositions(json.positions ?? []);
+            if (!json.error) {
+                setPositions(json.positions ?? []);
+            }
         } catch { /* silent */ }
         setPosLoading(false);
     }, [apiUrl]);

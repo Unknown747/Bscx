@@ -146,10 +146,6 @@ app.post('/api/auth/verify', (req, res) => {
 app.get('/api/status', (_req, res) => {
     res.json(bot.getStatus());
 });
-app.get('/api/positions', (_req, res) => {
-    const status = bot.getStatus();
-    res.json({ positions: status.openPositions, wallet: status.wallet, timestamp: Date.now() });
-});
 app.get('/api/config', (_req, res) => {
     const rc = bot.getRuntimeConfig();
     res.json({
