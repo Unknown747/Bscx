@@ -854,6 +854,12 @@ class AISniperBot extends events_1.EventEmitter {
             if (d.sourceWallet && (d.percentSold ?? 100) >= 100) {
                 this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
             }
+            // Update risk manager exactly once — after actual sell succeeds (not when exit is triggered)
+            if ((d.percentSold ?? 100) >= 100 && d.profitPct != null) {
+                const entryEth = d.entryEth ?? this.runtimeConfig.maxTradeAmount;
+                const profitEth = (d.profitPct / 100) * entryEth;
+                this.riskManager.afterTrade(profitEth);
+            }
             const tradeSource = d.source || 'manual';
             (0, db_1.dbInsertTrade)({
                 id: (0, crypto_1.randomBytes)(6).toString('hex'),
@@ -923,11 +929,7 @@ class AISniperBot extends events_1.EventEmitter {
             this.emit('stop-loss', d);
             this.addLog('stop-loss', `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`, d.reason || 'Auto stop loss triggered');
             (0, push_manager_1.pushStopLoss)(d.tokenSymbol || 'TOKEN', d.profitPct ?? 0, d.reason);
-            // ── Update risk manager on loss ──
-            if (d.profitPct != null) {
-                const lossEth = (Math.abs(d.profitPct) / 100) * this.runtimeConfig.maxTradeAmount;
-                this.riskManager.afterTrade(-lossEth);
-            }
+            // Risk manager is updated by sell-success handler (after actual TX confirms)
             if (d.sourceWallet)
                 this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
             if (d.tokenAddress) {

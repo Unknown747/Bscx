@@ -264,6 +264,7 @@ interface OpenPosition {
     tp2SoldPct: number;
     dynamicSell50Done?: boolean;
     dynamicSell25Done?: boolean;
+    exitingNow?: boolean;
 }
 
 // ============ SWAP EXECUTOR ============
@@ -954,12 +955,15 @@ export class SwapExecutor extends EventEmitter {
             console.log(`   ⚠️ ${position.tokenSymbol}: price oracle unavailable (${holdMinsNoPrice.toFixed(1)}min held, limit=${this.CONFIG.MAX_HOLD_MINUTES}min)`);
             if (holdMinsNoPrice >= this.CONFIG.MAX_HOLD_MINUTES) {
                 console.log(`⏰ TIMEOUT EXIT (no price): selling ${position.tokenSymbol} after ${holdMinsNoPrice.toFixed(0)}min`);
-                this.emit('stop-loss', {
-                    tokenAddress, tokenSymbol: position.tokenSymbol, profitPct: null,
-                    reason: `⏰ Timeout (${this.CONFIG.MAX_HOLD_MINUTES}min — price oracle unavailable)`,
-                    peakMult: 1, sourceWallet: position.sourceWallet,
-                    holdMs: Date.now() - position.openedAt,
-                });
+                if (!position.exitingNow) {
+                    this.emit('stop-loss', {
+                        tokenAddress, tokenSymbol: position.tokenSymbol, profitPct: null,
+                        reason: `⏰ Timeout (${this.CONFIG.MAX_HOLD_MINUTES}min — price oracle unavailable)`,
+                        peakMult: 1, sourceWallet: position.sourceWallet,
+                        holdMs: Date.now() - position.openedAt,
+                    });
+                }
+                position.exitingNow = true;
                 await this.sell(tokenAddress, 100, { source: 'stop-loss' });
             }
             return;
@@ -976,11 +980,14 @@ export class SwapExecutor extends EventEmitter {
         // If position is <2 min old AND already down >50% — very likely a rug/honeypot miss
         if (holdMins <= this.CONFIG.EMERGENCY_EXIT_MINUTES && profitPct <= this.CONFIG.EMERGENCY_EXIT_PCT) {
             console.log(`🚨 EMERGENCY EXIT: ${position.tokenSymbol} dropped ${profitPct.toFixed(1)}% in ${holdMinsStr}min — possible rug!`);
-            this.emit('stop-loss', {
-                tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
-                reason: `🚨 Emergency: -${Math.abs(profitPct).toFixed(0)}% in ${holdMinsStr}min (rug suspected)`,
-                peakMult: 1, sourceWallet: position.sourceWallet
-            });
+            if (!position.exitingNow) {
+                this.emit('stop-loss', {
+                    tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
+                    reason: `🚨 Emergency: -${Math.abs(profitPct).toFixed(0)}% in ${holdMinsStr}min (rug suspected)`,
+                    peakMult: 1, sourceWallet: position.sourceWallet
+                });
+            }
+            position.exitingNow = true;
             await this.sell(tokenAddress, 100, { source: 'stop-loss' });
             return;
         }
@@ -989,11 +996,14 @@ export class SwapExecutor extends EventEmitter {
         // Free up capital if token hasn't reached TP1 after MAX_HOLD_MINUTES
         if (holdMins >= this.CONFIG.MAX_HOLD_MINUTES && !position.takeProfit1Hit) {
             console.log(`⏰ MAX HOLD TIME (${this.CONFIG.MAX_HOLD_MINUTES}min) reached — exiting ${position.tokenSymbol} at ${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(1)}%`);
-            this.emit('stop-loss', {
-                tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
-                reason: `⏰ Timeout (${this.CONFIG.MAX_HOLD_MINUTES}min hold, no TP1)`,
-                peakMult: 1, sourceWallet: position.sourceWallet
-            });
+            if (!position.exitingNow) {
+                this.emit('stop-loss', {
+                    tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
+                    reason: `⏰ Timeout (${this.CONFIG.MAX_HOLD_MINUTES}min hold, no TP1)`,
+                    peakMult: 1, sourceWallet: position.sourceWallet
+                });
+            }
+            position.exitingNow = true;
             await this.sell(tokenAddress, 100, { source: 'stop-loss' });
             return;
         }
@@ -1019,7 +1029,10 @@ export class SwapExecutor extends EventEmitter {
         if (position.takeProfit1Hit && profitPct <= 0) {
             const reason = `🛡️ Breakeven guard: ${profitPct.toFixed(1)}% setelah TP1 — jual sisa posisi`;
             console.log(`🛡️ BREAKEVEN GUARD: ${position.tokenSymbol} balik ke ${profitPct.toFixed(1)}% setelah TP1 — protecting profits`);
-            this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult, sourceWallet: position.sourceWallet });
+            if (!position.exitingNow) {
+                this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult, sourceWallet: position.sourceWallet });
+            }
+            position.exitingNow = true;
             await this.sell(tokenAddress, 100, { source: 'stop-loss' });
             return;
         }
@@ -1030,7 +1043,10 @@ export class SwapExecutor extends EventEmitter {
                 ? `Trailing SL: -${dropFromPeak.toFixed(1)}% from peak`
                 : `Fixed SL: ${profitPct.toFixed(1)}%`;
             console.log(`🛑 STOP LOSS triggered (${reason}) — selling 100%`);
-            this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult, sourceWallet: position.sourceWallet });
+            if (!position.exitingNow) {
+                this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult, sourceWallet: position.sourceWallet });
+            }
+            position.exitingNow = true;
             await this.sell(tokenAddress, 100, { source: 'stop-loss' });
             return;
         }
@@ -1043,11 +1059,14 @@ export class SwapExecutor extends EventEmitter {
                     const liqDrop = ((position.initialLiquidityUsd - liqCheck.liquidityUsd) / position.initialLiquidityUsd) * 100;
                     if (liqDrop >= this.CONFIG.LIQUIDITY_DROP_EXIT_PCT) {
                         console.log(`💧 LIQUIDITY GUARD: ${position.tokenSymbol} liquidity dropped ${liqDrop.toFixed(0)}% — exiting!`);
-                        this.emit('stop-loss', {
-                            tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
-                            reason: `💧 Liquidity dropped ${liqDrop.toFixed(0)}% (rug/dump suspected)`,
-                            peakMult, sourceWallet: position.sourceWallet
-                        });
+                        if (!position.exitingNow) {
+                            this.emit('stop-loss', {
+                                tokenAddress, tokenSymbol: position.tokenSymbol, profitPct,
+                                reason: `💧 Liquidity dropped ${liqDrop.toFixed(0)}% (rug/dump suspected)`,
+                                peakMult, sourceWallet: position.sourceWallet
+                            });
+                        }
+                        position.exitingNow = true;
                         await this.sell(tokenAddress, 100, { source: 'stop-loss' });
                         return;
                     }
@@ -1565,15 +1584,38 @@ export class SwapExecutor extends EventEmitter {
             ...Array.from(this.openPositions.keys()),
         ]);
 
+        // Pre-build symbol cache from open positions (avoids extra RPC calls per poll)
+        const symbolCache = new Map<string, string>([[WETH_ADDR.toLowerCase(), 'WETH']]);
+        for (const [pAddr, pos] of this.openPositions) {
+            symbolCache.set(pAddr.toLowerCase(), pos.tokenSymbol);
+        }
+
         await Promise.all(Array.from(scanSet).map(async (addr) => {
             try {
-                const [balance, decimals, symbol] = await Promise.all([
-                    this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [this.account.address] }) as Promise<bigint>,
-                    this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'decimals' }) as Promise<number>,
-                    this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'symbol' }) as Promise<string>
-                ]);
+                // balanceOf: try primary with 5s timeout, fall back to backup RPCs
+                let balance: bigint;
+                try {
+                    balance = await Promise.race([
+                        this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [this.account.address] }) as Promise<bigint>,
+                        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
+                    ]);
+                } catch {
+                    let fetched = false;
+                    for (const backup of this.backupClients) {
+                        try {
+                            balance = await (backup.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [this.account.address] }) as Promise<bigint>);
+                            fetched = true;
+                            break;
+                        } catch { continue; }
+                    }
+                    if (!fetched) return;
+                }
                 if (balance === 0n && addr !== WETH_ADDR) return;
-                const balanceHuman = Number(formatUnits(balance, decimals));
+                // decimals: cached (no extra RPC if seen before)
+                const decimals = await this.getTokenDecimals(addr);
+                // symbol: use position cache first, then RPC only if needed
+                const symbol = symbolCache.get(addr.toLowerCase()) ?? await this.getTokenSymbol(addr);
+                const balanceHuman = Number(formatUnits(balance!, decimals));
                 let priceUsd: number | null = null;
                 let change24h: number | null = null;
                 try {
