@@ -22,6 +22,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.30",
+    "@types/sql.js": "^1.4.11",
     "@types/ws": "^8.5.10",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.4.3"

@@ -72,7 +72,7 @@ export function loadRuntimeKeys(): RuntimeKeys {
 
 export function saveRuntimeKeys(keys: Partial<RuntimeKeys>): void {
     const existing = readJson(KEYS_PATH);
-    const merged   = { ...existing, ...keys };
+    const merged: Record<string, any> = { ...existing, ...keys };
     // Remove any empty strings
     for (const k of Object.keys(merged)) {
         if (merged[k] === '') delete merged[k];

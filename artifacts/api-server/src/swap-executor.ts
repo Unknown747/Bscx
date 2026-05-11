@@ -1593,7 +1593,7 @@ export class SwapExecutor extends EventEmitter {
         await Promise.all(Array.from(scanSet).map(async (addr) => {
             try {
                 // balanceOf: try primary with 5s timeout, fall back to backup RPCs
-                let balance: bigint;
+                let balance: bigint = 0n;
                 try {
                     balance = await Promise.race([
                         this.publicClient.readContract({ address: addr, abi: ERC20_ABI, functionName: 'balanceOf', args: [this.account.address] }) as Promise<bigint>,
