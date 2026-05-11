@@ -64,12 +64,6 @@ const HELP_TEXT = `⚡ <b>Base Sniper — Commands</b>\n` +
     `/risk          — Risk manager &amp; circuit breaker\n` +
     `/history       — Trade history &amp; all-time stats\n` +
     `/dailyreport   — Today's P&amp;L summary\n\n` +
-    `<b>🐋 Whale</b>\n` +
-    `/candidates    — Pending whale candidates\n` +
-    `/approve &lt;addr&gt;  — Approve → monitoring queue\n` +
-    `/reject &lt;addr&gt;   — Reject candidate\n` +
-    `/promote &lt;addr&gt;  — Promote → active copy trading\n` +
-    `/scan          — Trigger immediate whale scan\n\n` +
     `<b>⚙️ Controls</b>\n` +
     `/sell &lt;sym|all&gt;  — Manual sell position\n` +
     `/pause         — Pause all trading (emergency)\n` +
@@ -81,7 +75,6 @@ const HELP_TEXT = `⚡ <b>Base Sniper — Commands</b>\n` +
     `/set tp2 &lt;x&gt;      — TP2 multiplier (e.g. 3)\n` +
     `/set capital &lt;eth&gt; — Total capital (ETH)\n` +
     `/set ai on|off   — Toggle AI analysis\n` +
-    `/set copy on|off — Toggle copy trading\n` +
     `<code>${DIV}</code>`;
 // ─── Main class ───────────────────────────────────────────────────────────────
 class TelegramBot {
@@ -180,21 +173,6 @@ class TelegramBot {
             case 'dailyreport':
                 await this.cmdDailyReport();
                 break;
-            case 'candidates':
-                await this.cmdCandidates();
-                break;
-            case 'approve':
-                await this.cmdApprove(args[0] ?? '');
-                break;
-            case 'reject':
-                await this.cmdReject(args[0] ?? '');
-                break;
-            case 'promote':
-                await this.cmdPromote(args[0] ?? '');
-                break;
-            case 'scan':
-                await this.cmdScan();
-                break;
             case 'sell':
                 await this.cmdSell(args);
                 break;
@@ -223,15 +201,6 @@ class TelegramBot {
         const [action, ...rest] = data.split(':');
         const addr = rest.join(':');
         switch (action) {
-            case 'approve':
-                await this.cmdApprove(addr);
-                break;
-            case 'reject':
-                await this.cmdReject(addr);
-                break;
-            case 'promote':
-                await this.cmdPromote(addr);
-                break;
             case 'sell_pos':
                 await this.cmdSell([addr, '100']);
                 break;
@@ -246,9 +215,6 @@ class TelegramBot {
                 break;
             case 'balance':
                 await this.cmdBalance();
-                break;
-            case 'candidates':
-                await this.cmdCandidates();
                 break;
         }
     }
@@ -266,9 +232,6 @@ class TelegramBot {
                     { text: '📡 Screener', callback_data: 'screener' },
                     { text: '🛡️ Risk', callback_data: 'risk' },
                 ],
-                [
-                    { text: '🐋 Candidates', callback_data: 'candidates' },
-                ],
             ],
         });
     }
@@ -279,7 +242,6 @@ class TelegramBot {
         const pos = st.openPositions ?? [];
         const connIcon = st.connected ? '🟢' : '🔴';
         const aiIcon = cfg.aiEnabled ? '✅' : '⏸';
-        const copyIcon = cfg.copyEnabled ? '✅' : '⏸';
         const screenIcon = st.smartScreener?.enabled ? '✅' : '⏸';
         const geckoIcon = st.geckoScanner?.enabled ? '✅' : '⏸';
         const cbIcon = rs.circuitBreakerTripped ? '🔴' : '🟢';
@@ -299,7 +261,6 @@ class TelegramBot {
             `${st.emergencyStop ? '🚨 <b>EMERGENCY STOP ACTIVE</b>\n' : ''}` +
             `\n<b>🔌 Modules</b>\n` +
             `AI Analysis    ${aiIcon}\n` +
-            `Copy Trading   ${copyIcon}\n` +
             `SmartScreener  ${screenIcon}\n` +
             `GeckoScanner   ${geckoIcon}\n` +
             `\n<b>🛡️ Risk</b>\n` +
@@ -474,117 +435,6 @@ class TelegramBot {
             await this.send('❌ Failed to generate daily report. Try again later.');
         }
     }
-    async cmdCandidates() {
-        const pending = this.bot.getPendingWhales();
-        if (pending.length === 0) {
-            await this.send(`🐋 <b>Whale Candidates</b>\n` +
-                `<code>${DIV}</code>\n\n` +
-                `No pending candidates.\n\n` +
-                `<i>Use /scan to trigger a new whale scan.</i>`);
-            return;
-        }
-        const top = pending.slice(0, 5);
-        const lines = top.map((c, i) => {
-            const scoreBar = bar(c.score, 100, 8);
-            const hoursAgo = ((Date.now() - c.lastActiveMs) / 3600000).toFixed(1);
-            return (`${stars(c.score)} <b>#${i + 1}</b>  Score: <b>${c.score}/100</b>\n` +
-                `<code>${scoreBar}</code>\n` +
-                `<code>${c.address}</code>\n` +
-                `WR: ${c.estimatedWinRate}%  ·  Avg: +${c.avgProfitPct}%  ·  ${c.tradeCount} trades\n` +
-                `Last active: ${hoursAgo}h ago`);
-        }).join('\n\n');
-        const keyboard = top.map((c, i) => ([
-            { text: `✅ Approve #${i + 1}`, callback_data: `approve:${c.address}` },
-            { text: `❌ Reject #${i + 1}`, callback_data: `reject:${c.address}` },
-        ]));
-        await this.sendKb(`🐋 <b>Whale Candidates — ${pending.length} Pending</b>\n` +
-            `<code>${DIV}</code>\n\n` +
-            `${lines}\n\n` +
-            `<code>${DIV}</code>\n` +
-            `<i>Tap a button or /approve &lt;addr&gt; · /reject &lt;addr&gt;</i>`, { inline_keyboard: keyboard });
-    }
-    async cmdApprove(addr) {
-        if (!addr) {
-            await this.send('❌ Usage: /approve <address>\n\nSee /candidates for the list.');
-            return;
-        }
-        const full = this.resolveAddr(addr);
-        if (!full) {
-            await this.send('❌ Candidate not found. Use the full address.');
-            return;
-        }
-        const ok = this.bot.addToMonitoring(full);
-        if (!ok) {
-            await this.send(`❌ Not found or already processed:\n<code>${full}</code>`);
-        }
-        else {
-            await this.sendKb(`🔬 <b>Whale → Monitoring Queue</b>\n` +
-                `<code>${DIV}</code>\n\n` +
-                `<code>${full}</code>\n\n` +
-                `✅ Added to monitoring.\n` +
-                `The bot will track this wallet's trades and run AI evaluation.\n\n` +
-                `Once AI approves, use /promote to activate copy trading.`, {
-                inline_keyboard: [[
-                        { text: '🚀 Promote to Copy', callback_data: `promote:${full}` },
-                    ]],
-            });
-        }
-    }
-    async cmdReject(addr) {
-        if (!addr) {
-            await this.send('❌ Usage: /reject <address>');
-            return;
-        }
-        const full = this.resolveAddr(addr);
-        if (!full) {
-            await this.send('❌ Candidate not found.');
-            return;
-        }
-        this.bot.rejectWhale(full);
-        await this.send(`❌ <b>Whale Rejected</b>\n\n` +
-            `<code>${full}</code>`);
-    }
-    async cmdPromote(addr) {
-        if (!addr) {
-            await this.send('❌ Usage: /promote <address>\n\n' +
-                'Promotes a monitored wallet to active copy trading.');
-            return;
-        }
-        const ok = this.bot.promoteToActiveCopy(addr) || this.bot.forcePromoteWallet(addr);
-        if (ok) {
-            await this.send(`🚀 <b>Whale Promoted!</b>\n` +
-                `<code>${DIV}</code>\n\n` +
-                `<code>${addr}</code>\n\n` +
-                `✅ Now <b>actively copied</b>.\n` +
-                `Future trades from this wallet will be mirrored automatically.`);
-        }
-        else {
-            await this.send(`❌ Could not promote <code>${addr}</code>\n\n` +
-                `Make sure the wallet is in the monitoring queue first (/approve <addr>).`);
-        }
-    }
-    async cmdScan() {
-        await this.send(`🔍 <b>Whale Scan Started</b>\n\n` +
-            `<i>Scanning on-chain activity… this may take 15–30 seconds.</i>`);
-        try {
-            const candidates = await this.bot.runWhaleScan(true);
-            if (candidates.length === 0) {
-                await this.send('🐋 Scan complete — no new candidates found this round.');
-            }
-            else {
-                await this.sendKb(`🐋 <b>Scan Complete!</b>\n\n` +
-                    `Found <b>${candidates.length}</b> new candidate(s).\n` +
-                    `Use /candidates to review and act.`, {
-                    inline_keyboard: [[
-                            { text: '🐋 View Candidates', callback_data: 'candidates' },
-                        ]],
-                });
-            }
-        }
-        catch (e) {
-            await this.send(`❌ Scan failed: ${e?.message || 'Unknown error'}`);
-        }
-    }
     async cmdSell(args) {
         const target = args[0]?.toLowerCase() ?? '';
         const pctNum = args[1] ? parseInt(args[1], 10) : 100;
@@ -664,11 +514,10 @@ class TelegramBot {
     async cmdResume() {
         this.bot.updateRuntimeConfig({
             geckoScannerEnabled: true,
-            whaleAutoScanEnabled: true,
         });
         this.bot.setSmartScreenerEnabled(true);
         await this.send(`✅ <b>Bot Resumed</b>\n\n` +
-            `SmartScreener, GeckoScanner &amp; Whale Auto-Scan re-enabled.\n\n` +
+            `SmartScreener &amp; GeckoScanner re-enabled.\n\n` +
             `<i>For a full WebSocket reconnect, restart the server.</i>`);
     }
     async cmdBlacklist() {
@@ -698,8 +547,7 @@ class TelegramBot {
                 `/set tp1 &lt;x&gt;       — TP1 multiplier (e.g. 1.5)\n` +
                 `/set tp2 &lt;x&gt;       — TP2 multiplier (e.g. 3)\n` +
                 `/set capital &lt;eth&gt; — Total capital in ETH\n` +
-                `/set ai on|off     — Toggle AI analysis\n` +
-                `/set copy on|off   — Toggle copy trading\n\n` +
+                `/set ai on|off     — Toggle AI analysis\n\n` +
                 `<i>Changes take effect immediately.</i>`);
             return;
         }
@@ -746,14 +594,6 @@ class TelegramBot {
                 this.bot.updateRuntimeConfig({ aiEnabled: val === 'on' });
                 applied = `AI Analysis → <b>${val === 'on' ? 'ON ✅' : 'OFF ⏸'}</b>`;
                 break;
-            case 'copy':
-                if (!['on', 'off'].includes(val)) {
-                    await this.send('❌ Use: /set copy on  or  /set copy off');
-                    return;
-                }
-                this.bot.updateRuntimeConfig({ copyEnabled: val === 'on' });
-                applied = `Copy Trading → <b>${val === 'on' ? 'ON ✅' : 'OFF ⏸'}</b>`;
-                break;
             default:
                 await this.send(`❌ Unknown setting: <code>${key}</code>\n\nType /set to see available options.`);
                 return;
@@ -766,18 +606,16 @@ class TelegramBot {
     async sendTradeAlert(trade) {
         const chartUrl = `https://www.geckoterminal.com/base/pools/${trade.tokenAddress}`;
         const scanUrl = trade.txHash ? `https://basescan.org/tx/${trade.txHash}` : '';
-        const icon = trade.action === 'BUY' ? '🟢' : trade.action === 'COPY_BUY' ? '🐋' : '🔴';
-        const title = trade.action === 'COPY_BUY' ? 'COPY TRADE' : trade.action;
+        const icon = trade.action === 'BUY' ? '🟢' : '🔴';
         const pnlLine = trade.profitPct != null ? `\n📈 P&amp;L: <b>${pct(trade.profitPct)}</b>` : '';
         const confLine = trade.confidence != null ? `\n🤖 AI: ${trade.confidence}% confidence` : '';
-        const whaleLine = trade.whaleName ? `\n🐋 Whale: <b>${trade.whaleName}</b>` : '';
         const reasonLine = trade.reason ? `\n💡 ${trade.reason}` : '';
         const linkLine = scanUrl
             ? `\n🔗 <a href="${scanUrl}">TX</a> · <a href="${chartUrl}">Chart</a>`
             : `\n📊 <a href="${chartUrl}">Chart</a>`;
-        await this.send(`${icon} <b>${title}</b>\n` +
+        await this.send(`${icon} <b>${trade.action}</b>\n` +
             `<code>${DIV}</code>\n` +
-            `Token: <b>${trade.tokenSymbol}</b>${whaleLine}\n` +
+            `Token: <b>${trade.tokenSymbol}</b>\n` +
             `Amount: ${trade.amountEth.toFixed(5)} ETH` +
             pnlLine + confLine + reasonLine + linkLine);
     }
@@ -799,31 +637,9 @@ class TelegramBot {
             `${details}\n\n` +
             `<i>Trading resumes automatically when conditions clear.</i>`);
     }
-    async sendWaitlistAlert(candidate) {
-        const scoreBar = bar(candidate.score, 100);
-        await this.sendKb(`🐋 <b>New Whale Candidate</b>  (${candidate.index + 1}/${candidate.total})\n` +
-            `<code>${DIV}</code>\n\n` +
-            `${stars(candidate.score)}  <code>${candidate.address}</code>\n\n` +
-            `Score:      <code>${scoreBar}</code> <b>${candidate.score}/100</b>\n` +
-            `Win Rate:   <b>${candidate.estimatedWinRate}%</b>\n` +
-            `Avg Profit: <b>+${candidate.avgProfitPct}%</b>\n` +
-            `Trades:     ${candidate.tradeCount}`, {
-            inline_keyboard: [[
-                    { text: '✅ Approve → Monitor', callback_data: `approve:${candidate.address}` },
-                    { text: '❌ Reject', callback_data: `reject:${candidate.address}` },
-                ]],
-        });
-    }
     // ══════════════════════════════════════════════════════════════════════════
     // HELPERS
     // ══════════════════════════════════════════════════════════════════════════
-    /** Resolve a partial or full address against the pending whale list. */
-    resolveAddr(addr) {
-        if (addr.length >= 42)
-            return addr;
-        const match = this.bot.getPendingWhales().find((c) => c.address.toLowerCase().startsWith(addr.toLowerCase()));
-        return match?.address ?? null;
-    }
     async send(text) {
         try {
             await axios_1.default.post(`https://api.telegram.org/bot${this.token}/sendMessage`, { chat_id: this.chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }, { timeout: 8000 });

@@ -26,12 +26,6 @@ export interface ModalSettings {
     maxFeePerGas: number;
     gasMode: string;
 
-    // Copy Trading
-    copyEnabled: boolean;
-    copyAmount: number;
-    copyDelay: number;
-    copyMaxPerDay: number;
-
     // AI Settings
     aiEnabled: boolean;
     minAiConfidence: number;
@@ -53,10 +47,6 @@ export interface ModalSettings {
     // Dynamic Sizing
     dynamicSizingEnabled: boolean;
     tradeBalancePct: number;
-
-    // Whale Validation & Auto-Scan
-    whaleValidationEnabled: boolean;
-    whaleAutoScanEnabled: boolean;
 
     // Serial Rugger Detection
     serialRuggerEnabled: boolean;
@@ -83,10 +73,6 @@ const DEFAULT_SETTINGS: ModalSettings = {
     maxPriorityFee: 0.005,
     maxFeePerGas: 0.05,
     gasMode: 'auto',
-    copyEnabled: true,
-    copyAmount: 0.0003,
-    copyDelay: 2,
-    copyMaxPerDay: 10,
     aiEnabled: true,
     minAiConfidence: 75,
     blockHoneypot: true,
@@ -99,8 +85,6 @@ const DEFAULT_SETTINGS: ModalSettings = {
     dcaEnabled: true,
     dynamicSizingEnabled: true,
     tradeBalancePct: 10,
-    whaleValidationEnabled: true,
-    whaleAutoScanEnabled: false,
     serialRuggerEnabled: true,
     serialRuggerMaxDeploys: 3,
     serialRuggerWindowHours: 24,
@@ -156,10 +140,6 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
             maxPriorityFee:         parseNum(c.maxPriorityFee, DEFAULT_SETTINGS.maxPriorityFee),
             maxFeePerGas:           parseNum(c.maxFeePerGas, DEFAULT_SETTINGS.maxFeePerGas),
             gasMode:                c.gasMode || DEFAULT_SETTINGS.gasMode,
-            copyEnabled:            parseBool(c.copyEnabled, DEFAULT_SETTINGS.copyEnabled),
-            copyAmount:             parseNum(c.copyAmount, DEFAULT_SETTINGS.copyAmount),
-            copyDelay:              parseNum(c.copyDelaySeconds, DEFAULT_SETTINGS.copyDelay),
-            copyMaxPerDay:          parseNum(c.copyMaxPerDay, DEFAULT_SETTINGS.copyMaxPerDay),
             aiEnabled:              parseBool(c.aiEnabled, DEFAULT_SETTINGS.aiEnabled),
             minAiConfidence:        parseNum(c.minAiConfidence, DEFAULT_SETTINGS.minAiConfidence),
             blockHoneypot:          parseBool(c.blockHoneypot, DEFAULT_SETTINGS.blockHoneypot),
@@ -172,8 +152,6 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
             dcaEnabled:             parseBool(c.dcaEnabled, DEFAULT_SETTINGS.dcaEnabled),
             dynamicSizingEnabled:   parseBool(c.dynamicSizingEnabled, DEFAULT_SETTINGS.dynamicSizingEnabled),
             tradeBalancePct:        parseNum(c.tradeBalancePct, DEFAULT_SETTINGS.tradeBalancePct),
-            whaleValidationEnabled: parseBool(c.whaleValidationEnabled, DEFAULT_SETTINGS.whaleValidationEnabled),
-            whaleAutoScanEnabled:   parseBool(c.whaleAutoScanEnabled, DEFAULT_SETTINGS.whaleAutoScanEnabled),
             serialRuggerEnabled:    parseBool(c.serialRuggerEnabled, DEFAULT_SETTINGS.serialRuggerEnabled),
             serialRuggerMaxDeploys: parseNum(c.serialRuggerMaxDeploys, DEFAULT_SETTINGS.serialRuggerMaxDeploys),
             serialRuggerWindowHours:parseNum(c.serialRuggerWindowHours, DEFAULT_SETTINGS.serialRuggerWindowHours),
@@ -434,26 +412,6 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                         </div>
                     </div>
 
-                    {/* ── COPY TRADING ── */}
-                    <div className="bg-gray-800/50 rounded-xl p-5 border border-green-500/30">
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-lg font-semibold text-white">🐋 Copy Trading</h3>
-                            <Toggle checked={settings.copyEnabled} onChange={v => set({ copyEnabled: v })} color="green" />
-                        </div>
-                        {settings.copyEnabled && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                {numInput('Copy Amount (ETH)', 'copyAmount', 0.0001, 0.0001, `50% dari max trade (${(settings.maxTradeAmount * 0.5).toFixed(4)} ETH)`)}
-                                {numInput('Copy Delay (detik)', 'copyDelay', 0.5, 0, 'Delay setelah whale buy')}
-                                {numInput('Max Copy per Hari', 'copyMaxPerDay', 1, 1, 'Batas copy trade harian')}
-                            </div>
-                        )}
-                        {!settings.copyEnabled && (
-                            <div className="p-3 bg-yellow-900/30 rounded">
-                                <p className="text-sm text-yellow-400">⚠️ Copy trading dimatikan! Dengan modal kecil, sangat tidak disarankan snipe langsung.</p>
-                            </div>
-                        )}
-                    </div>
-
                     {/* ── DCA ── */}
                     <div className="bg-gray-800/50 rounded-xl p-5 border border-gray-700">
                         <div className="flex justify-between items-center">
@@ -519,30 +477,6 @@ const Modal100k: React.FC<Modal100kProps> = ({ onSave, onClose, currentBalance =
                                 <p className="text-xs text-yellow-300">⚡ Flashblocks aktif — deteksi pool baru sebelum konfirmasi block penuh. Butuh koneksi WebSocket stabil.</p>
                             </div>
                         )}
-                    </div>
-
-                    {/* ── WHALE FINDER ── */}
-                    <div className="bg-gray-800/50 rounded-xl p-5 border border-purple-900/40">
-                        <h3 className="text-lg font-semibold text-white mb-4">🐋 Whale Finder & Validasi</h3>
-                        <div className="space-y-4">
-                            <div className="flex justify-between items-center">
-                                <div>
-                                    <p className="text-sm text-white font-medium">🔒 Gate Validasi Manual</p>
-                                    <p className="text-xs text-gray-400 mt-0.5">Wallet whale harus disetujui sebelum di-copy</p>
-                                </div>
-                                <Toggle checked={settings.whaleValidationEnabled} onChange={v => set({ whaleValidationEnabled: v })} color="purple" />
-                            </div>
-                            <div className="flex justify-between items-center">
-                                <div>
-                                    <p className="text-sm text-white font-medium">🔍 Auto Whale Scan</p>
-                                    <p className="text-xs text-gray-400 mt-0.5">Cari wallet whale otomatis via GeckoTerminal (cooldown 15 menit)</p>
-                                </div>
-                                <Toggle checked={settings.whaleAutoScanEnabled} onChange={v => set({ whaleAutoScanEnabled: v })} color="purple" />
-                            </div>
-                            <div className="p-3 bg-purple-900/20 rounded-lg border border-purple-800/40">
-                                <p className="text-xs text-purple-300">🐋 Kelola wallet whale di tombol <strong>Whale</strong> di header — tab Auto Finder untuk approve/reject kandidat.</p>
-                            </div>
-                        </div>
                     </div>
 
                     {/* ── SERIAL RUGGER DETECTION ── */}

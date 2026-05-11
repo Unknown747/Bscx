@@ -1,31 +1,19 @@
 import { FlashblocksScanner } from './flashblocks-scanner';
-import { CopyTradeMonitor } from './copy-trade-monitor';
 import { MultiAIProvider } from './multi-ai-provider';
 import { SwapExecutor } from './swap-executor';
 import { GeckoTokenScanner, type TokenOpportunity } from './gecko-token-scanner';
 import { checkSerialDeployer, getTokenDeployer } from './deployer-checker';
 import { getDeployerReputation } from './deployer-reputation';
 import { checkTokenSafety } from './token-safety';
-import { getActiveCorrelations, checkTokenCorrelation, getCorrelationBonus } from './whale-correlator';
 import { runBacktest, type BacktestConfig } from './backtest-engine';
-import {
-    runWhaleScan, approveCandidate, rejectCandidate, monitorCandidate,
-    getPendingCandidates, getAllCandidates, simulateCopyTrade,
-    formatWhaleTelegramMsg, type WhaleCandidate, type SimulationResult
-} from './whale-finder';
-import { whaleMonitor } from './whale-monitor';
 import { getEthPriceUsd, getBestDexPair } from './price-oracle';
 import {
     dbInsertTrade, dbGetTrades,
     dbAddToBlacklist, dbRemoveFromBlacklist, dbGetBlacklist, dbIsBlacklisted,
-    dbAddCopyWallet, dbRemoveCopyWallet, dbGetCopyWallets, dbUpdateCopyWallet,
-    dbGetPendingWhales, dbInsertWaitlistEvent,
-    dbAddMonitoredWallet, dbRemoveMonitoredWallet, dbGetMonitoredWallets,
-    dbGetMonitoredWallet, dbSetMonitoredVerdict, dbApproveWhale,
     dbSaveRuntimeConfig, dbLoadRuntimeConfig, dbSaveScreenerConfig, dbLoadScreenerConfig,
     dbSaveScreenerSignal,
     dbInsertActivityLog, dbGetRecentActivityLogs,
-    type TradeRow, type MonitoredWalletRow,
+    type TradeRow,
 } from './db';
 import SmartScreener, { type ScreenerSignal, type ScreenerConfig } from './smart-screener';
 import {
@@ -33,10 +21,9 @@ import {
     loadRuntimeKeys, saveRuntimeKeys, applyRuntimeKeys,
 } from './config-store';
 import { startTelegramBot, type TelegramBot } from './telegram-bot';
-import { pushBuySuccess, pushTakeProfit, pushStopLoss, pushWhaleMonitoring, pushWhalePromoted } from './push-manager';
+import { pushBuySuccess, pushTakeProfit, pushStopLoss } from './push-manager';
 import { MicroCapRiskManager } from './microcap-risk-manager';
 import { getCacheStats, getEthPriceSync } from './performance-optimizer';
-import { analyzeWhale } from './whale-analyzer-pro';
 import { paperTrader } from './paper-trader';
 import type { Address } from 'viem';
 import { randomBytes } from 'crypto';
@@ -45,7 +32,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-type LogType = 'buy-success' | 'buy-failed' | 'sell-success' | 'take-profit' | 'stop-loss' | 'copy-trade' | 'info';
+type LogType = 'buy-success' | 'buy-failed' | 'sell-success' | 'take-profit' | 'stop-loss' | 'info';
 
 interface LogEntry {
     id:        string;
@@ -69,10 +56,6 @@ interface RuntimeConfig {
     stopLoss:                 number;
     maxPriorityFee:           number;
     maxFeePerGas:             number;
-    copyEnabled:              boolean;
-    copyAmount:               number;
-    copyDelay:                number;
-    copyMaxPerDay:            number;
     minSafetyScore:           number;
     maxPoolAgeSeconds:        number;
     aiEnabled:                boolean;
@@ -82,35 +65,23 @@ interface RuntimeConfig {
     serialRuggerWindowHours:  number;
     reputationEnabled:        boolean;
     reputationMinScore:       number;
-    // Dynamic sizing: scale trade % with balance
     dynamicSizingEnabled:     boolean;
-    tradeBalancePct:          number;  // % of current balance per trade (e.g. 10 = 10%)
-    // GeckoTerminal scanner
+    tradeBalancePct:          number;
     geckoScannerEnabled:      boolean;
-    // Whale validation gate
-    whaleValidationEnabled:   boolean;
-    whaleAutoScanEnabled:     boolean;
-    // Token safety gates
     blockHoneypot:            boolean;
     blockHighTax:             boolean;
     maxTaxPercent:            number;
-    // AI confidence threshold
     minAiConfidence:          number;
-    // Scanner
     enableFlashblocks:        boolean;
     gasMode:                  string;
-    // Circuit breaker
     maxDailyLossEth:            number;
     maxConsecutiveLosses:       number;
     cooldownAfterProfitMinutes: number;
     dailyLossCooldownHours:     number;
-    // Trading schedule (WIB = UTC+7)
     tradingScheduleEnabled: boolean;
     tradingStartHour:       number;
     tradingEndHour:         number;
-    // Auto-compound profits
     autoCompoundEnabled: boolean;
-    // Smart Screener (independent from GeckoTerminal scanner)
     smartScreenerEnabled: boolean;
 }
 
@@ -134,7 +105,6 @@ function fmtUsd(eth: number, ethPrice: number): string {
 
 export class AISniperBot extends EventEmitter {
     private scanner:        FlashblocksScanner;
-    private copyMonitor:    CopyTradeMonitor;
     private ai:             MultiAIProvider;
     private executor:       SwapExecutor | null = null;
     private geckoScanner:   GeckoTokenScanner;
@@ -144,7 +114,6 @@ export class AISniperBot extends EventEmitter {
     private telegramToken  = process.env.TELEGRAM_BOT_TOKEN || '';
     private telegramChatId = process.env.TELEGRAM_CHAT_ID   || '';
     private sentimentInterval: NodeJS.Timeout | null = null;
-    private whaleAutoScanInterval: NodeJS.Timeout | null = null;
     private portfolioSummaryInterval: NodeJS.Timeout | null = null;
     private taxGuardInterval: NodeJS.Timeout | null = null;
     private tgBot: TelegramBot | null = null;
@@ -160,17 +129,13 @@ export class AISniperBot extends EventEmitter {
         maxTradeAmount:          parseFloat(process.env.MAX_TRADE_AMOUNT             || '0.0006'),
         minLiquidity:            parseFloat(process.env.MIN_LIQUIDITY_ETH            || '0.15'),
         maxSlippage:             parseFloat(process.env.MAX_SLIPPAGE_PERCENT         || '15'),
-        tp1Multiplier:           parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER     || '2.0'),
-        tp1Percentage:           parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE     || '50'),
-        tp2Multiplier:           parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER     || '5.0'),
-        tp2Percentage:           parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE     || '50'),
-        stopLoss:                parseFloat(process.env.STOP_LOSS_PERCENTAGE         || '20'),
+        tp1Multiplier:           parseFloat(process.env.TAKE_PROFIT_1_MULTIPLIER     || '1.25'),
+        tp1Percentage:           parseFloat(process.env.TAKE_PROFIT_1_PERCENTAGE     || '40'),
+        tp2Multiplier:           parseFloat(process.env.TAKE_PROFIT_2_MULTIPLIER     || '1.6'),
+        tp2Percentage:           parseFloat(process.env.TAKE_PROFIT_2_PERCENTAGE     || '40'),
+        stopLoss:                parseFloat(process.env.STOP_LOSS_PERCENTAGE         || '8'),
         maxPriorityFee:          parseFloat(process.env.MAX_PRIORITY_FEE_GWEI        || '0.005'),
         maxFeePerGas:            parseFloat(process.env.MAX_FEE_PER_GAS_GWEI         || '0.05'),
-        copyEnabled:             process.env.COPY_TRADING_ENABLED === 'true',
-        copyAmount:              parseFloat(process.env.COPY_TRADING_AMOUNT          || '0.002'),
-        copyDelay:               parseFloat(process.env.COPY_TRADING_DELAY_SECONDS   || '2'),
-        copyMaxPerDay:           parseInt  (process.env.COPY_TRADING_MAX_PER_DAY     || '10'),
         minSafetyScore:          parseInt  (process.env.MIN_SAFETY_SCORE             || '65'),
         maxPoolAgeSeconds:       parseInt  (process.env.MAX_POOL_AGE_SECONDS         || '60'),
         aiEnabled:               process.env.AI_ENABLED === 'true',
@@ -183,8 +148,6 @@ export class AISniperBot extends EventEmitter {
         dynamicSizingEnabled:    process.env.DYNAMIC_SIZING_ENABLED !== 'false',
         tradeBalancePct:         parseFloat(process.env.TRADE_BALANCE_PCT || '10'),
         geckoScannerEnabled:     process.env.GECKO_SCANNER_ENABLED === 'true',
-        whaleValidationEnabled:  process.env.WHALE_VALIDATION_ENABLED !== 'false',
-        whaleAutoScanEnabled:    process.env.WHALE_AUTO_SCAN_ENABLED === 'true',
         blockHoneypot:           process.env.BLOCK_HONEYPOT  !== 'false',
         blockHighTax:            process.env.BLOCK_HIGH_TAX  !== 'false',
         maxTaxPercent:           parseFloat(process.env.MAX_TAX_PERCENT      || '15'),
@@ -203,16 +166,14 @@ export class AISniperBot extends EventEmitter {
     };
 
     private readonly CONFIG = {
-        MIN_AI_CONFIDENCE:         parseInt(process.env.MIN_AI_CONFIDENCE        || '75'),
-        AUTO_COPY_SCORE_THRESHOLD: parseInt(process.env.AUTO_COPY_SCORE_THRESHOLD || '75'),
-        MAX_OPEN_POSITIONS:        parseInt(process.env.MAX_OPEN_POSITIONS        || '3'),
+        MIN_AI_CONFIDENCE:         parseInt(process.env.MIN_AI_CONFIDENCE    || '75'),
+        MAX_OPEN_POSITIONS:        parseInt(process.env.MAX_OPEN_POSITIONS   || '3'),
         ENABLE_GROQ_PRIMARY:       true
     };
 
     constructor() {
         super();
         this.scanner      = new FlashblocksScanner();
-        this.copyMonitor  = new CopyTradeMonitor();
         this.ai           = new MultiAIProvider();
         this.riskManager  = new MicroCapRiskManager(this.runtimeConfig.totalCapital);
         this.geckoScanner = new GeckoTokenScanner({
@@ -351,12 +312,10 @@ export class AISniperBot extends EventEmitter {
                     `✅ <b>Base Sniper — Test Berhasil!</b>\n\n` +
                     `Bot terhubung dan siap mengirim notifikasi.\n\n` +
                     `📊 <b>Fitur Aktif:</b>\n` +
-                    `  ✅ GeckoTerminal (menggantikan DexScreener)\n` +
+                    `  ✅ GeckoTerminal Scanner aktif\n` +
                     `  ${this.runtimeConfig.geckoScannerEnabled ? '✅' : '⏸'} Token Scanner (GeckoTerminal)\n` +
-                    `  ${this.runtimeConfig.whaleAutoScanEnabled ? '✅' : '⏸'} Auto Whale Finder\n` +
                     `  ${this.runtimeConfig.dynamicSizingEnabled ? '✅' : '⏸'} Dynamic Position Sizing\n` +
-                    `  ✅ Simulasi P&L sebelum copy trade\n` +
-                    `  ✅ Validasi wallet sebelum copy\n\n` +
+                    `  ${this.runtimeConfig.smartScreenerEnabled ? '✅' : '⏸'} Smart Screener\n\n` +
                     `⚡ Posisi aktif: ${positions.length}`
             }, { timeout: 5000 });
             return { ok: true };
@@ -407,25 +366,6 @@ export class AISniperBot extends EventEmitter {
             return result;
         } catch {
             return this.runtimeConfig.maxTradeAmount;
-        }
-    }
-
-    private async calculateDynamicCopyAmount(): Promise<number> {
-        if (!this.runtimeConfig.dynamicSizingEnabled || !this.executor) {
-            return this.runtimeConfig.copyAmount;
-        }
-        try {
-            const balance    = await this.executor.getBalance();
-            const balanceEth = parseFloat(balance.eth);
-            if (balanceEth <= 0) return this.runtimeConfig.copyAmount;
-
-            // Copy trade: 7.5% of spendable balance (midpoint of 7–8% range)
-            const GAS_RESERVE = 0.0002;
-            const spendable   = Math.max(0, balanceEth - GAS_RESERVE);
-            if (spendable <= 0) return 0;
-            return spendable * 0.075;
-        } catch {
-            return this.runtimeConfig.copyAmount;
         }
     }
 
@@ -708,161 +648,6 @@ export class AISniperBot extends EventEmitter {
             }
         });
 
-        // ─── Copy trade opportunity ───
-        this.copyMonitor.on('copy-opportunity', async (opportunity) => {
-            // ── Hard circuit breaker: daily loss limit ──
-            if (this.riskManager.isCircuitBreakerTripped()) {
-                console.log(`🔴 [CircuitBreaker] Copy trade ignored — ${this.riskManager.getCircuitBreakerReason()}`);
-                return;
-            }
-
-            // ── Hard circuit breaker: max open positions ──
-            const openCountCopy = this.executor?.getOpenPositions().length ?? 0;
-            if (openCountCopy >= this.CONFIG.MAX_OPEN_POSITIONS) {
-                console.log(`⚠️  [CircuitBreaker] Max positions (${openCountCopy}/${this.CONFIG.MAX_OPEN_POSITIONS}) — Copy trade ignored`);
-                return;
-            }
-
-            console.log(`\n🐋 Copy opportunity from ${opportunity.walletName}`);
-
-            const walletInfo = this.copyMonitor.getWallets().find(
-                w => w.address.toLowerCase() === opportunity.walletAddress.toLowerCase()
-            );
-
-            // ── Fetch live token info from GeckoTerminal ──
-            let tokenMarketLine = '';
-            try {
-                const pair = await getBestDexPair(opportunity.tokenAddress);
-                if (pair) {
-                    const liqUsd   = pair.liquidity.usd;
-                    const priceUsd = parseFloat(pair.priceUsd || '0');
-                    const priceStr = priceUsd < 0.001 ? priceUsd.toExponential(3) : priceUsd.toFixed(6);
-                    tokenMarketLine = `💧 Likuiditas: <b>$${liqUsd.toLocaleString('id-ID')}</b> | Harga: <b>$${priceStr}</b>\n`;
-                }
-            } catch { /* silent */ }
-
-            // ── Whale stats line ──
-            const whaleStatsLine = (walletInfo && walletInfo.copiedTrades > 0)
-                ? `📊 Riwayat copy: <b>${walletInfo.copiedTrades} trades</b> | WR: <b>${walletInfo.winRate.toFixed(0)}%</b> | P&L: ${walletInfo.totalPnL >= 0 ? '+' : ''}${walletInfo.totalPnL.toFixed(1)}%\n`
-                : `📊 Whale baru pertama kali di-copy\n`;
-
-            // ── Simulation line ──
-            const sim = opportunity.simulation;
-            const simLine = sim
-                ? `🔮 Simulasi: <b>${sim.estimatedProfit >= 0 ? '+' : ''}${sim.estimatedProfit}%</b> est. | Risiko: ${sim.estimatedRisk} | WR sim: ${sim.winRate}%\n`
-                : '';
-
-            // ── TX link ──
-            const txLine = opportunity.txHash
-                ? `🔗 TX Whale: <a href="https://basescan.org/tx/${opportunity.txHash}">Lihat di Basescan</a>\n`
-                : '';
-
-            // ── Send detection alert ──
-            await this.sendTelegram(
-                `🐋 <b>Copy Trade Terdeteksi!</b>\n\n` +
-                `👤 Whale: <b>${sanitizeTg(opportunity.walletName)}</b>\n` +
-                `<code>${opportunity.walletAddress}</code> | <a href="https://basescan.org/address/${opportunity.walletAddress}">Profil</a>\n\n` +
-                `🪙 Token: <b>${sanitizeTg(opportunity.tokenSymbol)}</b>\n` +
-                `<code>${opportunity.tokenAddress}</code> | <a href="https://basescan.org/token/${opportunity.tokenAddress}">Info Token</a>\n` +
-                tokenMarketLine +
-                `\n` +
-                whaleStatsLine +
-                simLine +
-                txLine +
-                `\n⏳ <i>Menganalisis wallet dengan AI...</i>`
-            );
-
-            // ── AI wallet analysis ──
-            const walletStats = walletInfo
-                ? {
-                    totalTrades: walletInfo.copiedTrades,
-                    winRate:     walletInfo.winRate,
-                    avgHoldTime: 300,
-                    avgProfit:   walletInfo.copiedTrades > 0
-                        ? parseFloat((walletInfo.totalPnL / walletInfo.copiedTrades).toFixed(2))
-                        : 0,
-                  }
-                : { totalTrades: 0, winRate: 0, avgHoldTime: 300, avgProfit: 0 };
-
-            const walletAnalysis = await this.ai.analyzeWallet(
-                opportunity.walletAddress,
-                walletStats
-            );
-
-            if (walletAnalysis.shouldCopy && walletAnalysis.score > this.CONFIG.AUTO_COPY_SCORE_THRESHOLD) {
-                const baseAmt  = await this.calculateDynamicCopyAmount();
-                const ethPrice = await getEthPriceUsd().catch(() => 3000);
-
-                // ── Whale correlation boost: multiple whales on same token ──
-                const correlation   = checkTokenCorrelation(opportunity.tokenAddress);
-                const corrBonus     = getCorrelationBonus(opportunity.tokenAddress);
-                const copyAmt       = corrBonus > 0 ? baseAmt * (1 + corrBonus / 100) : baseAmt;
-                const corrLine      = correlation
-                    ? `🔥 <b>${correlation.whaleCount} whale</b> beli token ini dalam ${correlation.windowMinutes.toFixed(1)} mnt → +${corrBonus}% ukuran!\n`
-                    : '';
-
-                console.log(`   ✅ COPY APPROVED: ${walletAnalysis.reason} | Amount: ${copyAmt.toFixed(5)} ETH${corrBonus > 0 ? ` (+${corrBonus}% correlation boost)` : ''}`);
-                this.addLog('copy-trade', `Copy dari ${opportunity.walletName}`, `${opportunity.tokenSymbol} · score ${walletAnalysis.score}/100${corrBonus > 0 ? ` · +${corrBonus}% boost` : ''}`);
-
-                await this.sendTelegram(
-                    `✅ <b>AI APPROVE — Eksekusi Sekarang!</b>\n\n` +
-                    `🤖 Skor AI: <b>${walletAnalysis.score}/100</b> | Pola: <b>${walletAnalysis.tradingPattern}</b>\n` +
-                    `💡 <i>${sanitizeTg(walletAnalysis.reason)}</i>\n\n` +
-                    `🪙 Token: <b>${sanitizeTg(opportunity.tokenSymbol)}</b>\n` +
-                    `<code>${opportunity.tokenAddress}</code>\n\n` +
-                    corrLine +
-                    `💰 Copy Amount: <b>${copyAmt.toFixed(5)} ETH</b> (~${fmtUsd(copyAmt, ethPrice)})\n` +
-                    `⚡ Eksekusi dalam beberapa detik...`
-                );
-
-                await this.executeCopyTrade({ ...opportunity, dynamicAmount: copyAmt });
-            } else {
-                console.log(`   ❌ COPY REJECTED: ${walletAnalysis.reason}`);
-                this.addLog('info', `Copy ditolak: ${opportunity.walletName}`, walletAnalysis.reason);
-
-                await this.sendTelegram(
-                    `❌ <b>AI REJECT — Copy Dibatalkan</b>\n\n` +
-                    `🤖 Skor AI: <b>${walletAnalysis.score}/100</b> | Pola: <b>${walletAnalysis.tradingPattern}</b>\n` +
-                    `💡 <i>${sanitizeTg(walletAnalysis.reason)}</i>\n\n` +
-                    `🪙 Token: <b>${sanitizeTg(opportunity.tokenSymbol)}</b>\n` +
-                    `<code>${opportunity.tokenAddress}</code>\n\n` +
-                    `📊 Data whale: ${walletStats.totalTrades} trades | ${walletStats.winRate.toFixed(0)}% WR | rata-rata ${walletStats.avgProfit >= 0 ? '+' : ''}${walletStats.avgProfit.toFixed(1)}% per trade`
-                );
-            }
-        });
-
-        // ─── Simulation blocked ───
-        this.copyMonitor.on('simulation-blocked', async (data) => {
-            const sim = data.simulation;
-            await this.sendTelegram(
-                `⛔ <b>Copy Trade Diblokir — Simulasi Gagal</b>\n\n` +
-                `👤 Whale: <b>${sanitizeTg(data.walletName)}</b>\n` +
-                `<code>${data.walletAddress ?? ''}</code>\n\n` +
-                `🪙 Token: <b>${sanitizeTg(data.tokenSymbol)}</b>\n` +
-                `<code>${data.tokenAddress ?? ''}</code>\n\n` +
-                (sim
-                    ? `📊 Est. P&L: ${sim.estimatedProfit >= 0 ? '+' : ''}${sim.estimatedProfit}% | Risiko: <b>${sim.estimatedRisk}</b>\n` +
-                      `📋 <i>${sanitizeTg(sim.summary)}</i>`
-                    : `⚠️ Profit terlalu rendah atau risiko terlalu tinggi`)
-            );
-        });
-
-        // ─── Feature 1: Auto-exit when whale exits ───
-        this.copyMonitor.on('whale-sell', async (data: { walletAddress: string; walletName: string; tokenAddress: string }) => {
-            const { tokenAddress, walletName } = data;
-            this.addLog('info', `🚨 ${walletName} menjual token`, tokenAddress.slice(0, 10) + '...');
-            if (this.executor?.hasPosition(tokenAddress)) {
-                this.addLog('info', `🔴 Auto-exit: whale ${walletName} keluar`, `Jual semua ${tokenAddress.slice(0, 10)}...`);
-                await this.executor.sell(tokenAddress as `0x${string}`, 100);
-                this.sendTelegram(
-                    `🚨 <b>Auto-Exit: Whale Keluar!</b>\n` +
-                    `Whale <b>${sanitizeTg(walletName)}</b> menjual token ini.\n` +
-                    `Token: <code>${tokenAddress}</code>\n` +
-                    `✅ Bot langsung jual semua posisi.`
-                );
-            }
-        });
-
         // ─── Executor events ───
         this.wireExecutorEvents();
 
@@ -1070,9 +855,6 @@ export class AISniperBot extends EventEmitter {
         this.executor.on('sell-success', (d) => {
             this.emit('sell-success', d);
             this.addLog('sell-success', `SELL ${d.tokenSymbol} (${d.percentSold}%)`, `TX: ${d.txHash?.slice(0, 18)}...`);
-            if (d.sourceWallet && (d.percentSold ?? 100) >= 100) {
-                this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
-            }
             // Update risk manager exactly once — after actual sell succeeds (not when exit is triggered)
             if ((d.percentSold ?? 100) >= 100 && d.profitPct != null) {
                 const entryEth  = d.entryEth ?? this.runtimeConfig.maxTradeAmount;
@@ -1107,9 +889,6 @@ export class AISniperBot extends EventEmitter {
             this.addLog('take-profit', `TP${d.level} ${d.tokenSymbol} @ ${d.multiplier?.toFixed(2)}x`, 'Auto take profit triggered');
             const tpProfitPct = d.profitPct ?? (d.multiplier ? (d.multiplier - 1) * 100 : 0);
             pushTakeProfit(d.tokenSymbol || 'TOKEN', d.level, tpProfitPct, d.multiplier);
-            if (d.sourceWallet && d.level === 2 && d.profitPct != null) {
-                this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct);
-            }
             // Trade is recorded by sell-success handler (single source of truth — prevents double recording)
 
             // ── Auto-compound: add profit back to totalCapital on full exit (TP2) ──
@@ -1157,7 +936,6 @@ export class AISniperBot extends EventEmitter {
             this.addLog('stop-loss', `Stop Loss ${d.tokenSymbol} @ ${d.profitPct?.toFixed(1)}%`, d.reason || 'Auto stop loss triggered');
             pushStopLoss(d.tokenSymbol || 'TOKEN', d.profitPct ?? 0, d.reason);
             // Risk manager is updated by sell-success handler (after actual TX confirms)
-            if (d.sourceWallet) this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
             if (d.tokenAddress) {
                 dbAddToBlacklist(d.tokenAddress.toLowerCase(), 'Stop Loss auto-blacklist');
                 this.addLog('info', `Auto-blacklisted: ${d.tokenSymbol}`, 'Hit stop loss');
@@ -1314,318 +1092,6 @@ export class AISniperBot extends EventEmitter {
         }
     }
 
-    private async executeCopyTrade(opportunity: any): Promise<void> {
-        if (!this.executor) { console.warn('   ⚠️  Live trading disabled'); return; }
-
-        // ── Risk manager gate — skipCooldown=true ──
-        // Copy trade mengikuti whale secara independen, tidak dipengaruhi cooldown screener.
-        // Hanya Emergency Stop (tombol 🚨) yang benar-benar menghentikannya.
-        const riskGate = this.riskManager.beforeTrade({}, true);
-        if (!riskGate.allowed) {
-            console.log(`   🚫 [CopyTrade] Diblokir Emergency Stop: ${riskGate.reason}`);
-            this.addLog('info', `Copy trade diblokir Emergency Stop`, riskGate.reason);
-            return;
-        }
-
-        const addr = (opportunity.tokenAddress as string).toLowerCase();
-        if (dbIsBlacklisted(addr)) { console.log(`   🚫 Blacklisted — skip copy`); return; }
-
-        if (this.runtimeConfig.serialRuggerEnabled) {
-            const sr = await checkSerialDeployer(opportunity.tokenAddress, this.runtimeConfig.serialRuggerMaxDeploys, this.runtimeConfig.serialRuggerWindowHours);
-            if (sr.isSerialRugger) {
-                console.log(`   🚨 SERIAL RUGGER (copy) → skip`);
-                this.addToBlacklist(opportunity.tokenAddress, `Serial rugger`);
-                return;
-            }
-        }
-
-        if (this.runtimeConfig.reputationEnabled) {
-            const deployer = await getTokenDeployer(opportunity.tokenAddress as string);
-            if (deployer) {
-                const rep = await getDeployerReputation(deployer);
-                if (rep.score !== null && rep.score < this.runtimeConfig.reputationMinScore) {
-                    console.log(`   🔴 LOW REPUTATION (copy): ${rep.score}/100 → skip`);
-                    return;
-                }
-            }
-        }
-
-        const safety = await this.checkHoneypot(opportunity.tokenAddress);
-        if (!safety.safe) { console.log(`   🚫 UNSAFE: ${safety.reason} — skip copy`); return; }
-
-        // Use dynamic amount if provided, else fallback
-        const copyAmount = opportunity.dynamicAmount ?? this.runtimeConfig.copyAmount;
-        const result = await this.executor.buy({
-            tokenAddress: opportunity.tokenAddress as Address,
-            amountInEth:  copyAmount,
-            sourceWallet: opportunity.walletAddress
-        });
-
-        if (result.success) {
-            console.log(`   ✅ COPY TRADE SUCCESS | TX: ${result.txHash}`);
-        } else {
-            console.error(`   ❌ COPY TRADE FAILED: ${result.error}`);
-        }
-    }
-
-    // ============ WHALE FINDER — PUBLIC METHODS ============
-    async runWhaleScan(forceManual = false): Promise<WhaleCandidate[]> {
-        const candidates = await runWhaleScan(forceManual);
-        const now = Date.now();
-        for (let i = 0; i < candidates.length; i++) {
-            const c = candidates[i];
-            // Persist waitlist discovery event
-            dbInsertWaitlistEvent({
-                address:    c.address,
-                eventType:  'discovered',
-                recordedAt: now,
-            });
-            // Rich Telegram notification via command bot if available, else plain sendTelegram
-            if (this.tgBot) {
-                await this.tgBot.sendWaitlistAlert({
-                    address:          c.address,
-                    score:            c.score,
-                    estimatedWinRate: c.estimatedWinRate,
-                    avgProfitPct:     c.avgProfitPct,
-                    tradeCount:       c.tradeCount,
-                    index:            i,
-                    total:            candidates.length,
-                });
-            } else {
-                await this.sendTelegram(formatWhaleTelegramMsg(c, i));
-            }
-        }
-        return candidates;
-    }
-
-    getPendingWhales(): WhaleCandidate[] { return getPendingCandidates(); }
-    getAllWhales():     WhaleCandidate[] { return getAllCandidates(); }
-
-    approveWhale(address: string): WhaleCandidate | null {
-        const c = approveCandidate(address);
-        if (c) {
-            this.copyMonitor.addWallet(c.address, `Whale ${c.address.slice(0, 8)} (auto)`, false);
-            this.addLog('info', `🐋 Whale disetujui & ditambahkan`, `Score: ${c.score}/100 | WR: ${c.estimatedWinRate}%`);
-            dbInsertWaitlistEvent({ address: c.address, eventType: 'approved', recordedAt: Date.now() });
-            this.sendTelegram(
-                `✅ <b>Whale Disetujui!</b>\n` +
-                `<code>${c.address}</code>\n` +
-                `Skor: ${c.score}/100 | WR: ${c.estimatedWinRate}%\n` +
-                `Sekarang di-copy trade secara otomatis.`
-            );
-        }
-        return c;
-    }
-
-    rejectWhale(address: string): void {
-        rejectCandidate(address);
-        this.addLog('info', `🐋 Whale ditolak`, address);
-        dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'rejected', recordedAt: Date.now() });
-        this.sendTelegram(`❌ <b>Whale Ditolak</b>\n<code>${address}</code>`);
-    }
-
-    // ============ MONITORING FLOW ============
-
-    addToMonitoring(address: string, name?: string): boolean {
-        const c = monitorCandidate(address);
-        if (!c) return false;
-        const label = name || `Whale ${address.slice(0, 8)}`;
-        dbAddMonitoredWallet(address, label);
-        this.addLog('info', `🔬 Whale masuk Monitoring`, `Score: ${c.score}/100 | WR: ${c.estimatedWinRate}%`);
-        dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'monitoring', recordedAt: Date.now() });
-        pushWhaleMonitoring(address, label);
-        this.sendTelegram(
-            `🔬 <b>Whale Masuk Monitoring!</b>\n<code>${address}</code>\n` +
-            `Skor: ${c.score}/100 | Est. WR: ${c.estimatedWinRate}%\n` +
-            `Bot akan mengamati trade-nya sebelum copy.`
-        );
-        return true;
-    }
-
-    getMonitoredWallets(): MonitoredWalletRow[] {
-        return dbGetMonitoredWallets();
-    }
-
-    removeFromMonitoring(address: string): void {
-        dbRemoveMonitoredWallet(address);
-        this.addLog('info', `🔬 Wallet dihapus dari Monitoring`, address);
-    }
-
-    async evaluateMonitoredWallet(address: string): Promise<{
-        verdict: 'approved' | 'rejected' | 'pending';
-        score: number;
-        reason: string;
-        needsMoreData: boolean;
-        breakdown: { label: string; pass: boolean | null; value: string; threshold: string }[];
-    }> {
-        const wallet = dbGetMonitoredWallet(address.toLowerCase());
-        if (!wallet) throw new Error('Wallet tidak ditemukan di monitoring');
-
-        const totalPairs  = wallet.winsObserved + wallet.lossesObserved;
-        const winRate     = totalPairs > 0 ? Math.round((wallet.winsObserved / totalPairs) * 100) : 0;
-        const monitorDays = (Date.now() - wallet.monitoredSince) / 86_400_000;
-        const monitorDaysFmt = monitorDays.toFixed(1);
-
-        // ── Build criteria breakdown ───────────────────────────────────────────
-        const breakdown: { label: string; pass: boolean | null; value: string; threshold: string }[] = [
-            {
-                label:     'Win Rate',
-                pass:      totalPairs > 0 ? winRate >= 50 : null,
-                value:     totalPairs > 0 ? `${winRate}%` : 'Belum ada data',
-                threshold: '≥ 50%',
-            },
-            {
-                label:     'PnL Rata-rata',
-                pass:      totalPairs > 0 ? wallet.totalPnlPct > 0 : null,
-                value:     totalPairs > 0
-                    ? `${wallet.totalPnlPct >= 0 ? '+' : ''}${wallet.totalPnlPct.toFixed(1)}%`
-                    : 'Belum ada data',
-                threshold: '> 0%',
-            },
-            {
-                label:     'Frekuensi Trading',
-                pass:      wallet.tradesPerDay >= 0.3,
-                value:     wallet.tradesPerDay > 0 ? `${wallet.tradesPerDay} trade/hari` : 'Tidak aktif',
-                threshold: '≥ 0.3 trade/hari',
-            },
-            {
-                label:     'Pasang Buy-Sell',
-                pass:      totalPairs >= 3,
-                value:     `${totalPairs} pasang`,
-                threshold: '≥ 3 pasang',
-            },
-            {
-                label:     'Durasi Monitoring',
-                pass:      monitorDays >= 0.5,
-                value:     `${monitorDaysFmt} hari`,
-                threshold: '≥ 0.5 hari (12 jam)',
-            },
-        ];
-
-        // ── Data sufficiency check ─────────────────────────────────────────────
-        // Don't evaluate yet if we haven't seen enough activity
-        const hasEnoughData = totalPairs >= 3 || (wallet.tradesObserved >= 5 && monitorDays >= 1);
-        if (!hasEnoughData) {
-            const missingPairs = Math.max(0, 3 - totalPairs);
-            const reason =
-                `Data monitoring belum cukup untuk memberi verdict yang adil.\n` +
-                `Saat ini baru ${totalPairs} pasang buy-sell terobservasi (butuh minimal 3). ` +
-                `Sudah dimonitor ${monitorDaysFmt} hari.\n\n` +
-                `Kemungkinan penyebab: wallet ini tidak aktif di pool-pool trending yang dipantau bot, ` +
-                `atau wallet memang jarang trading. Terus tunggu atau gunakan "Paksa Promosikan" jika Anda percaya wallet ini.`;
-
-            // Store pending reason in DB (verdict stays 'pending')
-            dbSetMonitoredVerdict(address, 'pending', 0, reason);
-            this.addLog('info', `🔬 Evaluasi: data belum cukup ${address.slice(0, 10)}… (${totalPairs} pasang, butuh 3)`, '');
-            return { verdict: 'pending', score: 0, reason, needsMoreData: true, breakdown };
-        }
-
-        // ── AI evaluation ──────────────────────────────────────────────────────
-        const failedCriteria = breakdown.filter(c => c.pass === false).map(c => c.label);
-        const passedCriteria = breakdown.filter(c => c.pass === true).map(c => c.label);
-
-        const prompt =
-            `Kamu adalah evaluator wallet crypto untuk copy trading. Jawab dengan JSON saja.\n\n` +
-            `WALLET: ${address}\n` +
-            `Durasi monitoring: ${monitorDaysFmt} hari\n` +
-            `Trade terobservasi: ${wallet.tradesObserved} transaksi\n` +
-            `Pasang buy-sell: ${totalPairs} (${wallet.winsObserved} profit, ${wallet.lossesObserved} rugi)\n` +
-            `Win rate aktual: ${totalPairs > 0 ? winRate + '%' : 'N/A'}\n` +
-            `PnL rata-rata: ${totalPairs > 0 ? (wallet.totalPnlPct >= 0 ? '+' : '') + wallet.totalPnlPct.toFixed(1) + '%' : 'N/A'}\n` +
-            `Frekuensi: ${wallet.tradesPerDay} trade/hari\n\n` +
-            `Kriteria LULUS: ${passedCriteria.join(', ') || 'belum ada'}\n` +
-            `Kriteria GAGAL: ${failedCriteria.join(', ') || 'semua lulus'}\n\n` +
-            `Kriteria APPROVE:\n` +
-            `- Win rate ≥ 50% (dari pasang buy-sell yang terekam)\n` +
-            `- PnL rata-rata positif\n` +
-            `- Minimal 3 pasang buy-sell terobservasi\n` +
-            `CATATAN PENTING: Data GeckoTerminal terbatas hanya dari pool trending. ` +
-            `Jika data minim, pertimbangkan untuk APPROVE dengan catatan "data terbatas" daripada langsung REJECT.\n\n` +
-            `Format respons JSON: {"verdict":"APPROVE","score":75,"reason":"penjelasan singkat 1-2 kalimat bahasa Indonesia, sebutkan metrik spesifik"}`;
-
-        try {
-            const response = await this.ai.query(prompt);
-            if (response.success) {
-                const jsonMatch = response.content.match(/\{[\s\S]*?\}/);
-                if (jsonMatch) {
-                    const parsed  = JSON.parse(jsonMatch[0]);
-                    const verdict = parsed.verdict?.toUpperCase() === 'APPROVE' ? 'approved' : 'rejected';
-                    const score   = Math.max(0, Math.min(100, parseInt(parsed.score) || 50));
-                    const reason  = parsed.reason || 'Evaluasi AI selesai';
-                    dbSetMonitoredVerdict(address, verdict, score, reason);
-                    this.addLog('info', `🤖 AI evaluasi: ${verdict === 'approved' ? 'SETUJUI ✅' : 'TOLAK ❌'} ${address.slice(0, 10)}…`, reason);
-                    return { verdict, score, reason, needsMoreData: false, breakdown };
-                }
-            }
-        } catch { /* fall through to rule-based */ }
-
-        // ── Rule-based fallback ────────────────────────────────────────────────
-        const score = Math.round(Math.min(100,
-            (totalPairs > 0 ? winRate * 0.45 : 0) +
-            (wallet.totalPnlPct > 0 ? Math.min(25, wallet.totalPnlPct) : 0) +
-            (wallet.tradesPerDay >= 1 ? 15 : wallet.tradesPerDay >= 0.3 ? 8 : 0) +
-            (totalPairs >= 3 ? 10 : totalPairs >= 1 ? 5 : 0) +
-            (monitorDays >= 1 ? 5 : 0)
-        ));
-        const verdict: 'approved' | 'rejected' = score >= 50 && winRate >= 40 ? 'approved' : 'rejected';
-
-        // Build detailed reason listing each criterion's result
-        const criteriaLines = breakdown.map(c =>
-            `${c.pass === true ? '✅' : c.pass === false ? '❌' : '⏳'} ${c.label}: ${c.value} (target ${c.threshold})`
-        ).join('\n');
-        const reason = verdict === 'approved'
-            ? `Skor ${score}/100 — memenuhi kriteria minimum untuk copy trading.\n${criteriaLines}`
-            : `Skor ${score}/100 — belum memenuhi kriteria. Kriteria gagal: ${failedCriteria.join(', ') || 'tidak ada'}.\n${criteriaLines}`;
-
-        dbSetMonitoredVerdict(address, verdict, score, reason);
-        this.addLog('info', `🤖 Evaluasi rule-based: ${verdict === 'approved' ? 'SETUJUI ✅' : 'TOLAK ❌'} ${address.slice(0, 10)}…`, `Skor: ${score}/100`);
-        return { verdict, score, reason, needsMoreData: false, breakdown };
-    }
-
-    forcePromoteWallet(address: string): boolean {
-        const wallet = dbGetMonitoredWallet(address.toLowerCase());
-        if (!wallet) return false;
-        // Override: set verdict to approved, then promote
-        dbSetMonitoredVerdict(address, 'approved', 0, 'Dipromosikan secara manual oleh pengguna (override AI)');
-        dbApproveWhale(address);
-        dbAddCopyWallet(address, wallet.name);
-        this.copyMonitor.addWallet(address, wallet.name, false);
-        dbRemoveMonitoredWallet(address);
-        this.addLog('info', `🚀 Whale dipaksa promosi (override) ke Copy!`, `${wallet.name}`);
-        dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'approved', recordedAt: Date.now() });
-        pushWhalePromoted(address, wallet.name);
-        this.sendTelegram(
-            `🚀 <b>Whale Dipromosikan Manual!</b>\n<code>${address}</code>\n` +
-            `Override oleh pengguna — aktif di-copy sekarang.`
-        );
-        return true;
-    }
-
-    promoteToActiveCopy(address: string): boolean {
-        const wallet = dbGetMonitoredWallet(address.toLowerCase());
-        if (!wallet || wallet.aiVerdict !== 'approved') return false;
-
-        dbApproveWhale(address);
-        dbAddCopyWallet(address, wallet.name);
-        this.copyMonitor.addWallet(address, wallet.name, false);
-        dbRemoveMonitoredWallet(address);
-
-        this.addLog('info', `🚀 Whale dipromosikan ke Copy!`, `${wallet.name} | AI Score: ${wallet.aiScore ?? '?'}/100`);
-        dbInsertWaitlistEvent({ address: address.toLowerCase(), eventType: 'approved', recordedAt: Date.now() });
-        pushWhalePromoted(address, wallet.name);
-        this.sendTelegram(
-            `🚀 <b>Whale Dipromosikan ke Copy!</b>\n<code>${address}</code>\n` +
-            `AI Score: ${wallet.aiScore ?? '?'}/100\n` +
-            `Alasan: ${wallet.aiReason ?? '-'}\n` +
-            `Sekarang aktif di-copy secara otomatis.`
-        );
-        return true;
-    }
-
-    async simulateCopyTrade(walletAddress: string, tokenAddress: string): Promise<SimulationResult> {
-        return simulateCopyTrade(walletAddress, tokenAddress);
-    }
-
     // ============ LIFECYCLE ============
     async start(): Promise<void> {
         // Load persisted settings from DB before printing config
@@ -1638,31 +1104,10 @@ export class AISniperBot extends EventEmitter {
         console.log(`📊 Dynamic Sizing: ${this.runtimeConfig.dynamicSizingEnabled ? `✅ (${this.runtimeConfig.tradeBalancePct}% per trade)` : '❌'}`);
         console.log(`🦎 GeckoTerminal Scanner: ${this.runtimeConfig.geckoScannerEnabled ? '✅' : '❌'}`);
         console.log(`📡 Smart Screener: ${this.smartScreenerEnabled ? '✅' : '❌'}`);
-        console.log(`🐋 Whale Auto-Scan: ${this.runtimeConfig.whaleAutoScanEnabled ? '✅' : '❌'}`);
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
         const health = this.ai.healthCheck();
         console.log(`🔍 AI: Groq=${health.groq ? '✅' : '❌'} Gemini=${health.gemini ? '✅' : '❌'} HF=${health.huggingface ? '✅' : '❌'}\n`);
-
-        // ── Load persisted copy wallets from DB ──
-        const savedWallets = dbGetCopyWallets();
-        for (const w of savedWallets) {
-            if (!this.copyMonitor.getWallets().some((x: any) => x.address.toLowerCase() === w.address)) {
-                this.copyMonitor.addWallet(w.address, w.name, false);
-                if (!w.isActive) this.copyMonitor.toggleWallet(w.address, false);
-            }
-        }
-
-        // ── Feature 5: Set balance provider for dynamic copy sizing (6-10%) ──
-        if (this.executor) {
-            this.copyMonitor.setBalanceProvider(async () => {
-                const { eth } = await this.executor!.getBalance();
-                return parseFloat(eth);
-            });
-        }
-        if (savedWallets.length > 0) {
-            console.log(`💾 Loaded ${savedWallets.length} copy wallets from DB`);
-        }
 
         // ── Restore known tokens from DB trade history ──
         if (this.executor) {
@@ -1687,28 +1132,15 @@ export class AISniperBot extends EventEmitter {
 
         await this.scanner.connect();
 
-        if (this.runtimeConfig.copyEnabled) {
-            this.copyMonitor.start();
-        }
-
         if (this.runtimeConfig.geckoScannerEnabled) {
             this.geckoScanner.start();
         }
 
-        // Smart Screener — starts independently alongside (or instead of) GeckoScanner
         if (this.smartScreenerEnabled) {
             this.smartScreener.start();
         }
 
-        if (this.runtimeConfig.whaleAutoScanEnabled) {
-            this.startWhaleAutoScan();
-        }
-
-        // ── Start Telegram command bot ──
         this.tgBot = startTelegramBot(this);
-
-        // ── Start whale monitoring service ──
-        whaleMonitor.start();
 
         setInterval(() => this.printPerformanceReport(), 3_600_000);
 
@@ -1718,29 +1150,15 @@ export class AISniperBot extends EventEmitter {
         console.log('✅ AI SNIPER RUNNING\n');
     }
 
-    private startWhaleAutoScan(): void {
-        if (this.whaleAutoScanInterval) return;
-        console.log('🔍 Whale auto-scan enabled (every 15 min)');
-        this.whaleAutoScanInterval = setInterval(async () => {
-            const candidates = await this.runWhaleScan(false);
-            if (candidates.length > 0) {
-                this.addLog('info', `🐋 ${candidates.length} whale kandidat baru ditemukan`, 'Periksa Telegram untuk approval');
-            }
-        }, 15 * 60_000);
-    }
-
     async stop(): Promise<void> {
-        if (this.sentimentInterval)      { clearInterval(this.sentimentInterval);      this.sentimentInterval = null; }
-        if (this.whaleAutoScanInterval)  { clearInterval(this.whaleAutoScanInterval);  this.whaleAutoScanInterval = null; }
-        if (this.dailyReportTimer)       { clearTimeout(this.dailyReportTimer);        this.dailyReportTimer = null; }
-        if (this.dailyReportInterval)    { clearInterval(this.dailyReportInterval);    this.dailyReportInterval = null; }
+        if (this.sentimentInterval)   { clearInterval(this.sentimentInterval);   this.sentimentInterval = null; }
+        if (this.dailyReportTimer)    { clearTimeout(this.dailyReportTimer);     this.dailyReportTimer = null; }
+        if (this.dailyReportInterval) { clearInterval(this.dailyReportInterval); this.dailyReportInterval = null; }
         this.tgBot?.stop();
         this.scanner.disconnect();
-        this.copyMonitor.stop();
         this.geckoScanner.stop();
         this.smartScreener.stop();
         this.executor?.stop();
-        whaleMonitor.stop();
         console.log('🛑 AI Sniper stopped');
     }
 
@@ -1772,10 +1190,6 @@ export class AISniperBot extends EventEmitter {
         if (s.stopLoss                != null) r.stopLoss                = s.stopLoss;
         if (s.maxPriorityFee          != null) r.maxPriorityFee          = s.maxPriorityFee;
         if (s.maxFeePerGas            != null) r.maxFeePerGas            = s.maxFeePerGas;
-        if (s.copyEnabled             != null) r.copyEnabled             = s.copyEnabled;
-        if (s.copyAmount              != null) r.copyAmount              = s.copyAmount;
-        if (s.copyDelay               != null) r.copyDelay               = s.copyDelay;
-        if (s.copyMaxPerDay           != null) r.copyMaxPerDay           = s.copyMaxPerDay;
         if (s.minSafetyScore          != null) r.minSafetyScore          = s.minSafetyScore;
         if (s.maxPoolAgeSeconds       != null) r.maxPoolAgeSeconds       = s.maxPoolAgeSeconds;
         if (s.aiEnabled               != null) r.aiEnabled               = s.aiEnabled;
@@ -1791,14 +1205,6 @@ export class AISniperBot extends EventEmitter {
             r.geckoScannerEnabled = s.geckoScannerEnabled;
             if (s.geckoScannerEnabled)  this.geckoScanner.start();
             else                        this.geckoScanner.stop();
-        }
-        if (s.whaleAutoScanEnabled    != null) {
-            r.whaleAutoScanEnabled = s.whaleAutoScanEnabled;
-            if (s.whaleAutoScanEnabled) this.startWhaleAutoScan();
-            else if (this.whaleAutoScanInterval) {
-                clearInterval(this.whaleAutoScanInterval);
-                this.whaleAutoScanInterval = null;
-            }
         }
         if (s.blockHoneypot    != null) r.blockHoneypot    = s.blockHoneypot;
         if (s.blockHighTax     != null) r.blockHighTax     = s.blockHighTax;
@@ -1845,14 +1251,6 @@ export class AISniperBot extends EventEmitter {
                 gasMode:        r.gasMode,
             });
         }
-
-        this.copyMonitor.updateConfig({
-            copyEnabled:   r.copyEnabled,
-            copyAmount:    r.copyAmount,
-            copyDelay:     r.copyDelay,
-            minLiquidity:  r.minLiquidity,
-            maxTaxPercent: r.maxTaxPercent,
-        });
 
         // ── Persist to BOTH stores ──
         // 1. SQLite DB (immediate, highest priority on next startup)
@@ -1965,27 +1363,6 @@ export class AISniperBot extends EventEmitter {
         return this.executor.sendToken(tokenAddress as `0x${string}`, to as `0x${string}`, amount, decimals ?? 18);
     }
 
-    // ============ COPY WALLET MANAGEMENT ============
-    getCopyWallets() { return this.copyMonitor.getWallets(); }
-    addCopyWallet(address: string, name: string): void {
-        this.copyMonitor.addWallet(address, name, false);
-        dbAddCopyWallet(address, name);
-        this.addLog('info', `Whale ditambahkan: ${name}`, address);
-    }
-    removeCopyWallet(address: string): void {
-        this.copyMonitor.removeWallet(address);
-        dbRemoveCopyWallet(address);
-        this.addLog('info', `Whale dihapus`, address);
-    }
-    toggleCopyWallet(address: string, active: boolean): void {
-        this.copyMonitor.toggleWallet(address, active);
-        dbUpdateCopyWallet(address, { isActive: active });
-    }
-    renameCopyWallet(address: string, name: string): void {
-        this.copyMonitor.renameWallet(address, name);
-        dbUpdateCopyWallet(address, { name });
-    }
-
     async scanWalletHistory() {
         if (!this.executor) return { found: [], totalScanned: 0, errors: ['Bot not ready'] };
         return this.executor.scanWalletHistory();
@@ -2045,8 +1422,8 @@ export class AISniperBot extends EventEmitter {
     getPerfCacheStats() { return getCacheStats(); }
 
     // ============ WHALE DETAIL ANALYSIS ============
-    async analyzeWhaleDetail(address: string) {
-        return analyzeWhale(address);
+    async analyzeWhaleDetail(_address: string) {
+        return { error: 'Feature removed' };
     }
 
     // ============ FEATURE 9: EMERGENCY STOP ============
@@ -2055,11 +1432,9 @@ export class AISniperBot extends EventEmitter {
         this.emergencyStopActive = true;
 
         if (this.sentimentInterval)          { clearInterval(this.sentimentInterval);          this.sentimentInterval          = null; }
-        if (this.whaleAutoScanInterval)      { clearInterval(this.whaleAutoScanInterval);      this.whaleAutoScanInterval      = null; }
         if (this.portfolioSummaryInterval)   { clearInterval(this.portfolioSummaryInterval);   this.portfolioSummaryInterval   = null; }
         if (this.taxGuardInterval)           { clearInterval(this.taxGuardInterval);           this.taxGuardInterval           = null; }
         this.scanner.disconnect();
-        this.copyMonitor.stop();
         this.geckoScanner.stop();
         this.smartScreener.stop();
         this.smartScreenerEnabled = false;
@@ -2120,8 +1495,6 @@ export class AISniperBot extends EventEmitter {
         return result;
     }
 
-    // ============ FEATURE 8: WHALE CORRELATION MAP ============
-    getWhaleCorrelations() { return getActiveCorrelations(); }
     getMempoolSize(): number { return this.scanner.getMempoolSize(); }
 
     // ============ FEATURE 6: BACKTEST ============
@@ -2193,7 +1566,6 @@ export class AISniperBot extends EventEmitter {
         const riskState     = this.riskManager.getState();
         return {
             connected:       this.scanner.isConnectedToBase(),
-            copyStats:       this.copyMonitor.getStats(),
             config:          this.scanner.getConfig(),
             aiStats:         this.ai.getStats(),
             openPositions:   this.executor?.getOpenPositions() ?? [],
@@ -2205,16 +1577,12 @@ export class AISniperBot extends EventEmitter {
             smartScreener:   {
                 enabled:    this.smartScreenerEnabled,
             },
-            whaleAutoScan:   {
-                enabled:    this.runtimeConfig.whaleAutoScanEnabled,
-            },
             riskState,
             circuitBreaker:  {
                 tripped:    riskState.circuitBreakerTripped,
                 reason:     riskState.circuitBreakerReason,
                 resetAt:    riskState.dailyResetAt,
             },
-            pendingWhales:   dbGetPendingWhales().length,
             emergencyStop:   this.emergencyStopActive,
             lastTradeAt:     tradeHistory[0]?.closedAt ?? null,
             timestamp:       Date.now()

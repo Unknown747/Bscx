@@ -20,11 +20,6 @@ export interface BotSettings {
     maxPriorityFee: number;
     maxFeePerGas: number;
     gasMode: string;
-    // Copy
-    copyEnabled: boolean;
-    copyAmount: number;
-    copyDelay: number;
-    copyMaxPerDay: number;
     // AI
     aiEnabled: boolean;
     minAiConfidence: number;
@@ -34,8 +29,6 @@ export interface BotSettings {
     dcaEnabled: boolean;
     dynamicSizingEnabled: boolean;
     tradeBalancePct: number;
-    whaleValidationEnabled: boolean;
-    whaleAutoScanEnabled: boolean;
     // Safety
     blockHoneypot: boolean;
     blockHighTax: boolean;
@@ -108,11 +101,9 @@ const DEFAULTS: BotSettings = {
     totalCapital: 0.006, maxTradeAmount: 0.0006, minLiquidity: 0.15, maxSlippage: 15,
     tp1Multiplier: 1.5, tp1Percentage: 50, tp2Multiplier: 2.5, tp2Percentage: 50, stopLoss: 30,
     maxPriorityFee: 0.005, maxFeePerGas: 0.05, gasMode: 'auto',
-    copyEnabled: false, copyAmount: 0.0003, copyDelay: 2, copyMaxPerDay: 10,
     aiEnabled: true, minAiConfidence: 75,
     enableFlashblocks: false, geckoScannerEnabled: true, dcaEnabled: false,
     dynamicSizingEnabled: true, tradeBalancePct: 10,
-    whaleValidationEnabled: true, whaleAutoScanEnabled: false,
     blockHoneypot: true, blockHighTax: true, maxTaxPercent: 10,
     minSafetyScore: 65, maxPoolAgeSeconds: 3600,
     serialRuggerEnabled: true, serialRuggerMaxDeploys: 3, serialRuggerWindowHours: 24,
@@ -137,10 +128,6 @@ function fromConfig(c: Record<string, any>): BotSettings {
         maxPriorityFee:          pn(c.maxPriorityFee, DEFAULTS.maxPriorityFee),
         maxFeePerGas:            pn(c.maxFeePerGas, DEFAULTS.maxFeePerGas),
         gasMode:                 c.gasMode || DEFAULTS.gasMode,
-        copyEnabled:             pb(c.copyEnabled, DEFAULTS.copyEnabled),
-        copyAmount:              pn(c.copyAmount, DEFAULTS.copyAmount),
-        copyDelay:               pn(c.copyDelaySeconds, DEFAULTS.copyDelay),
-        copyMaxPerDay:           pn(c.copyMaxPerDay, DEFAULTS.copyMaxPerDay),
         aiEnabled:               pb(c.aiEnabled, DEFAULTS.aiEnabled),
         minAiConfidence:         pn(c.minAiConfidence, DEFAULTS.minAiConfidence),
         enableFlashblocks:       pb(c.enableFlashblocks, DEFAULTS.enableFlashblocks),
@@ -148,8 +135,6 @@ function fromConfig(c: Record<string, any>): BotSettings {
         dcaEnabled:              pb(c.dcaEnabled, DEFAULTS.dcaEnabled),
         dynamicSizingEnabled:    pb(c.dynamicSizingEnabled, DEFAULTS.dynamicSizingEnabled),
         tradeBalancePct:         pn(c.tradeBalancePct, DEFAULTS.tradeBalancePct),
-        whaleValidationEnabled:  pb(c.whaleValidationEnabled, DEFAULTS.whaleValidationEnabled),
-        whaleAutoScanEnabled:    pb(c.whaleAutoScanEnabled, DEFAULTS.whaleAutoScanEnabled),
         blockHoneypot:           pb(c.blockHoneypot, DEFAULTS.blockHoneypot),
         blockHighTax:            pb(c.blockHighTax, DEFAULTS.blockHighTax),
         maxTaxPercent:           pn(c.maxTaxPercent, DEFAULTS.maxTaxPercent),
@@ -307,13 +292,10 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
                 tp2Multiplier: s.tp2Multiplier, tp2Percentage: s.tp2Percentage,
                 stopLoss: s.stopLoss, maxPriorityFee: s.maxPriorityFee,
                 maxFeePerGas: s.maxFeePerGas, gasMode: s.gasMode,
-                copyEnabled: s.copyEnabled, copyAmount: s.copyAmount,
-                copyDelaySeconds: s.copyDelay, copyMaxPerDay: s.copyMaxPerDay,
                 aiEnabled: s.aiEnabled, minAiConfidence: s.minAiConfidence,
                 enableFlashblocks: s.enableFlashblocks, geckoScannerEnabled: s.geckoScannerEnabled,
                 dcaEnabled: s.dcaEnabled, dynamicSizingEnabled: s.dynamicSizingEnabled,
-                tradeBalancePct: s.tradeBalancePct, whaleValidationEnabled: s.whaleValidationEnabled,
-                whaleAutoScanEnabled: s.whaleAutoScanEnabled, blockHoneypot: s.blockHoneypot,
+                tradeBalancePct: s.tradeBalancePct, blockHoneypot: s.blockHoneypot,
                 blockHighTax: s.blockHighTax, maxTaxPercent: s.maxTaxPercent,
                 minSafetyScore: s.minSafetyScore, maxPoolAgeSeconds: s.maxPoolAgeSeconds,
                 serialRuggerEnabled: s.serialRuggerEnabled,
@@ -493,29 +475,15 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
                 )}
             </Section>
 
-            <Section title="🐋 Copy Trading">
-                <Row label="Copy Trading" sub="Ikuti transaksi whale wallet">
-                    <Toggle checked={s.copyEnabled} onChange={v => upd({ copyEnabled: v })} color="purple" />
+            <Section title="📊 Dynamic Sizing">
+                <Row label="Dynamic Sizing" sub={`${s.tradeBalancePct}% balance per trade`}>
+                    <Toggle checked={s.dynamicSizingEnabled} onChange={v => upd({ dynamicSizingEnabled: v })} color="cyan" />
                 </Row>
-                {s.copyEnabled && <>
-                    <Row label="Jumlah Copy (ETH)" sub="Modal per copy trade">
-                        <NumInput value={s.copyAmount} onChange={v => upd({ copyAmount: v })} step={0.0001} min={0.0001} />
+                {s.dynamicSizingEnabled && (
+                    <Row label="% Balance per Trade" sub="Otomatis sesuai saldo">
+                        <NumInput value={s.tradeBalancePct} onChange={v => upd({ tradeBalancePct: v })} step={5} min={1} max={50} />
                     </Row>
-                    <Row label="Delay Copy (detik)" sub="Jeda setelah whale buy">
-                        <NumInput value={s.copyDelay} onChange={v => upd({ copyDelay: v })} step={1} min={0} />
-                    </Row>
-                    <Row label="Max Copy per Hari" sub="Batas harian">
-                        <NumInput value={s.copyMaxPerDay} onChange={v => upd({ copyMaxPerDay: v })} step={1} min={1} />
-                    </Row>
-                    <Row label="Dynamic Sizing" sub={`${s.tradeBalancePct}% balance per trade`}>
-                        <Toggle checked={s.dynamicSizingEnabled} onChange={v => upd({ dynamicSizingEnabled: v })} color="cyan" />
-                    </Row>
-                    {s.dynamicSizingEnabled && (
-                        <Row label="% Balance per Trade" sub="Otomatis sesuai saldo">
-                            <NumInput value={s.tradeBalancePct} onChange={v => upd({ tradeBalancePct: v })} step={5} min={1} max={50} />
-                        </Row>
-                    )}
-                </>}
+                )}
             </Section>
         </div>
     );
@@ -574,14 +542,6 @@ const SettingsModal: React.FC<Props> = ({ apiUrl, onClose, currentConfig }) => {
                 </Row>
             </Section>
 
-            <Section title="🐋 Whale Intelligence">
-                <Row label="Validasi Whale" sub="Cek riwayat whale sebelum copy">
-                    <Toggle checked={s.whaleValidationEnabled} onChange={v => upd({ whaleValidationEnabled: v })} color="purple" />
-                </Row>
-                <Row label="Auto Whale Finder" sub="Scan otomatis kandidat whale baru">
-                    <Toggle checked={s.whaleAutoScanEnabled} onChange={v => upd({ whaleAutoScanEnabled: v })} color="purple" />
-                </Row>
-            </Section>
         </div>
     );
 

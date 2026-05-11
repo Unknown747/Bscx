@@ -131,10 +131,8 @@ async function startBot() {
     paper_trader_1.paperTrader.reloadState(); // restore paper positions & config now that DB is ready
     console.log('\n🚀 STARTING BASE SNIPER ULTIMATE (GeckoTerminal Edition)...');
     console.log(`💰 Capital: ${process.env.TOTAL_CAPITAL_ETH || 0.006} ETH`);
-    console.log(`🐋 Copy Trading: ${process.env.COPY_TRADING_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
     console.log(`🤖 AI Mode: ${process.env.AI_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
     console.log(`🦎 GeckoTerminal Scanner: ${process.env.GECKO_SCANNER_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
-    console.log(`🐋 Whale Auto-Scan: ${process.env.WHALE_AUTO_SCAN_ENABLED === 'true' ? 'ACTIVE' : 'DISABLED'}`);
     await bot.start();
 }
 // ============ AUTH ENDPOINT ============
@@ -176,10 +174,6 @@ app.get('/api/config', (_req, res) => {
         maxTrade: String(rc.maxTradeAmount),
         minLiquidity: String(rc.minLiquidity),
         maxSlippage: String(rc.maxSlippage),
-        copyEnabled: rc.copyEnabled,
-        copyAmount: String(rc.copyAmount),
-        copyDelaySeconds: String(rc.copyDelay),
-        copyMaxPerDay: String(rc.copyMaxPerDay),
         minSafetyScore: String(rc.minSafetyScore),
         maxPoolAgeSeconds: String(rc.maxPoolAgeSeconds),
         aiEnabled: rc.aiEnabled,
@@ -198,8 +192,6 @@ app.get('/api/config', (_req, res) => {
         dynamicSizingEnabled: rc.dynamicSizingEnabled,
         tradeBalancePct: String(rc.tradeBalancePct),
         geckoScannerEnabled: rc.geckoScannerEnabled,
-        whaleValidationEnabled: rc.whaleValidationEnabled,
-        whaleAutoScanEnabled: rc.whaleAutoScanEnabled,
         blockHoneypot: rc.blockHoneypot,
         blockHighTax: rc.blockHighTax,
         maxTaxPercent: String(rc.maxTaxPercent),
@@ -236,8 +228,6 @@ app.post('/api/settings', (req, res) => {
         ['stopLoss', 1, 99],
         ['maxPriorityFee', 0, 10],
         ['maxFeePerGas', 0, 10],
-        ['copyAmount', 0.00001, 10],
-        ['copyMaxPerDay', 1, 1000],
         ['minSafetyScore', 0, 100],
         ['maxPoolAgeSeconds', 5, 3600],
         ['maxTaxPercent', 0, 100],
@@ -272,10 +262,6 @@ app.post('/api/settings', (req, res) => {
             stopLoss: s.stopLoss,
             maxPriorityFee: s.maxPriorityFee,
             maxFeePerGas: s.maxFeePerGas,
-            copyEnabled: s.copyEnabled,
-            copyAmount: s.copyAmount,
-            copyDelay: s.copyDelay,
-            copyMaxPerDay: s.copyMaxPerDay,
             minSafetyScore: s.minSafetyScore,
             maxPoolAgeSeconds: s.maxPoolAgeSeconds,
             aiEnabled: s.aiEnabled,
@@ -288,7 +274,6 @@ app.post('/api/settings', (req, res) => {
             dynamicSizingEnabled: s.dynamicSizingEnabled,
             tradeBalancePct: s.tradeBalancePct,
             geckoScannerEnabled: s.geckoScannerEnabled,
-            whaleAutoScanEnabled: s.whaleAutoScanEnabled,
             blockHoneypot: s.blockHoneypot,
             blockHighTax: s.blockHighTax,
             maxTaxPercent: s.maxTaxPercent,
@@ -489,38 +474,6 @@ app.post('/api/sell', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// ============ COPY WALLET MANAGEMENT ============
-app.get('/api/wallets', (_req, res) => {
-    res.json({ wallets: bot.getCopyWallets() });
-});
-app.post('/api/wallets', (req, res) => {
-    const { address, name } = req.body;
-    if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Invalid wallet address' });
-        return;
-    }
-    const label = (name || '').trim() || `Whale ${address.slice(0, 8)}`;
-    const existing = bot.getCopyWallets().find(w => w.address.toLowerCase() === address.toLowerCase());
-    if (existing) {
-        res.status(409).json({ error: 'Wallet already exists in the list' });
-        return;
-    }
-    bot.addCopyWallet(address, label);
-    res.json({ ok: true, wallets: bot.getCopyWallets() });
-});
-app.delete('/api/wallets/:address', (req, res) => {
-    bot.removeCopyWallet(req.params.address);
-    res.json({ ok: true, wallets: bot.getCopyWallets() });
-});
-app.patch('/api/wallets/:address', (req, res) => {
-    const { address } = req.params;
-    const { name, active } = req.body;
-    if (name !== undefined)
-        bot.renameCopyWallet(address, name);
-    if (active !== undefined)
-        bot.toggleCopyWallet(address, !!active);
-    res.json({ ok: true, wallets: bot.getCopyWallets() });
-});
 // ============ KEY MANAGEMENT ============
 app.get('/api/keys', (_req, res) => {
     res.json(bot.getKeyStatus());
@@ -581,14 +534,12 @@ app.patch('/api/config', (req, res) => {
             tp1Multiplier: s.tp1Multiplier, tp1Percentage: s.tp1Percentage,
             tp2Multiplier: s.tp2Multiplier, tp2Percentage: s.tp2Percentage,
             stopLoss: s.stopLoss, maxPriorityFee: s.maxPriorityFee, maxFeePerGas: s.maxFeePerGas,
-            copyEnabled: s.copyEnabled, copyAmount: s.copyAmount, copyDelay: s.copyDelay,
-            copyMaxPerDay: s.copyMaxPerDay, minSafetyScore: s.minSafetyScore,
+            minSafetyScore: s.minSafetyScore,
             maxPoolAgeSeconds: s.maxPoolAgeSeconds, aiEnabled: s.aiEnabled, dcaEnabled: s.dcaEnabled,
             serialRuggerEnabled: s.serialRuggerEnabled, serialRuggerMaxDeploys: s.serialRuggerMaxDeploys,
             serialRuggerWindowHours: s.serialRuggerWindowHours, reputationEnabled: s.reputationEnabled,
             reputationMinScore: s.reputationMinScore, dynamicSizingEnabled: s.dynamicSizingEnabled,
             tradeBalancePct: s.tradeBalancePct, geckoScannerEnabled: s.geckoScannerEnabled,
-            whaleAutoScanEnabled: s.whaleAutoScanEnabled,
             blockHoneypot: s.blockHoneypot, blockHighTax: s.blockHighTax,
             maxTaxPercent: s.maxTaxPercent, minAiConfidence: s.minAiConfidence,
             enableFlashblocks: s.enableFlashblocks, gasMode: s.gasMode,
@@ -679,97 +630,6 @@ app.delete('/api/blacklist/:address', (req, res) => {
     bot.removeFromBlacklist(req.params.address);
     res.json({ ok: true, blacklist: bot.getBlacklist() });
 });
-// ============ WHALE FINDER ============
-// GET /api/whale/pending — list pending candidates waiting for approval
-app.get('/api/whale/pending', (_req, res) => {
-    res.json({ candidates: bot.getPendingWhales() });
-});
-// GET /api/whale/all — list all candidates (pending + approved + rejected)
-app.get('/api/whale/all', (_req, res) => {
-    res.json({ candidates: bot.getAllWhales() });
-});
-// ── Whale scan background state ──────────────────────────────────────────────
-let _whaleScanRunning = false;
-let _whaleScanFinished = 0; // epoch ms of last completed scan
-let _whaleScanFound = 0;
-let _whaleScanError = '';
-// POST /api/whale/scan — fire-and-forget: respond immediately, scan in background
-app.post('/api/whale/scan', (_req, res) => {
-    if (_whaleScanRunning) {
-        res.json({ ok: true, scanning: true, message: 'Scan sedang berjalan…' });
-        return;
-    }
-    _whaleScanRunning = true;
-    _whaleScanError = '';
-    _whaleScanFound = 0;
-    // Respond immediately so the browser doesn't time out
-    res.json({ ok: true, scanning: true, message: 'Scan dimulai — hasil akan muncul dalam ~30 detik' });
-    // Run scan in background
-    bot.runWhaleScan(true)
-        .then(candidates => {
-        _whaleScanFound = candidates.length;
-        _whaleScanFinished = Date.now();
-        _whaleScanError = '';
-    })
-        .catch((err) => {
-        _whaleScanError = err?.message ?? 'Scan gagal';
-        _whaleScanFinished = Date.now();
-    })
-        .finally(() => { _whaleScanRunning = false; });
-});
-// GET /api/whale/scan-status — poll scan progress
-app.get('/api/whale/scan-status', (_req, res) => {
-    res.json({
-        scanning: _whaleScanRunning,
-        finishedAt: _whaleScanFinished,
-        found: _whaleScanFound,
-        error: _whaleScanError,
-    });
-});
-// POST /api/whale/approve — (legacy alias) redirect to monitoring flow
-app.post('/api/whale/approve', (req, res) => {
-    const { address, name } = req.body;
-    if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Invalid address' });
-        return;
-    }
-    const ok = bot.addToMonitoring(address, name);
-    if (!ok) {
-        res.status(404).json({ error: 'Candidate not found or already processed' });
-        return;
-    }
-    res.json({ ok: true, message: 'Wallet added to monitoring — bot will observe trades before copying' });
-});
-// POST /api/whale/reject — reject a candidate
-app.post('/api/whale/reject', (req, res) => {
-    const { address } = req.body;
-    if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Invalid address' });
-        return;
-    }
-    bot.rejectWhale(address);
-    res.json({ ok: true });
-});
-// ============ SIMULATION ============
-// POST /api/simulate — estimate P&L for following a whale on a specific token
-app.post('/api/simulate', async (req, res) => {
-    const { walletAddress, tokenAddress } = req.body;
-    if (!walletAddress || !tokenAddress) {
-        res.status(400).json({ error: 'walletAddress and tokenAddress required' });
-        return;
-    }
-    if (!walletAddress.match(/^0x[0-9a-fA-F]{40}$/) || !tokenAddress.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Invalid address' });
-        return;
-    }
-    try {
-        const result = await bot.simulateCopyTrade(walletAddress, tokenAddress);
-        res.json(result);
-    }
-    catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
 // ============ RISK MANAGER ============
 app.get('/api/risk', (_req, res) => {
     try {
@@ -779,149 +639,11 @@ app.get('/api/risk', (_req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-// ============ WHALE DETAIL (pro analysis) ============
-app.get('/api/whale/detail/:address', async (req, res) => {
-    const { address } = req.params;
-    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Invalid address' });
-        return;
-    }
-    try {
-        const [analysis, waitlistEvents] = await Promise.all([
-            bot.analyzeWhaleDetail(address),
-            Promise.resolve().then(() => __importStar(require('./db'))).then(m => ({
-                events: m.dbGetWaitlistEvents(address, 30),
-                summary: m.dbGetWaitlistSummary(address),
-            }))
-        ]);
-        res.json({ address, analysis, ...waitlistEvents, timestamp: Date.now() });
-    }
-    catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
 // ============ PERFORMANCE CACHE ============
 app.get('/api/cache', (_req, res) => {
     res.json({ ...bot.getPerfCacheStats(), timestamp: Date.now() });
 });
-// ============ WHALE MONITORING FLOW ============
-// GET /api/whale/monitor-status — returns on-chain monitoring status
-app.get('/api/whale/monitor-status', (_req, res) => {
-    res.json({
-        basescanEnabled: true,
-        dataSource: 'blockscout',
-        blockscoutEnabled: true,
-        timestamp: Date.now(),
-    });
-});
-// GET /api/whale/blockscout/:address/trades — live feed 10 tx terbaru dari Blockscout
-app.get('/api/whale/blockscout/:address/trades', async (req, res) => {
-    const { address } = req.params;
-    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' });
-        return;
-    }
-    try {
-        const { fetchRecentTrades } = await Promise.resolve().then(() => __importStar(require('./basescan-monitor')));
-        const limit = Math.min(20, parseInt(String(req.query.limit ?? '10')) || 10);
-        const trades = await fetchRecentTrades(address, limit);
-        res.json({ ok: true, address, trades, fetchedAt: Date.now() });
-    }
-    catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-// POST /api/whale/rescan/:address — force re-scan a wallet from scratch via Blockscout
-app.post('/api/whale/rescan/:address', async (req, res) => {
-    const { address } = req.params;
-    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' });
-        return;
-    }
-    try {
-        const { resetWalletCache, analyzeWalletOnChain } = await Promise.resolve().then(() => __importStar(require('./basescan-monitor')));
-        resetWalletCache(address);
-        const wallet = bot.getMonitoredWallets().find(w => w.address.toLowerCase() === address.toLowerCase());
-        const sinceMs = wallet ? wallet.monitoredSince : Date.now() - 30 * 86400000;
-        const result = await analyzeWalletOnChain(address, sinceMs);
-        res.json({ ok: true, result });
-    }
-    catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-// POST /api/whale/monitor — move pending candidate to monitoring (not copied yet)
-app.post('/api/whale/monitor', (req, res) => {
-    const { address, name } = req.body;
-    if (!address || typeof address !== 'string' || !address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' });
-        return;
-    }
-    const ok = bot.addToMonitoring(address, name);
-    if (!ok) {
-        res.status(404).json({ error: 'Kandidat tidak ditemukan atau sudah diproses' });
-        return;
-    }
-    res.json({ ok: true, message: 'Wallet masuk monitoring — bot akan mengamati trade-nya' });
-});
-// GET /api/whale/monitored — list all monitored wallets with stats
-app.get('/api/whale/monitored', (_req, res) => {
-    res.json({ wallets: bot.getMonitoredWallets(), timestamp: Date.now() });
-});
-// DELETE /api/whale/monitored/:address — remove from monitoring
-app.delete('/api/whale/monitored/:address', (req, res) => {
-    const { address } = req.params;
-    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' });
-        return;
-    }
-    bot.removeFromMonitoring(address);
-    res.json({ ok: true });
-});
-// POST /api/whale/evaluate/:address — trigger AI evaluation
-app.post('/api/whale/evaluate/:address', async (req, res) => {
-    const { address } = req.params;
-    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' });
-        return;
-    }
-    try {
-        const result = await bot.evaluateMonitoredWallet(address);
-        res.json({ ok: true, ...result });
-    }
-    catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-// POST /api/whale/promote/:address — promote AI-approved wallet to active copy
-app.post('/api/whale/promote/:address', (req, res) => {
-    const { address } = req.params;
-    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' });
-        return;
-    }
-    const ok = bot.promoteToActiveCopy(address);
-    if (!ok) {
-        res.status(400).json({ error: 'Wallet belum disetujui AI atau tidak ditemukan di monitoring' });
-        return;
-    }
-    res.json({ ok: true, message: 'Wallet berhasil dipromosikan ke copy wallet aktif!' });
-});
-// POST /api/whale/force-promote/:address — manual override: promote regardless of AI verdict
-app.post('/api/whale/force-promote/:address', requireAuth, (req, res) => {
-    const { address } = req.params;
-    if (!address.match(/^0x[0-9a-fA-F]{40}$/)) {
-        res.status(400).json({ error: 'Alamat tidak valid' });
-        return;
-    }
-    const ok = bot.forcePromoteWallet(address);
-    if (!ok) {
-        res.status(404).json({ error: 'Wallet tidak ditemukan di monitoring' });
-        return;
-    }
-    res.json({ ok: true, message: 'Wallet dipromosikan secara manual ke copy wallet aktif!' });
-});
-// ============ FITUR BARU: EMERGENCY STOP, BACKTEST, CORRELATION, NARRATIVE, SAFETY ============
+// ============ FITUR BARU: EMERGENCY STOP, BACKTEST, NARRATIVE, SAFETY ============
 // POST /api/wallet-scan — scan wallet history, import held tokens, auto-sell rugged ones
 app.post('/api/wallet-scan', requireAuth, async (_req, res) => {
     try {
@@ -952,15 +674,6 @@ app.post('/api/backtest', requireAuth, async (req, res) => {
     try {
         const result = await bot.runBacktest(tokenAddress, timeframe, config);
         res.json(result);
-    }
-    catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-// GET /api/whale/correlation — Feature 8: correlation map aktif
-app.get('/api/whale/correlation', requireAuth, (_req, res) => {
-    try {
-        res.json({ correlations: bot.getWhaleCorrelations(), timestamp: Date.now() });
     }
     catch (err) {
         res.status(500).json({ error: err.message });

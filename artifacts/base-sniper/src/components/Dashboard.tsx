@@ -3,19 +3,14 @@ import PositionCard from './PositionCard';
 import ActivityLog from './ActivityLog';
 import Portfolio from './Portfolio';
 import SettingsModal from './SettingsModal';
-import CopyWalletsModal from './CopyWalletsModal';
-import WalletMonitorPage from './WalletMonitorPage';
-import VettedWalletsPage from './VettedWalletsPage';
 import BlacklistModal from './BlacklistModal';
 import TradeHistory from './TradeHistory';
-import WhaleLeaderboard from './WhaleLeaderboard';
 import Backtest from './Backtest';
 import DailyReport from './DailyReport';
 import SmartScreener from './SmartScreener';
 import PushNotification from './PushNotification';
 import PnLChart from './PnLChart';
 import DeploymentStatus from './DeploymentStatus';
-import WhaleCorrelation from './WhaleCorrelation';
 import DeployerRepCheck from './DeployerRepCheck';
 import MempoolGauge from './MempoolGauge';
 import LiveDashboard from './LiveDashboard';
@@ -27,19 +22,11 @@ import { usePwaInstall } from '../hooks/usePwaInstall';
 
 interface Status {
     connected: boolean;
-    copyStats: {
-        activeWallets: number;
-        dailyCopies: number;
-        maxCopies: number;
-        copyAmount: number;
-        delaySeconds: number;
-    };
     config: {
         flashblocksEnabled: boolean;
         SCAN_INTERVAL_MS: number;
     };
     openPositions: any[];
-    pendingWhales: number;
     emergencyStop: boolean;
     lastTradeAt: number | null;
     timestamp: number;
@@ -72,10 +59,6 @@ interface Config {
     maxTrade: string;
     minLiquidity: string;
     maxSlippage: string;
-    copyEnabled: boolean;
-    copyAmount: string;
-    copyDelaySeconds: string;
-    copyMaxPerDay: string;
     minSafetyScore: string;
     maxPoolAgeSeconds: string;
     aiEnabled: boolean;
@@ -95,8 +78,6 @@ interface Config {
     tradeBalancePct: string;
     geckoScannerEnabled: boolean;
     smartScreenerEnabled: boolean;
-    whaleValidationEnabled: boolean;
-    whaleAutoScanEnabled: boolean;
     blockHoneypot: boolean;
     blockHighTax: boolean;
     maxTaxPercent: string;
@@ -106,7 +87,7 @@ interface Config {
     dcaEnabled: boolean;
 }
 
-type Tab = 'live' | 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report' | 'screener' | 'deployment' | 'correlation' | 'deployer' | 'paper';
+type Tab = 'live' | 'overview' | 'portfolio' | 'positions' | 'log' | 'history' | 'backtest' | 'report' | 'screener' | 'deployment' | 'deployer' | 'paper';
 
 interface DashboardProps {
     apiUrl: string;
@@ -117,7 +98,6 @@ const TAB_LIST: { id: Tab; label: string; icon: string }[] = [
     { id: 'overview',     label: 'Overview',    icon: '📊' },
     { id: 'screener',     label: 'Screener',    icon: '📡' },
     { id: 'paper',        label: 'Paper',       icon: '📄' },
-    { id: 'correlation',  label: 'Korelasi',    icon: '🔗' },
     { id: 'deployer',     label: 'Deployer',    icon: '🕵️' },
     { id: 'portfolio',    label: 'Portfolio',   icon: '👜' },
     { id: 'positions',    label: 'Posisi',      icon: '💼' },
@@ -138,12 +118,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const [todayPnl, setTodayPnl]               = useState<{ eth: number; pct: number } | null>(null);
     const [showSettings, setShowSettings]       = useState(false);
     const { canInstall, install }               = usePwaInstall();
-    const [showCopyWallets, setShowCopyWallets]     = useState(false);
-    const [showMonitor, setShowMonitor]             = useState(false);
-    const [showVetted, setShowVetted]               = useState(false);
-    const [showBlacklist, setShowBlacklist]         = useState(false);
-    const [monitorCount, setMonitorCount]           = useState(0);
-    const [vettedCount, setVettedCount]             = useState(0);
+    const [showBlacklist, setShowBlacklist]     = useState(false);
     const [emergencyLoading, setEmergencyLoading] = useState(false);
     const [emergencyDone, setEmergencyDone]       = useState(false);
     const [riskState, setRiskState]               = useState<RiskState | null>(null);
@@ -185,16 +160,6 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         } catch { }
     }, [apiUrl]);
 
-    const fetchMonitorCount = useCallback(async () => {
-        try {
-            const res  = await authFetch(`${apiUrl}/api/whale/monitored`);
-            const data = await res.json();
-            const ws   = data.wallets || [];
-            setMonitorCount(ws.length);
-            setVettedCount(ws.filter((w: any) => w.aiVerdict === 'approved').length);
-        } catch { }
-    }, [apiUrl]);
-
     const fetchTodayPnl = useCallback(async () => {
         try {
             const res  = await authFetch(`${apiUrl}/api/report`);
@@ -230,12 +195,6 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     }, [fetchBalance]);
 
     useEffect(() => {
-        fetchMonitorCount();
-        const interval = setInterval(fetchMonitorCount, 15000);
-        return () => clearInterval(interval);
-    }, [fetchMonitorCount]);
-
-    useEffect(() => {
         fetchTodayPnl();
         const interval = setInterval(fetchTodayPnl, 30000);
         return () => clearInterval(interval);
@@ -246,7 +205,6 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
         const interval = setInterval(fetchRiskState, 10000);
         return () => clearInterval(interval);
     }, [fetchRiskState]);
-
 
     const openCount = status?.openPositions?.length ?? 0;
 
@@ -332,45 +290,6 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         <span>Blokir</span>
                     </button>
 
-                    <button
-                        onClick={() => setShowCopyWallets(true)}
-                        className="flex-shrink-0 relative flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-2 rounded-lg transition-all"
-                    >
-                        <span>🐋</span>
-                        <span>Whale</span>
-                        {(status?.pendingWhales ?? 0) > 0 && (
-                            <span className="absolute -top-2.5 -right-2 bg-blue-500 text-white font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center leading-none" style={{fontSize:'10px'}}>
-                                {status!.pendingWhales > 99 ? '99+' : status!.pendingWhales}
-                            </span>
-                        )}
-                    </button>
-
-                    <button
-                        onClick={() => setShowMonitor(true)}
-                        className="flex-shrink-0 relative flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-2 rounded-lg transition-all"
-                    >
-                        <span>🔬</span>
-                        <span>Monitor</span>
-                        {monitorCount > 0 && (
-                            <span className="absolute -top-2.5 -right-2 bg-purple-500 text-white font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center leading-none" style={{fontSize:'10px'}}>
-                                {monitorCount > 99 ? '99+' : monitorCount}
-                            </span>
-                        )}
-                    </button>
-
-                    <button
-                        onClick={() => setShowVetted(true)}
-                        className="flex-shrink-0 relative flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 border border-gray-700 text-gray-300 hover:text-white text-xs px-3 py-2 rounded-lg transition-all"
-                    >
-                        <span>🤖</span>
-                        <span>Vetted</span>
-                        {vettedCount > 0 && (
-                            <span className="absolute -top-2.5 -right-2 bg-green-500 text-white font-bold rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center leading-none" style={{fontSize:'10px'}}>
-                                {vettedCount > 99 ? '99+' : vettedCount}
-                            </span>
-                        )}
-                    </button>
-
                     <div className="flex-shrink-0">
                         <PushNotification apiUrl={apiUrl} />
                     </div>
@@ -448,37 +367,19 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                 {activeTab === 'overview' && (
                     <div className="space-y-4">
 
-                        {/* Pending whale alert */}
-                        {(status?.pendingWhales ?? 0) > 0 && (
-                            <button
-                                onClick={() => setShowCopyWallets(true)}
-                                className="w-full flex items-center gap-3 bg-blue-900/30 border border-blue-700/60 rounded-xl px-4 py-3 text-left hover:bg-blue-900/50 active:bg-blue-900/70 transition-colors"
-                            >
-                                <span className="text-xl">🐋</span>
-                                <div className="flex-1">
-                                    <p className="text-sm font-semibold text-blue-300">
-                                        {status!.pendingWhales} Whale Kandidat Menunggu
-                                    </p>
-                                    <p className="text-xs text-blue-400/70 mt-0.5">Buka Whale Manager → Auto Finder</p>
-                                </div>
-                                <span className="text-blue-400 text-sm">›</span>
-                            </button>
-                        )}
-
                         {/* Stats grid */}
                         <div className="grid grid-cols-2 gap-3">
-                            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-                                <p className="text-xs text-gray-500 mb-1">Copy Hari Ini</p>
-                                <p className="text-xl font-bold text-white">
-                                    {status?.copyStats?.dailyCopies ?? '—'}
-                                    <span className="text-sm text-gray-500"> / {config?.copyMaxPerDay || '—'}</span>
-                                </p>
-                                <p className="text-xs text-gray-600 mt-0.5">transaksi</p>
-                            </div>
                             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                                 <p className="text-xs text-gray-500 mb-1">Posisi Terbuka</p>
                                 <p className="text-xl font-bold text-white">{openCount}</p>
                                 <p className="text-xs text-gray-600 mt-0.5">aktif</p>
+                            </div>
+                            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                                <p className="text-xs text-gray-500 mb-1">P&L Hari Ini</p>
+                                <p className={`text-xl font-bold ${todayPnl && todayPnl.pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    {todayPnl ? `${todayPnl.pct >= 0 ? '+' : ''}${todayPnl.pct.toFixed(1)}%` : '—'}
+                                </p>
+                                <p className="text-xs text-gray-600 mt-0.5">total trades</p>
                             </div>
                         </div>
 
@@ -499,12 +400,9 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                             <div className="grid grid-cols-1 gap-1.5">
                                 {[
                                     { label: 'AI Trading',         value: config?.aiEnabled              ? '✓ Aktif' : '✗ Nonaktif', green: config?.aiEnabled },
-                                    { label: 'Copy Trading',       value: config?.copyEnabled            ? '✓ Aktif' : '✗ Nonaktif', green: config?.copyEnabled },
                                     { label: 'Dynamic Sizing',     value: config?.dynamicSizingEnabled   ? `✓ ${config.tradeBalancePct || 10}%/trade` : '✗ Nonaktif', green: config?.dynamicSizingEnabled },
                                     { label: 'GeckoTerminal Scan', value: config?.geckoScannerEnabled    ? '✓ Aktif' : '✗ Nonaktif', green: config?.geckoScannerEnabled },
                                     { label: 'Smart Screener',     value: config?.smartScreenerEnabled   ? '✓ Aktif' : '✗ Nonaktif', green: config?.smartScreenerEnabled },
-                                    { label: 'Auto Whale Finder',  value: config?.whaleAutoScanEnabled   ? '✓ Aktif' : '✗ Nonaktif', green: config?.whaleAutoScanEnabled },
-                                    { label: 'Jumlah Copy',        value: `${config?.copyAmount || '—'} ETH` },
                                     { label: 'Min Safety Score',   value: `${config?.minSafetyScore || '—'}/100` },
                                     { label: 'Serial Rugger',      value: config?.serialRuggerEnabled    ? `✓ Aktif` : '✗ Nonaktif', green: config?.serialRuggerEnabled },
                                     { label: 'Reputasi Deployer',  value: config?.reputationEnabled      ? `✓ Min ${config.reputationMinScore}` : '✗ Nonaktif', green: config?.reputationEnabled },
@@ -602,25 +500,22 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                         {/* Realtime P&L Chart */}
                         <PnLChart apiUrl={apiUrl} compact={true} />
 
-                        <WhaleLeaderboard apiUrl={apiUrl} />
-
                         {lastUpdate && (
                             <p className="text-center text-xs text-gray-700">Update: {lastUpdate}</p>
                         )}
                     </div>
                 )}
 
-                {activeTab === 'paper'        && <PaperTrading apiUrl={apiUrl} />}
-                {activeTab === 'screener'     && <SmartScreener apiUrl={apiUrl} />}
-                {activeTab === 'correlation'  && <WhaleCorrelation apiUrl={apiUrl} />}
-                {activeTab === 'deployer'     && <DeployerRepCheck apiUrl={apiUrl} />}
-                {activeTab === 'portfolio'    && <Portfolio apiUrl={apiUrl} />}
-                {activeTab === 'positions'    && <PositionCard apiUrl={apiUrl} />}
-                {activeTab === 'log'          && <ActivityLog apiUrl={apiUrl} />}
-                {activeTab === 'history'      && <TradeHistory apiUrl={apiUrl} />}
-                {activeTab === 'report'       && <DailyReport apiUrl={apiUrl} />}
-                {activeTab === 'backtest'     && <Backtest apiUrl={apiUrl} />}
-                {activeTab === 'deployment'   && <DeploymentStatus apiUrl={apiUrl} />}
+                {activeTab === 'paper'      && <PaperTrading apiUrl={apiUrl} />}
+                {activeTab === 'screener'   && <SmartScreener apiUrl={apiUrl} />}
+                {activeTab === 'deployer'   && <DeployerRepCheck apiUrl={apiUrl} />}
+                {activeTab === 'portfolio'  && <Portfolio apiUrl={apiUrl} />}
+                {activeTab === 'positions'  && <PositionCard apiUrl={apiUrl} />}
+                {activeTab === 'log'        && <ActivityLog apiUrl={apiUrl} />}
+                {activeTab === 'history'    && <TradeHistory apiUrl={apiUrl} />}
+                {activeTab === 'report'     && <DailyReport apiUrl={apiUrl} />}
+                {activeTab === 'backtest'   && <Backtest apiUrl={apiUrl} />}
+                {activeTab === 'deployment' && <DeploymentStatus apiUrl={apiUrl} />}
             </div>
 
             {/* Modals */}
@@ -631,28 +526,10 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
                     currentConfig={config ?? undefined}
                 />
             )}
-            {showCopyWallets && (
-                <CopyWalletsModal
-                    apiUrl={apiUrl}
-                    onClose={() => setShowCopyWallets(false)}
-                />
-            )}
             {showBlacklist && (
                 <BlacklistModal
                     apiUrl={apiUrl}
                     onClose={() => setShowBlacklist(false)}
-                />
-            )}
-            {showMonitor && (
-                <WalletMonitorPage
-                    apiUrl={apiUrl}
-                    onClose={() => { setShowMonitor(false); fetchMonitorCount(); }}
-                />
-            )}
-            {showVetted && (
-                <VettedWalletsPage
-                    apiUrl={apiUrl}
-                    onClose={() => { setShowVetted(false); fetchMonitorCount(); }}
                 />
             )}
         </div>
