@@ -145,6 +145,7 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
     const [emergencyLoading, setEmergencyLoading] = useState(false);
     const [emergencyDone, setEmergencyDone]       = useState(false);
     const [riskState, setRiskState]               = useState<RiskState | null>(null);
+    const failCountRef = React.useRef(0);
 
     const fetchData = useCallback(async () => {
         try {
@@ -156,12 +157,16 @@ const Dashboard: React.FC<DashboardProps> = ({ apiUrl }) => {
             const statusJson = await statusRes.json();
             const configJson = await configRes.json();
             if (statusJson.error) throw new Error(statusJson.error);
+            failCountRef.current = 0;
             setStatus(statusJson);
             if (!configJson.error) setConfig(configJson);
             setLastUpdate(new Date().toLocaleTimeString('id-ID'));
             setError('');
         } catch {
-            setError('Gagal terhubung ke server');
+            failCountRef.current += 1;
+            if (failCountRef.current >= 3) {
+                setError('Gagal terhubung ke server');
+            }
         }
     }, [apiUrl]);
 
