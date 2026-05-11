@@ -829,6 +829,7 @@ class AISniperBot extends events_1.EventEmitter {
             if (d.sourceWallet && (d.percentSold ?? 100) >= 100) {
                 this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct ?? null);
             }
+            const tradeSource = d.source || 'manual';
             (0, db_1.dbInsertTrade)({
                 id: (0, crypto_1.randomBytes)(6).toString('hex'),
                 tokenAddress: d.tokenAddress || '',
@@ -839,11 +840,14 @@ class AISniperBot extends events_1.EventEmitter {
                 closedAt: Date.now(),
                 holdMs: d.holdMs ?? 0,
                 txHash: d.txHash || '',
-                reason: d.reason || 'manual',
+                reason: tradeSource,
+                tpLevel: d.tpLevel,
             });
-            this.sendTelegram(`💰 <b>SELL manual</b>\n` +
-                `Token: <code>${d.tokenSymbol}</code> (${d.percentSold}%)\n` +
-                `TX: <a href="https://basescan.org/tx/${d.txHash}">${d.txHash?.slice(0, 18)}...</a>`);
+            if (tradeSource === 'manual') {
+                this.sendTelegram(`💰 <b>SELL manual</b>\n` +
+                    `Token: <code>${d.tokenSymbol}</code> (${d.percentSold}%)\n` +
+                    `TX: <a href="https://basescan.org/tx/${d.txHash}">${d.txHash?.slice(0, 18)}...</a>`);
+            }
         });
         this.executor.on('take-profit', (d) => {
             this.emit('take-profit', d);
@@ -853,19 +857,7 @@ class AISniperBot extends events_1.EventEmitter {
             if (d.sourceWallet && d.level === 2 && d.profitPct != null) {
                 this.copyMonitor.recordTradeOutcome(d.sourceWallet, d.profitPct);
             }
-            (0, db_1.dbInsertTrade)({
-                id: (0, crypto_1.randomBytes)(6).toString('hex'),
-                tokenAddress: d.tokenAddress || '',
-                tokenSymbol: d.tokenSymbol || 'UNKNOWN',
-                entryEth: d.entryEth ?? 0,
-                profitPct: d.profitPct ?? (d.multiplier ? (d.multiplier - 1) * 100 : null),
-                percentSold: d.level === 1 ? 50 : 100,
-                closedAt: Date.now(),
-                holdMs: d.holdMs ?? 0,
-                txHash: d.txHash || '',
-                reason: 'take-profit',
-                tpLevel: d.level,
-            });
+            // Trade is recorded by sell-success handler (single source of truth — prevents double recording)
             // ── Auto-compound: add profit back to totalCapital on full exit (TP2) ──
             if (this.runtimeConfig.autoCompoundEnabled && d.level === 2 && (d.profitPct ?? 0) > 0) {
                 const entryEth = d.entryEth ?? this.runtimeConfig.maxTradeAmount;
@@ -917,18 +909,7 @@ class AISniperBot extends events_1.EventEmitter {
                 (0, db_1.dbAddToBlacklist)(d.tokenAddress.toLowerCase(), 'Stop Loss auto-blacklist');
                 this.addLog('info', `Auto-blacklisted: ${d.tokenSymbol}`, 'Hit stop loss');
             }
-            (0, db_1.dbInsertTrade)({
-                id: (0, crypto_1.randomBytes)(6).toString('hex'),
-                tokenAddress: d.tokenAddress || '',
-                tokenSymbol: d.tokenSymbol || 'UNKNOWN',
-                entryEth: 0,
-                profitPct: d.profitPct ?? null,
-                percentSold: 100,
-                closedAt: Date.now(),
-                holdMs: d.holdMs ?? 0,
-                txHash: d.txHash || '',
-                reason: 'stop-loss',
-            });
+            // Trade is recorded by sell-success handler (single source of truth — prevents double recording)
             const isEmergency = d.reason?.startsWith('🚨');
             const isTimeout = d.reason?.startsWith('⏰');
             const isTrailing = d.reason?.includes('Trailing');

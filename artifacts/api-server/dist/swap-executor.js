@@ -177,7 +177,8 @@ class SwapExecutor extends events_1.EventEmitter {
             // Large pool or tiny trade → tighter tolerance (as low as 1%)
             let effectiveSlippage = slippagePercent;
             if (impact.liquidityUsd > 0) {
-                const tradeUsd = amountInEth * 3000; // rough ETH/USD for ratio calc
+                const liveEthPrice = await (0, price_oracle_1.getEthPriceUsd)().catch(() => 3000);
+                const tradeUsd = amountInEth * liveEthPrice;
                 const tradeSharePct = (tradeUsd / impact.liquidityUsd) * 100;
                 effectiveSlippage = Math.max(1, Math.min(15, 2 + tradeSharePct * 2));
                 console.log(`   🎯 Dynamic slippage: ${effectiveSlippage.toFixed(1)}% (trade $${tradeUsd.toFixed(0)} = ${tradeSharePct.toFixed(2)}% of pool $${impact.liquidityUsd.toFixed(0)})`);
@@ -270,7 +271,7 @@ class SwapExecutor extends events_1.EventEmitter {
         }
     }
     // ============ SELL TOKEN (Token → ETH) ============
-    async sell(tokenAddress, percentToSell = 100) {
+    async sell(tokenAddress, percentToSell = 100, options) {
         if (!this.isReady)
             return { success: false, amountIn: 0n, amountOut: 0n, error: 'Executor not ready' };
         console.log(`\n💸 SELL: ${percentToSell}% of ${tokenAddress.slice(0, 10)}...`);
@@ -362,7 +363,7 @@ class SwapExecutor extends events_1.EventEmitter {
                 catch { /* silent — sell already succeeded */ }
             }
             console.log(`   ✅ SELL SUCCESS: ${(0, viem_1.formatEther)(amountIn)} ${tokenSymbol} (${percentToSell}%)`);
-            this.emit('sell-success', { tokenAddress, tokenSymbol, amountIn, percentSold: percentToSell, txHash, sourceWallet: _sellSw, profitPct, holdMs, entryEth });
+            this.emit('sell-success', { tokenAddress, tokenSymbol, amountIn, percentSold: percentToSell, txHash, sourceWallet: _sellSw, profitPct, holdMs, entryEth, source: options?.source, tpLevel: options?.tpLevel });
             // Remove position if fully sold
             if (percentToSell >= 100) {
                 this.openPositions.delete(tokenAddress);
@@ -423,7 +424,7 @@ class SwapExecutor extends events_1.EventEmitter {
                 reason: `🚨 Emergency: -${Math.abs(profitPct).toFixed(0)}% in ${holdMinsStr}min (rug suspected)`,
                 peakMult: 1, sourceWallet: position.sourceWallet
             });
-            await this.sell(tokenAddress, 100);
+            await this.sell(tokenAddress, 100, { source: 'stop-loss' });
             return;
         }
         // ─── MAX HOLD TIME: exit stale positions ───
@@ -435,7 +436,7 @@ class SwapExecutor extends events_1.EventEmitter {
                 reason: `⏰ Timeout (${this.CONFIG.MAX_HOLD_MINUTES}min hold, no TP1)`,
                 peakMult: 1, sourceWallet: position.sourceWallet
             });
-            await this.sell(tokenAddress, 100);
+            await this.sell(tokenAddress, 100, { source: 'stop-loss' });
             return;
         }
         // ── Update peak value for trailing SL ──
@@ -458,7 +459,7 @@ class SwapExecutor extends events_1.EventEmitter {
             const reason = `🛡️ Breakeven guard: ${profitPct.toFixed(1)}% setelah TP1 — jual sisa posisi`;
             console.log(`🛡️ BREAKEVEN GUARD: ${position.tokenSymbol} balik ke ${profitPct.toFixed(1)}% setelah TP1 — protecting profits`);
             this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult, sourceWallet: position.sourceWallet });
-            await this.sell(tokenAddress, 100);
+            await this.sell(tokenAddress, 100, { source: 'stop-loss' });
             return;
         }
         // ─── STOP LOSS (Fixed or Trailing) ───
@@ -468,7 +469,7 @@ class SwapExecutor extends events_1.EventEmitter {
                 : `Fixed SL: ${profitPct.toFixed(1)}%`;
             console.log(`🛑 STOP LOSS triggered (${reason}) — selling 100%`);
             this.emit('stop-loss', { tokenAddress, tokenSymbol: position.tokenSymbol, profitPct, reason, peakMult, sourceWallet: position.sourceWallet });
-            await this.sell(tokenAddress, 100);
+            await this.sell(tokenAddress, 100, { source: 'stop-loss' });
             return;
         }
         // ─── MINIMUM LIQUIDITY GUARD ─── exit if liquidity drained ≥50%
@@ -484,7 +485,7 @@ class SwapExecutor extends events_1.EventEmitter {
                             reason: `💧 Liquidity dropped ${liqDrop.toFixed(0)}% (rug/dump suspected)`,
                             peakMult, sourceWallet: position.sourceWallet
                         });
-                        await this.sell(tokenAddress, 100);
+                        await this.sell(tokenAddress, 100, { source: 'stop-loss' });
                         return;
                     }
                 }
@@ -496,7 +497,7 @@ class SwapExecutor extends events_1.EventEmitter {
             const sellPct = this.CONFIG.TAKE_PROFIT_1_PCT;
             console.log(`🎯 TP1 at ${multiplier.toFixed(2)}x (+${((multiplier - 1) * 100).toFixed(0)}%) — sell ${sellPct}%`);
             this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 1, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
-            await this.sell(tokenAddress, sellPct);
+            await this.sell(tokenAddress, sellPct, { source: 'take-profit', tpLevel: 1 });
             position.takeProfit1Hit = true;
             position.tp1SoldPct = sellPct;
             return;
@@ -510,7 +511,7 @@ class SwapExecutor extends events_1.EventEmitter {
             const sellPct = remaining > 0 ? Math.min(100, Math.round((tp2Pct / remaining) * 100)) : 100;
             console.log(`🎯 TP2 at ${multiplier.toFixed(2)}x (+${((multiplier - 1) * 100).toFixed(0)}%) — sell ${sellPct}% of remaining`);
             this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 2, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
-            await this.sell(tokenAddress, sellPct);
+            await this.sell(tokenAddress, sellPct, { source: 'take-profit', tpLevel: 2 });
             position.takeProfit2Hit = true;
             position.tp2SoldPct = tp2Pct;
             return;
@@ -520,7 +521,7 @@ class SwapExecutor extends events_1.EventEmitter {
             if (dropFromPeak >= this.CONFIG.TRAILING_TP3_FROM_PEAK_PCT) {
                 console.log(`🎯 TP3 Trailing — dropped ${dropFromPeak.toFixed(1)}% from peak — sell all remaining`);
                 this.emit('take-profit', { tokenAddress, tokenSymbol: position.tokenSymbol, level: 3, multiplier, profitPct, holdMs: Date.now() - position.openedAt, sourceWallet: position.sourceWallet });
-                await this.sell(tokenAddress, 100);
+                await this.sell(tokenAddress, 100, { source: 'take-profit', tpLevel: 3 });
                 position.takeProfit3Hit = true;
                 return;
             }
@@ -556,7 +557,7 @@ class SwapExecutor extends events_1.EventEmitter {
                         peakMult, sourceWallet: position.sourceWallet,
                         holdMs: Date.now() - position.openedAt,
                     });
-                    await this.sell(tokenAddress, 100);
+                    await this.sell(tokenAddress, 100, { source: 'stop-loss' });
                     return;
                 }
                 if (exitSignal === 'SELL_50_PERCENT' && !position.dynamicSell50Done) {
@@ -567,13 +568,13 @@ class SwapExecutor extends events_1.EventEmitter {
                         holdMs: Date.now() - position.openedAt,
                         sourceWallet: position.sourceWallet,
                     });
-                    await this.sell(tokenAddress, 50);
+                    await this.sell(tokenAddress, 50, { source: 'take-profit', tpLevel: 2 });
                     position.dynamicSell50Done = true;
                     return;
                 }
                 if (exitSignal === 'SELL_25_PERCENT' && !position.dynamicSell25Done) {
                     console.log(`📉 [DynamicExit] Scale out — selling 25% of ${position.tokenSymbol}`);
-                    await this.sell(tokenAddress, 25);
+                    await this.sell(tokenAddress, 25, { source: 'take-profit', tpLevel: 2 });
                     position.dynamicSell25Done = true;
                     return;
                 }
@@ -585,7 +586,7 @@ class SwapExecutor extends events_1.EventEmitter {
                         holdMs: Date.now() - position.openedAt,
                         sourceWallet: position.sourceWallet,
                     });
-                    await this.sell(tokenAddress, 100);
+                    await this.sell(tokenAddress, 100, { source: 'take-profit', tpLevel: 3 });
                     position.takeProfit3Hit = true;
                     return;
                 }

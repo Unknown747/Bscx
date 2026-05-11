@@ -1004,12 +1004,12 @@ app.get('/api/deployment-status', (_req: Request, res: Response) => {
     const minutes       = Math.floor((uptimeSecs % 3600) / 60);
     const seconds       = uptimeSecs % 60;
     const uptimeStr     = days > 0
-        ? `${days}h ${hours}j ${minutes}m`
+        ? `${days}d ${hours}j ${minutes}m`
         : hours > 0
-        ? `${hours}j ${minutes}m ${seconds}d`
+        ? `${hours}j ${minutes}m ${seconds}s`
         : minutes > 0
-        ? `${minutes}m ${seconds}d`
-        : `${seconds}d`;
+        ? `${minutes}m ${seconds}s`
+        : `${seconds}s`;
 
     const replDomain    = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS || null;
     const productionUrl = replDomain ? `https://${replDomain.split(',')[0].trim()}` : null;
@@ -1049,10 +1049,28 @@ app.get('*', (req: Request, res: Response) => {
     }
 });
 
+// ============ GLOBAL ERROR GUARDS ============
+// Prevent unhandled errors from crashing the process silently
+process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught Exception (non-fatal — continuing):', err?.message || err);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('❌ Unhandled Promise Rejection (non-fatal — continuing):', reason);
+});
+
 // ============ START SERVER ============
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`🌐 API Server running on port ${PORT}`);
     startBot().catch(console.error);
+});
+
+server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} sudah dipakai proses lain. Pastikan tidak ada instance lain yang berjalan.`);
+    } else {
+        console.error(`❌ Server error: ${err.message}`);
+    }
+    process.exit(1);
 });
 
 function gracefulShutdown() {
